@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+
+# Generated artifacts
+generated/
+
+# Exported binary documents (keep markdown sources in docs/)
+docs_export/*.docx
+docs_export/*.pdf
