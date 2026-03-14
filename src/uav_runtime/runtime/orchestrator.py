@@ -1,4 +1,4 @@
-"""本轮最后修补点：去除 *_ext 临时占位，直接构造 contract 对齐的 context/profile 字段并保持分支返回语义。"""
+"""本轮最后修补点：非 ALLOW 路径严格消费 gate 主因；若缺失主因则触发 contract violation。"""
 from __future__ import annotations
 
 import uuid
@@ -70,6 +70,11 @@ class RuntimeOrchestrator:
             "adapter": "",
         }
 
+    def _require_primary_reason(self, decision_code: str, primary_reason_code: str | None) -> str:
+        if not primary_reason_code:
+            raise AssertionError(f"contract violation: primary_reason_code missing for decision {decision_code}")
+        return primary_reason_code
+
     def handle_action_request(self, req: ActionRequest) -> dict:
         request_id = req.request_id or f"req-{uuid.uuid4().hex[:10]}"
         req.request_id = request_id
@@ -115,17 +120,17 @@ class RuntimeOrchestrator:
         self.audit.append(policy_decision_event)
 
         if decision_code == DecisionCode.DENY.value:
-            return self._blocked_like_result(request_id, "blocked", decision.primary_reason_code or "POLICY_REASON_DENY")
+            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            return self._blocked_like_result(request_id, "blocked", reason)
         if decision_code == DECISION_DEFER:
-            return self._blocked_like_result(request_id, "deferred", decision.primary_reason_code or "POLICY_REASON_DEFER")
+            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            return self._blocked_like_result(request_id, "deferred", reason)
         if decision_code == DECISION_REQUIRE_CONFIRM:
-            return self._blocked_like_result(
-                request_id,
-                "waiting_confirmation",
-                decision.primary_reason_code or "POLICY_REASON_CONFIRMATION_REQUIRED",
-            )
+            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            return self._blocked_like_result(request_id, "waiting_confirmation", reason)
         if decision_code == DecisionCode.PREEMPT.value:
-            return self._blocked_like_result(request_id, "handover_pending", decision.primary_reason_code or "POLICY_REASON_PREEMPT")
+            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            return self._blocked_like_result(request_id, "handover_pending", reason)
 
         # ALLOW -> execute adapter
         result = self.gateway.execute("fake", req)

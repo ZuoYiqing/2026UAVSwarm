@@ -1,4 +1,4 @@
-"""本轮最后修补点：强化 canonical 字段优先级说明，保留 legacy alias 仅用于迁移兼容。"""
+"""本轮最后修补点：强化 canonical 优先级与 risk_hint(MVP int) 冻结说明，保留 legacy alias 迁移兼容。"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -40,7 +40,7 @@ class ActionRequest:
     # - action   -> canonical: action_type
     # - scope    -> canonical: requested_scope
     # - priority -> canonical: priority_hint
-    # canonical 优先级：action_type / requested_scope / priority_hint。
+    # canonical 优先级（冻结）：action_type / requested_scope / priority_hint。
     # legacy 字段仅为平滑迁移保留，不是长期主入口。
     action: str
     params: dict[str, Any]
@@ -55,6 +55,7 @@ class ActionRequest:
     skill_group: str = "generic"
     target_set: list[str] = field(default_factory=list)
     requested_scope: AuthorityScope | None = None
+    # 冻结说明：MVP risk_hint 使用 int 风险等级；未来如切换 R1/R2 枚举，必须统一升级 schema/test/registry。
     risk_hint: int = 1
     priority_hint: int | None = None
     requires_confirmation_hint: bool = False
@@ -73,6 +74,8 @@ class ActionRequest:
 
 @dataclass(slots=True)
 class PolicyDecision:
+    # 注：PolicyDecisionEnvelope（policy/decision.py）是当前 policy 层权威决策对象；
+    # 本类仅作协议/兼容视图，后续可收敛到单一权威模型。
     decision_code: DecisionCode | str = DecisionCode.DENY
     # legacy aliases for existing tests/callers
     decision: DecisionCode | str | None = None

@@ -1,4 +1,4 @@
-"""本轮修补点：对齐 handover mode 术语，并保留 PREEMPT 合同校验入口。"""
+"""本轮最后修补点：明确 PolicyDecisionEnvelope 为 policy 层权威决策对象，并保持 handover PREEMPT 合同校验。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -23,6 +23,7 @@ class HandoverPlan:
 
 @dataclass(slots=True)
 class PolicyDecisionEnvelope:
+    # 权威对象：policy 层统一输出的最终决策结构
     decision_code: DecisionCode | str
     primary_reason_code: str | None = None
     secondary_reason_codes: list[str] = field(default_factory=list)
