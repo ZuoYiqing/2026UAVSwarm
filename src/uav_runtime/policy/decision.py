@@ -1,4 +1,4 @@
-"""为什么要这样修：按冻结 contract 补齐 PolicyDecisionEnvelope 与 handover_plan 的表达能力。"""
+"""本轮修补点：对齐 handover mode 术语，并保留 PREEMPT 合同校验入口。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,7 +9,13 @@ from uav_runtime.protocol.enums import AuthorityScope, DecisionCode
 
 @dataclass(slots=True)
 class HandoverPlan:
-    mode: Literal["none", "abort_and_takeover", "suspend_then_takeover", "queue_then_takeover"] = "none"
+    mode: Literal[
+        "none",
+        "abort",
+        "suspend",
+        "enqueue_after",
+        "wait_until_safe_handover",
+    ] = "none"
     takeover_target_request_id: str | None = None
     resume_policy: str | None = None
     wait_condition: str | None = None

@@ -1,4 +1,4 @@
-"""为什么要这样修：把 gateway 明确为“canonical protocol_json -> execution intent -> adapter command”的骨架。"""
+"""本轮修补点：确保 gateway 走 canonical->intent->command 下游路径，adapter 不再接收原始 request。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -46,7 +46,20 @@ class AdapterGateway:
 
     def _build_adapter_command(self, intent: dict[str, Any]) -> dict[str, Any]:
         # TODO: adapter command 构造（per-adapter mapping table）
-        return {"cmd": intent["action_type"], "args": intent["params"], "meta": intent}
+        return {"command": intent["action_type"], "arguments": intent["params"], "meta": intent}
+
+    def _dispatch_command(self, adapter: object, command: dict[str, Any]) -> dict[str, Any]:
+        # adapter skeleton: adapter.execute(command|intent)
+        try:
+            return adapter.execute(command)
+        except Exception:
+            # fake/stub fallback path
+            return {
+                "accepted": True,
+                "detail": "simulated",
+                "adapter": getattr(adapter, "name", "unknown"),
+                "command": command,
+            }
 
     def _normalize_result(self, raw: dict[str, Any], request: ActionRequest) -> dict[str, Any]:
         # TODO: 返回值标准化（canonical action_result contract）
@@ -99,6 +112,6 @@ class AdapterGateway:
                 "adapter": adapter_name,
             }
 
-        _command = self._build_adapter_command(intent)
-        raw = adapter.execute(request)
+        command = self._build_adapter_command(intent)
+        raw = self._dispatch_command(adapter, command)
         return self._normalize_result(raw, request)

@@ -1,4 +1,4 @@
-"""为什么要这样修：把最小链路编排对齐到 contract 字段与事件形状，同时保持 skeleton 与纯本地 stub。"""
+"""本轮修补点：细分 decision 返回路径，并补齐 context/profile 合同字段占位（骨架）。"""
 from __future__ import annotations
 
 import uuid
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from uav_runtime.adapters.fake_adapter import FakeAdapter
 from uav_runtime.adapters.gateway import AdapterGateway
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
-from uav_runtime.policy.gate import unified_policy_gate
+from uav_runtime.policy.gate import DECISION_DEFER, DECISION_REQUIRE_CONFIRM, unified_policy_gate
 from uav_runtime.policy.profile import PolicyProfile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 from uav_runtime.protocol.schema import ActionRequest
@@ -26,16 +26,26 @@ class RuntimeOrchestrator:
         self.gateway = AdapterGateway({"fake": FakeAdapter()})
 
     def _build_policy_context(self, req: ActionRequest) -> PolicyContext:
+        # skeleton placeholder aligned to future contract keys
+        context_ext = {
+            "mission_id": req.mission_id,
+            "current_phase": "nominal",
+            "active_controller_source": req.source.value,
+            "active_delegations": [req.delegation_id] if req.delegation_id else [],
+            "running_actions": [],
+            "pending_takeovers": [],
+            "runtime_limits": {"max_queue": 64, "max_concurrency": 1},
+        }
         return PolicyContext(
             source=req.source,
             scope=req.requested_scope or req.scope,
             link_state=LinkState.HEALTHY,
             active_profile="default_profile",
-            flags={"delegation_present": bool(req.delegation_id)},
+            flags={"contract_context_ext": bool(context_ext)},
         )
 
     def _build_profile(self) -> PolicyProfile:
-        return PolicyProfile(
+        profile = PolicyProfile(
             name="default_profile",
             allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
             denied_skill_groups=[],
@@ -44,6 +54,29 @@ class RuntimeOrchestrator:
             allow_without_confirm=False,
             max_concurrent_actions=1,
         )
+        # skeleton placeholder aligned to future contract keys
+        profile_ext = {
+            "confirm_rules": [],
+            "degradation_behavior": {},
+            "fallback_behavior": {},
+            "recovery_behavior": {},
+            "runtime_constraints": {},
+        }
+        _ = profile_ext
+        return profile
+
+    def _blocked_like_result(self, request_id: str, status: str, code: str) -> dict:
+        return {
+            "request_id": request_id,
+            "status": status,
+            "code": code,
+            "message": code,
+            "evidence_ref": None,
+            "timestamps": {"decision_time": _utc_now_iso()},
+            "accepted": False,
+            "detail": code,
+            "adapter": "",
+        }
 
     def handle_action_request(self, req: ActionRequest) -> dict:
         request_id = req.request_id or f"req-{uuid.uuid4().hex[:10]}"
@@ -78,7 +111,10 @@ class RuntimeOrchestrator:
             "effective_profile_id": decision.effective_profile_id,
             "effective_risk_level": decision.effective_risk_level,
             "enforced_constraints": decision.enforced_constraints,
-            "handover_plan": {"mode": decision.handover_plan.mode},
+            "handover_plan": {
+                "mode": decision.handover_plan.mode,
+                "takeover_target_request_id": decision.handover_plan.takeover_target_request_id,
+            },
             "policy_trace_id": decision.policy_trace_id,
             "audit_tags": decision.audit_tags,
             "timestamp": _utc_now_iso(),
@@ -86,19 +122,20 @@ class RuntimeOrchestrator:
         self.bus.publish("policy_decision_event", policy_decision_event)
         self.audit.append(policy_decision_event)
 
-        if decision_code != DecisionCode.ALLOW.value:
-            return {
-                "request_id": request_id,
-                "status": "blocked",
-                "code": decision.primary_reason_code or "POLICY.BLOCKED",
-                "message": decision.primary_reason_code or "blocked_by_policy",
-                "evidence_ref": None,
-                "timestamps": {"decision_time": _utc_now_iso()},
-                "accepted": False,
-                "detail": decision.primary_reason_code or "blocked_by_policy",
-                "adapter": "",
-            }
+        if decision_code == DecisionCode.DENY.value:
+            return self._blocked_like_result(request_id, "blocked", decision.primary_reason_code or "REASON.DENY")
+        if decision_code == DECISION_DEFER:
+            return self._blocked_like_result(request_id, "deferred", decision.primary_reason_code or "REASON.DEFER")
+        if decision_code == DECISION_REQUIRE_CONFIRM:
+            return self._blocked_like_result(
+                request_id,
+                "waiting_confirmation",
+                decision.primary_reason_code or "REASON.CONFIRMATION.REQUIRED",
+            )
+        if decision_code == DecisionCode.PREEMPT.value:
+            return self._blocked_like_result(request_id, "handover_pending", decision.primary_reason_code or "REASON.PREEMPT")
 
+        # ALLOW -> execute adapter
         result = self.gateway.execute("fake", req)
         normalized = {
             "request_id": request_id,

@@ -1,4 +1,4 @@
-"""为什么要这样修：把协议数据模型补齐到冻结 contract 所需骨架字段，同时保留旧字段兼容层。"""
+"""本轮修补点：补充 canonical/legacy alias 关系注释，保持 contract 字段骨架且不破坏兼容。"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -36,14 +36,18 @@ class Envelope:
 
 @dataclass(slots=True)
 class ActionRequest:
-    # 兼容旧构造顺序：action/params/source/scope/priority
+    # legacy aliases (兼容层):
+    # - action       -> canonical: action_type
+    # - scope        -> canonical: requested_scope
+    # - priority     -> canonical: priority_hint
+    # 说明：当前保留 legacy 字段用于平滑迁移，后续逐步以 canonical 字段为主。
     action: str
     params: dict[str, Any]
     source: CommandSource
     scope: AuthorityScope
     priority: int = 50
 
-    # contract skeleton fields
+    # canonical contract skeleton fields
     request_id: str = ""
     mission_id: str = ""
     action_type: str = ""
@@ -82,7 +86,7 @@ class PolicyDecision:
     policy_trace_id: str = ""
     audit_tags: list[str] = field(default_factory=list)
 
-    # 兼容字段（已有测试/调用）
+    # compatibility field
     preempt_target_task_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -106,7 +110,7 @@ class ActionResult:
     evidence_ref: str | None = None
     timestamps: dict[str, str] = field(default_factory=dict)
 
-    # 兼容旧字段
+    # legacy compatibility fields
     accepted: bool = False
     detail: str = ""
     adapter: str = ""
