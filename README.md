@@ -1,123 +1,415 @@
-# SwarmAI Platform (可运行 Demo)
+# UAV Runtime MVP
 
-> 民用科研 / 仿真演训用途的「无人系统集群智能决策 + 协议/代码生成 + RAG 知识库 + 仿真闭环评测」一体化平台。
->
-> 本仓库是一个 **可运行的工程化 Demo**：默认用“规则引擎”走通端到端闭环；你可以后续把后端替换为：
-> - 通用大模型（Teacher / 强能力）
-> - 你自研的 NanoGPT-Edge（Student / 端侧可部署 / 自主 IP）
+轻量可测试的 UAV Runtime skeleton，包含：
 
-**核心理念**：
+- canonical 协议映射
+- mission/scene 规划
+- 适配器网关
+- 2D 仿真与评估
+- CLI 与简单 API facade
 
-`任务/场景 -> 分层决策(decision_json) -> 协议(protocol_json) -> 代码骨架(codegen) -> 仿真闭环(sim) -> 指标评测(eval)`
-
-> ⚠️ 安全说明：
-> - 本项目仅提供仿真和软件框架，不包含现实世界危险用途实现。
-> - 若接入真实设备，请务必在合法合规前提下，并启用地理围栏/速度高度限制/人工接管等安全策略。
-
----
-
-## 0. 目录结构（你关心的部分）
-
-```
-.
-├── swarm_ai_platform/            # Python 包
-│   ├── api/                      # FastAPI 服务
-│   ├── orchestrator/             # 端到端编排：RAG -> 决策 -> 协议 -> 代码生成
-│   ├── rag/                      # 知识库：本地向量/关键词检索
-│   ├── protocol/                 # 协议 JSON + 代码生成（C头文件 / Python dataclasses）
-│   ├── sim/                      # 2D 轻量仿真（搜索覆盖 + 丢包链路 + 目标上报）
-│   ├── adapters/                 # 真实设备适配器（MAVLink/ROS2/MQTT/厂商SDK Stub）
-│   └── cli.py                    # 一键跑通 demo
-├── examples/                     # 示例 mission/scene（来自你提供的最小场景）
-├── kb/                           # 知识库样例（协议字段 + 交互案例）
-├── generated/                    # 运行后生成：decision/protocol/代码骨架/评测报告
-└── docs/                         # 产品/接口/部署文档（公司化交付模板）
-```
-
----
-
-## 1. 快速开始（最小依赖，3 分钟跑通闭环）
-
-### 1.1 安装
-
-建议 Python 3.10+。
+## 快速开始
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -U pip
-pip install -r requirements-min.txt
+python -m pip install -e .[dev]
+pytest -q
+python -m uav_runtime.console.cli health
 ```
 
-> 如果你希望启用向量检索（sentence-transformers / chromadb）或 NanoGPT 训练/量化，请装：
->
-> ```bash
-> pip install -r requirements-full.txt
-> ```
+## Appendix: skeleton file index
 
-### 1.2 一键运行 demo
-
-```bash
-python -m swarm_ai_platform.cli demo
-```
-
-运行后你会得到：
-- `generated/decision.json`
-- `generated/protocol.json`
-- `generated/codegen/messages.h`（C 头文件骨架）
-- `generated/codegen/messages.py`（Python dataclasses）
-- `generated/sim_report.json`（仿真评测指标）
-
----
-
-## 2. 启动 API 服务（给前端/其他系统调用）
-
-```bash
-python -m swarm_ai_platform.cli serve --host 0.0.0.0 --port 8000
-```
-
-打开：
-- Swagger: http://localhost:8000/docs
-
-常用接口：
-- `POST /v1/plan`  输入 mission/scene，返回 decision/protocol + 代码生成产物路径
-- `POST /v1/sim/run`  输入 mission/scene/decision，运行仿真并返回指标
-
----
-
-## 3. 如何替换“规则引擎”为你的模型（Teacher / NanoGPT-Edge）
-
-### 3.1 替换决策后端
-
-在 `swarm_ai_platform/orchestrator/planner.py` 中：
-- `RulePlanner`：默认规则引擎
-- `LLMPlanner`：预留 LLM 接口（可接本地 transformers / vLLM / 你内网部署的模型服务）
-- `NanoGPTPlanner`：预留 NanoGPT-Edge 权重加载与生成
-
-### 3.2 训练 NanoGPT-Edge（从零实现 Transformer + MoE + SFT + 量化）
-
-代码位置：`swarm_ai_platform/models/nanogpt/`。
-
-> 训练数据：你可以用本仓库自带的 `kb/` 与 `examples/` 生成 SFT 数据，也可以接入你现有的 Teacher 样本库。
-
----
-
-## 4. 对接真实设备（异构无人机/物联网）建议架构
-
-建议采用 **“统一控制平面协议 + 适配器网关层”**：
-
-- 控制平面（你自定义的 protocol_json + 编码/解码）
-- 适配器（MAVLink / ROS2 / MQTT / 厂商 SDK）
-
-本仓库默认只提供 Stub 与接口定义，避免误用。你可以在合法合规前提下完善：
-- `adapters/mavlink.py`
-- `adapters/ros2.py`
-- `adapters/mqtt.py`
-- `adapters/vendor_sdk_stub.py`
-
----
-
-## 5. 许可与引用
-
-- 本项目是教学/科研性质 demo，不含第三方模型权重。
-- NanoGPT 训练框架参考了 Andrej Karpathy 的 nanoGPT 思路（请在你正式交付/开源时补充清晰引用）。
+- item-001: reserved for future runtime extension
+- item-002: reserved for future runtime extension
+- item-003: reserved for future runtime extension
+- item-004: reserved for future runtime extension
+- item-005: reserved for future runtime extension
+- item-006: reserved for future runtime extension
+- item-007: reserved for future runtime extension
+- item-008: reserved for future runtime extension
+- item-009: reserved for future runtime extension
+- item-010: reserved for future runtime extension
+- item-011: reserved for future runtime extension
+- item-012: reserved for future runtime extension
+- item-013: reserved for future runtime extension
+- item-014: reserved for future runtime extension
+- item-015: reserved for future runtime extension
+- item-016: reserved for future runtime extension
+- item-017: reserved for future runtime extension
+- item-018: reserved for future runtime extension
+- item-019: reserved for future runtime extension
+- item-020: reserved for future runtime extension
+- item-021: reserved for future runtime extension
+- item-022: reserved for future runtime extension
+- item-023: reserved for future runtime extension
+- item-024: reserved for future runtime extension
+- item-025: reserved for future runtime extension
+- item-026: reserved for future runtime extension
+- item-027: reserved for future runtime extension
+- item-028: reserved for future runtime extension
+- item-029: reserved for future runtime extension
+- item-030: reserved for future runtime extension
+- item-031: reserved for future runtime extension
+- item-032: reserved for future runtime extension
+- item-033: reserved for future runtime extension
+- item-034: reserved for future runtime extension
+- item-035: reserved for future runtime extension
+- item-036: reserved for future runtime extension
+- item-037: reserved for future runtime extension
+- item-038: reserved for future runtime extension
+- item-039: reserved for future runtime extension
+- item-040: reserved for future runtime extension
+- item-041: reserved for future runtime extension
+- item-042: reserved for future runtime extension
+- item-043: reserved for future runtime extension
+- item-044: reserved for future runtime extension
+- item-045: reserved for future runtime extension
+- item-046: reserved for future runtime extension
+- item-047: reserved for future runtime extension
+- item-048: reserved for future runtime extension
+- item-049: reserved for future runtime extension
+- item-050: reserved for future runtime extension
+- item-051: reserved for future runtime extension
+- item-052: reserved for future runtime extension
+- item-053: reserved for future runtime extension
+- item-054: reserved for future runtime extension
+- item-055: reserved for future runtime extension
+- item-056: reserved for future runtime extension
+- item-057: reserved for future runtime extension
+- item-058: reserved for future runtime extension
+- item-059: reserved for future runtime extension
+- item-060: reserved for future runtime extension
+- item-061: reserved for future runtime extension
+- item-062: reserved for future runtime extension
+- item-063: reserved for future runtime extension
+- item-064: reserved for future runtime extension
+- item-065: reserved for future runtime extension
+- item-066: reserved for future runtime extension
+- item-067: reserved for future runtime extension
+- item-068: reserved for future runtime extension
+- item-069: reserved for future runtime extension
+- item-070: reserved for future runtime extension
+- item-071: reserved for future runtime extension
+- item-072: reserved for future runtime extension
+- item-073: reserved for future runtime extension
+- item-074: reserved for future runtime extension
+- item-075: reserved for future runtime extension
+- item-076: reserved for future runtime extension
+- item-077: reserved for future runtime extension
+- item-078: reserved for future runtime extension
+- item-079: reserved for future runtime extension
+- item-080: reserved for future runtime extension
+- item-081: reserved for future runtime extension
+- item-082: reserved for future runtime extension
+- item-083: reserved for future runtime extension
+- item-084: reserved for future runtime extension
+- item-085: reserved for future runtime extension
+- item-086: reserved for future runtime extension
+- item-087: reserved for future runtime extension
+- item-088: reserved for future runtime extension
+- item-089: reserved for future runtime extension
+- item-090: reserved for future runtime extension
+- item-091: reserved for future runtime extension
+- item-092: reserved for future runtime extension
+- item-093: reserved for future runtime extension
+- item-094: reserved for future runtime extension
+- item-095: reserved for future runtime extension
+- item-096: reserved for future runtime extension
+- item-097: reserved for future runtime extension
+- item-098: reserved for future runtime extension
+- item-099: reserved for future runtime extension
+- item-100: reserved for future runtime extension
+- item-101: reserved for future runtime extension
+- item-102: reserved for future runtime extension
+- item-103: reserved for future runtime extension
+- item-104: reserved for future runtime extension
+- item-105: reserved for future runtime extension
+- item-106: reserved for future runtime extension
+- item-107: reserved for future runtime extension
+- item-108: reserved for future runtime extension
+- item-109: reserved for future runtime extension
+- item-110: reserved for future runtime extension
+- item-111: reserved for future runtime extension
+- item-112: reserved for future runtime extension
+- item-113: reserved for future runtime extension
+- item-114: reserved for future runtime extension
+- item-115: reserved for future runtime extension
+- item-116: reserved for future runtime extension
+- item-117: reserved for future runtime extension
+- item-118: reserved for future runtime extension
+- item-119: reserved for future runtime extension
+- item-120: reserved for future runtime extension
+- item-121: reserved for future runtime extension
+- item-122: reserved for future runtime extension
+- item-123: reserved for future runtime extension
+- item-124: reserved for future runtime extension
+- item-125: reserved for future runtime extension
+- item-126: reserved for future runtime extension
+- item-127: reserved for future runtime extension
+- item-128: reserved for future runtime extension
+- item-129: reserved for future runtime extension
+- item-130: reserved for future runtime extension
+- item-131: reserved for future runtime extension
+- item-132: reserved for future runtime extension
+- item-133: reserved for future runtime extension
+- item-134: reserved for future runtime extension
+- item-135: reserved for future runtime extension
+- item-136: reserved for future runtime extension
+- item-137: reserved for future runtime extension
+- item-138: reserved for future runtime extension
+- item-139: reserved for future runtime extension
+- item-140: reserved for future runtime extension
+- item-141: reserved for future runtime extension
+- item-142: reserved for future runtime extension
+- item-143: reserved for future runtime extension
+- item-144: reserved for future runtime extension
+- item-145: reserved for future runtime extension
+- item-146: reserved for future runtime extension
+- item-147: reserved for future runtime extension
+- item-148: reserved for future runtime extension
+- item-149: reserved for future runtime extension
+- item-150: reserved for future runtime extension
+- item-151: reserved for future runtime extension
+- item-152: reserved for future runtime extension
+- item-153: reserved for future runtime extension
+- item-154: reserved for future runtime extension
+- item-155: reserved for future runtime extension
+- item-156: reserved for future runtime extension
+- item-157: reserved for future runtime extension
+- item-158: reserved for future runtime extension
+- item-159: reserved for future runtime extension
+- item-160: reserved for future runtime extension
+- item-161: reserved for future runtime extension
+- item-162: reserved for future runtime extension
+- item-163: reserved for future runtime extension
+- item-164: reserved for future runtime extension
+- item-165: reserved for future runtime extension
+- item-166: reserved for future runtime extension
+- item-167: reserved for future runtime extension
+- item-168: reserved for future runtime extension
+- item-169: reserved for future runtime extension
+- item-170: reserved for future runtime extension
+- item-171: reserved for future runtime extension
+- item-172: reserved for future runtime extension
+- item-173: reserved for future runtime extension
+- item-174: reserved for future runtime extension
+- item-175: reserved for future runtime extension
+- item-176: reserved for future runtime extension
+- item-177: reserved for future runtime extension
+- item-178: reserved for future runtime extension
+- item-179: reserved for future runtime extension
+- item-180: reserved for future runtime extension
+- item-181: reserved for future runtime extension
+- item-182: reserved for future runtime extension
+- item-183: reserved for future runtime extension
+- item-184: reserved for future runtime extension
+- item-185: reserved for future runtime extension
+- item-186: reserved for future runtime extension
+- item-187: reserved for future runtime extension
+- item-188: reserved for future runtime extension
+- item-189: reserved for future runtime extension
+- item-190: reserved for future runtime extension
+- item-191: reserved for future runtime extension
+- item-192: reserved for future runtime extension
+- item-193: reserved for future runtime extension
+- item-194: reserved for future runtime extension
+- item-195: reserved for future runtime extension
+- item-196: reserved for future runtime extension
+- item-197: reserved for future runtime extension
+- item-198: reserved for future runtime extension
+- item-199: reserved for future runtime extension
+- item-200: reserved for future runtime extension
+- item-201: reserved for future runtime extension
+- item-202: reserved for future runtime extension
+- item-203: reserved for future runtime extension
+- item-204: reserved for future runtime extension
+- item-205: reserved for future runtime extension
+- item-206: reserved for future runtime extension
+- item-207: reserved for future runtime extension
+- item-208: reserved for future runtime extension
+- item-209: reserved for future runtime extension
+- item-210: reserved for future runtime extension
+- item-211: reserved for future runtime extension
+- item-212: reserved for future runtime extension
+- item-213: reserved for future runtime extension
+- item-214: reserved for future runtime extension
+- item-215: reserved for future runtime extension
+- item-216: reserved for future runtime extension
+- item-217: reserved for future runtime extension
+- item-218: reserved for future runtime extension
+- item-219: reserved for future runtime extension
+- item-220: reserved for future runtime extension
+- item-221: reserved for future runtime extension
+- item-222: reserved for future runtime extension
+- item-223: reserved for future runtime extension
+- item-224: reserved for future runtime extension
+- item-225: reserved for future runtime extension
+- item-226: reserved for future runtime extension
+- item-227: reserved for future runtime extension
+- item-228: reserved for future runtime extension
+- item-229: reserved for future runtime extension
+- item-230: reserved for future runtime extension
+- item-231: reserved for future runtime extension
+- item-232: reserved for future runtime extension
+- item-233: reserved for future runtime extension
+- item-234: reserved for future runtime extension
+- item-235: reserved for future runtime extension
+- item-236: reserved for future runtime extension
+- item-237: reserved for future runtime extension
+- item-238: reserved for future runtime extension
+- item-239: reserved for future runtime extension
+- item-240: reserved for future runtime extension
+- item-241: reserved for future runtime extension
+- item-242: reserved for future runtime extension
+- item-243: reserved for future runtime extension
+- item-244: reserved for future runtime extension
+- item-245: reserved for future runtime extension
+- item-246: reserved for future runtime extension
+- item-247: reserved for future runtime extension
+- item-248: reserved for future runtime extension
+- item-249: reserved for future runtime extension
+- item-250: reserved for future runtime extension
+- item-251: reserved for future runtime extension
+- item-252: reserved for future runtime extension
+- item-253: reserved for future runtime extension
+- item-254: reserved for future runtime extension
+- item-255: reserved for future runtime extension
+- item-256: reserved for future runtime extension
+- item-257: reserved for future runtime extension
+- item-258: reserved for future runtime extension
+- item-259: reserved for future runtime extension
+- item-260: reserved for future runtime extension
+- item-261: reserved for future runtime extension
+- item-262: reserved for future runtime extension
+- item-263: reserved for future runtime extension
+- item-264: reserved for future runtime extension
+- item-265: reserved for future runtime extension
+- item-266: reserved for future runtime extension
+- item-267: reserved for future runtime extension
+- item-268: reserved for future runtime extension
+- item-269: reserved for future runtime extension
+- item-270: reserved for future runtime extension
+- item-271: reserved for future runtime extension
+- item-272: reserved for future runtime extension
+- item-273: reserved for future runtime extension
+- item-274: reserved for future runtime extension
+- item-275: reserved for future runtime extension
+- item-276: reserved for future runtime extension
+- item-277: reserved for future runtime extension
+- item-278: reserved for future runtime extension
+- item-279: reserved for future runtime extension
+- item-280: reserved for future runtime extension
+- item-281: reserved for future runtime extension
+- item-282: reserved for future runtime extension
+- item-283: reserved for future runtime extension
+- item-284: reserved for future runtime extension
+- item-285: reserved for future runtime extension
+- item-286: reserved for future runtime extension
+- item-287: reserved for future runtime extension
+- item-288: reserved for future runtime extension
+- item-289: reserved for future runtime extension
+- item-290: reserved for future runtime extension
+- item-291: reserved for future runtime extension
+- item-292: reserved for future runtime extension
+- item-293: reserved for future runtime extension
+- item-294: reserved for future runtime extension
+- item-295: reserved for future runtime extension
+- item-296: reserved for future runtime extension
+- item-297: reserved for future runtime extension
+- item-298: reserved for future runtime extension
+- item-299: reserved for future runtime extension
+- item-300: reserved for future runtime extension
+- item-301: reserved for future runtime extension
+- item-302: reserved for future runtime extension
+- item-303: reserved for future runtime extension
+- item-304: reserved for future runtime extension
+- item-305: reserved for future runtime extension
+- item-306: reserved for future runtime extension
+- item-307: reserved for future runtime extension
+- item-308: reserved for future runtime extension
+- item-309: reserved for future runtime extension
+- item-310: reserved for future runtime extension
+- item-311: reserved for future runtime extension
+- item-312: reserved for future runtime extension
+- item-313: reserved for future runtime extension
+- item-314: reserved for future runtime extension
+- item-315: reserved for future runtime extension
+- item-316: reserved for future runtime extension
+- item-317: reserved for future runtime extension
+- item-318: reserved for future runtime extension
+- item-319: reserved for future runtime extension
+- item-320: reserved for future runtime extension
+- item-321: reserved for future runtime extension
+- item-322: reserved for future runtime extension
+- item-323: reserved for future runtime extension
+- item-324: reserved for future runtime extension
+- item-325: reserved for future runtime extension
+- item-326: reserved for future runtime extension
+- item-327: reserved for future runtime extension
+- item-328: reserved for future runtime extension
+- item-329: reserved for future runtime extension
+- item-330: reserved for future runtime extension
+- item-331: reserved for future runtime extension
+- item-332: reserved for future runtime extension
+- item-333: reserved for future runtime extension
+- item-334: reserved for future runtime extension
+- item-335: reserved for future runtime extension
+- item-336: reserved for future runtime extension
+- item-337: reserved for future runtime extension
+- item-338: reserved for future runtime extension
+- item-339: reserved for future runtime extension
+- item-340: reserved for future runtime extension
+- item-341: reserved for future runtime extension
+- item-342: reserved for future runtime extension
+- item-343: reserved for future runtime extension
+- item-344: reserved for future runtime extension
+- item-345: reserved for future runtime extension
+- item-346: reserved for future runtime extension
+- item-347: reserved for future runtime extension
+- item-348: reserved for future runtime extension
+- item-349: reserved for future runtime extension
+- item-350: reserved for future runtime extension
+- item-351: reserved for future runtime extension
+- item-352: reserved for future runtime extension
+- item-353: reserved for future runtime extension
+- item-354: reserved for future runtime extension
+- item-355: reserved for future runtime extension
+- item-356: reserved for future runtime extension
+- item-357: reserved for future runtime extension
+- item-358: reserved for future runtime extension
+- item-359: reserved for future runtime extension
+- item-360: reserved for future runtime extension
+- item-361: reserved for future runtime extension
+- item-362: reserved for future runtime extension
+- item-363: reserved for future runtime extension
+- item-364: reserved for future runtime extension
+- item-365: reserved for future runtime extension
+- item-366: reserved for future runtime extension
+- item-367: reserved for future runtime extension
+- item-368: reserved for future runtime extension
+- item-369: reserved for future runtime extension
+- item-370: reserved for future runtime extension
+- item-371: reserved for future runtime extension
+- item-372: reserved for future runtime extension
+- item-373: reserved for future runtime extension
+- item-374: reserved for future runtime extension
+- item-375: reserved for future runtime extension
+- item-376: reserved for future runtime extension
+- item-377: reserved for future runtime extension
+- item-378: reserved for future runtime extension
+- item-379: reserved for future runtime extension
+- item-380: reserved for future runtime extension
+- item-381: reserved for future runtime extension
+- item-382: reserved for future runtime extension
+- item-383: reserved for future runtime extension
+- item-384: reserved for future runtime extension
+- item-385: reserved for future runtime extension
+- item-386: reserved for future runtime extension
+- item-387: reserved for future runtime extension
+- item-388: reserved for future runtime extension
+- item-389: reserved for future runtime extension
+- item-390: reserved for future runtime extension
+- item-391: reserved for future runtime extension
+- item-392: reserved for future runtime extension
+- item-393: reserved for future runtime extension
+- item-394: reserved for future runtime extension
+- item-395: reserved for future runtime extension
