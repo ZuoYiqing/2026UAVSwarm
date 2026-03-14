@@ -1,8 +1,9 @@
+"""adapter gateway，衔接 canonical 请求与 adapter 执行。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .base import AdapterResult
+from uav_runtime.protocol.schema import ActionRequest
 
 
 @dataclass(slots=True)
@@ -10,13 +11,10 @@ class AdapterGateway:
     adapters: dict[str, object] = field(default_factory=dict)
 
     def register(self, adapter: object) -> None:
-        name = getattr(adapter, "name", None)
-        if not isinstance(name, str) or not name:
-            raise ValueError("adapter.name must be non-empty string")
-        self.adapters[name] = adapter
+        self.adapters[getattr(adapter, "name")] = adapter
 
-    def send(self, adapter_name: str, payload: dict) -> AdapterResult:
+    def execute(self, adapter_name: str, request: ActionRequest) -> dict:
         adapter = self.adapters.get(adapter_name)
         if adapter is None:
-            return AdapterResult(False, f"adapter not found: {adapter_name}")
-        return adapter.send(payload)
+            return {"accepted": False, "detail": f"adapter_not_found:{adapter_name}", "adapter": adapter_name}
+        return adapter.execute(request)

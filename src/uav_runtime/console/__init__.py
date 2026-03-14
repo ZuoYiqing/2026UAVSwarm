@@ -1,1 +1,1 @@
-"""Console entrypoints."""
+"""CLI 子包声明。"""

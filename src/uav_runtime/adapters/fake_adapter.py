@@ -1,15 +1,13 @@
+"""fake adapter 模拟执行结果。"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from uav_runtime.adapters.mappers.canonical_mapper import to_adapter_command
+from uav_runtime.protocol.schema import ActionRequest
 
-from .base import AdapterResult
 
-
-@dataclass(slots=True)
 class FakeAdapter:
-    name: str = "fake"
-    sent: list[dict] = field(default_factory=list)
+    name = "fake"
 
-    def send(self, payload: dict) -> AdapterResult:
-        self.sent.append(payload)
-        return AdapterResult(accepted=True, detail=f"{self.name}:ok")
+    def execute(self, request: ActionRequest) -> dict:
+        cmd = to_adapter_command(request)
+        return {"accepted": True, "detail": "simulated", "adapter": self.name, "command": cmd}

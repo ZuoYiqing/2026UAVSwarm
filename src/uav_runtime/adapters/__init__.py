@@ -1,1 +1,1 @@
-"""Adapters package: canonical protocol to execution interfaces."""
+"""adapters 层包声明。"""
