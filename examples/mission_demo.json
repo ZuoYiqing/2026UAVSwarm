@@ -1,0 +1,22 @@
+{
+  "mission_id": "demo_3uav_search_01",
+  "objective": "区域搜索与可疑目标侦察（民用演训/巡检示例）",
+  "area": {
+    "type": "rectangle",
+    "x_min_km": 0,
+    "x_max_km": 100,
+    "y_min_km": 0,
+    "y_max_km": 100
+  },
+  "time_limit_s": 600,
+  "constraints": {
+    "max_total_bandwidth_bps": 1000000,
+    "max_uav_count": 3,
+    "lost_contact_timeout_s": 10
+  },
+  "phases": [
+    "initial_search",
+    "suspicious_target_detection",
+    "target_assessment_and_response"
+  ]
+}

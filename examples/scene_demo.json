@@ -1,0 +1,39 @@
+{
+  "nodes": [
+    {
+      "id": "GS",
+      "type": "ground_station",
+      "role": "global_controller",
+      "position": {"x_km": 0, "y_km": 0},
+      "capabilities": ["adjust_mission", "receive_summary"]
+    },
+    {
+      "id": "UAV_1",
+      "type": "fixed_wing_uav",
+      "role": "cluster_head",
+      "capabilities": ["local_retasking", "target_fusion", "status_aggregation"]
+    },
+    {
+      "id": "UAV_2",
+      "type": "fixed_wing_uav",
+      "role": "member",
+      "capabilities": ["search", "report_target"]
+    },
+    {
+      "id": "UAV_3",
+      "type": "fixed_wing_uav",
+      "role": "member",
+      "capabilities": ["search", "report_target"]
+    }
+  ],
+  "links": [
+    {"src": "UAV_1", "dst": "GS", "type": "uplink", "bandwidth_bps": 500000, "loss_rate": 0.1},
+    {"src": "GS", "dst": "UAV_1", "type": "downlink", "bandwidth_bps": 500000, "loss_rate": 0.1},
+    {"src": "UAV_2", "dst": "GS", "type": "uplink", "bandwidth_bps": 250000, "loss_rate": 0.1},
+    {"src": "UAV_3", "dst": "GS", "type": "uplink", "bandwidth_bps": 250000, "loss_rate": 0.1},
+    {"src": "UAV_2", "dst": "UAV_1", "type": "intra_cluster", "bandwidth_bps": 200000, "loss_rate": 0.05},
+    {"src": "UAV_3", "dst": "UAV_1", "type": "intra_cluster", "bandwidth_bps": 200000, "loss_rate": 0.05},
+    {"src": "UAV_1", "dst": "UAV_2", "type": "intra_cluster", "bandwidth_bps": 200000, "loss_rate": 0.05},
+    {"src": "UAV_1", "dst": "UAV_3", "type": "intra_cluster", "bandwidth_bps": 200000, "loss_rate": 0.05}
+  ]
+}
