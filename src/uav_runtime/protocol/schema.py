@@ -1,4 +1,4 @@
-"""本轮修补点：补充 canonical/legacy alias 关系注释，保持 contract 字段骨架且不破坏兼容。"""
+"""本轮最后修补点：强化 canonical 字段优先级说明，保留 legacy alias 仅用于迁移兼容。"""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -36,11 +36,12 @@ class Envelope:
 
 @dataclass(slots=True)
 class ActionRequest:
-    # legacy aliases (兼容层):
-    # - action       -> canonical: action_type
-    # - scope        -> canonical: requested_scope
-    # - priority     -> canonical: priority_hint
-    # 说明：当前保留 legacy 字段用于平滑迁移，后续逐步以 canonical 字段为主。
+    # legacy aliases（迁移兼容）:
+    # - action   -> canonical: action_type
+    # - scope    -> canonical: requested_scope
+    # - priority -> canonical: priority_hint
+    # canonical 优先级：action_type / requested_scope / priority_hint。
+    # legacy 字段仅为平滑迁移保留，不是长期主入口。
     action: str
     params: dict[str, Any]
     source: CommandSource
@@ -61,6 +62,7 @@ class ActionRequest:
     idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
+        # 轻量规范化方向：优先写入 canonical 字段，legacy 仅回填兼容。
         if not self.action_type:
             self.action_type = self.action
         if self.requested_scope is None:

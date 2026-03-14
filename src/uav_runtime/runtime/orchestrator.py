@@ -1,4 +1,4 @@
-"""本轮修补点：细分 decision 返回路径，并补齐 context/profile 合同字段占位（骨架）。"""
+"""本轮最后修补点：去除 *_ext 临时占位，直接构造 contract 对齐的 context/profile 字段并保持分支返回语义。"""
 from __future__ import annotations
 
 import uuid
@@ -26,26 +26,23 @@ class RuntimeOrchestrator:
         self.gateway = AdapterGateway({"fake": FakeAdapter()})
 
     def _build_policy_context(self, req: ActionRequest) -> PolicyContext:
-        # skeleton placeholder aligned to future contract keys
-        context_ext = {
-            "mission_id": req.mission_id,
-            "current_phase": "nominal",
-            "active_controller_source": req.source.value,
-            "active_delegations": [req.delegation_id] if req.delegation_id else [],
-            "running_actions": [],
-            "pending_takeovers": [],
-            "runtime_limits": {"max_queue": 64, "max_concurrency": 1},
-        }
         return PolicyContext(
             source=req.source,
             scope=req.requested_scope or req.scope,
             link_state=LinkState.HEALTHY,
+            mission_id=req.mission_id,
+            current_phase="nominal",
+            active_controller_source=req.source.value,
+            active_delegations=[req.delegation_id] if req.delegation_id else [],
+            running_actions=[],
+            pending_takeovers=[],
+            runtime_limits={"max_queue": 64, "max_concurrency": 1},
             active_profile="default_profile",
-            flags={"contract_context_ext": bool(context_ext)},
+            flags={"context_skeleton_ready": True},
         )
 
     def _build_profile(self) -> PolicyProfile:
-        profile = PolicyProfile(
+        return PolicyProfile(
             name="default_profile",
             allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
             denied_skill_groups=[],
@@ -53,17 +50,12 @@ class RuntimeOrchestrator:
             require_confirm_for_risk_ge=3,
             allow_without_confirm=False,
             max_concurrent_actions=1,
+            confirm_rules=[],
+            degradation_behavior={},
+            fallback_behavior={},
+            recovery_behavior={},
+            runtime_constraints={},
         )
-        # skeleton placeholder aligned to future contract keys
-        profile_ext = {
-            "confirm_rules": [],
-            "degradation_behavior": {},
-            "fallback_behavior": {},
-            "recovery_behavior": {},
-            "runtime_constraints": {},
-        }
-        _ = profile_ext
-        return profile
 
     def _blocked_like_result(self, request_id: str, status: str, code: str) -> dict:
         return {
@@ -123,17 +115,17 @@ class RuntimeOrchestrator:
         self.audit.append(policy_decision_event)
 
         if decision_code == DecisionCode.DENY.value:
-            return self._blocked_like_result(request_id, "blocked", decision.primary_reason_code or "REASON.DENY")
+            return self._blocked_like_result(request_id, "blocked", decision.primary_reason_code or "POLICY_REASON_DENY")
         if decision_code == DECISION_DEFER:
-            return self._blocked_like_result(request_id, "deferred", decision.primary_reason_code or "REASON.DEFER")
+            return self._blocked_like_result(request_id, "deferred", decision.primary_reason_code or "POLICY_REASON_DEFER")
         if decision_code == DECISION_REQUIRE_CONFIRM:
             return self._blocked_like_result(
                 request_id,
                 "waiting_confirmation",
-                decision.primary_reason_code or "REASON.CONFIRMATION.REQUIRED",
+                decision.primary_reason_code or "POLICY_REASON_CONFIRMATION_REQUIRED",
             )
         if decision_code == DecisionCode.PREEMPT.value:
-            return self._blocked_like_result(request_id, "handover_pending", decision.primary_reason_code or "REASON.PREEMPT")
+            return self._blocked_like_result(request_id, "handover_pending", decision.primary_reason_code or "POLICY_REASON_PREEMPT")
 
         # ALLOW -> execute adapter
         result = self.gateway.execute("fake", req)

@@ -1,13 +1,15 @@
-"""fake adapter 模拟执行结果。"""
+"""本轮最后修补点：适配 gateway command 下游路径，fake adapter 仅消费 command/intention。"""
 from __future__ import annotations
-
-from uav_runtime.adapters.mappers.canonical_mapper import to_adapter_command
-from uav_runtime.protocol.schema import ActionRequest
 
 
 class FakeAdapter:
     name = "fake"
 
-    def execute(self, request: ActionRequest) -> dict:
-        cmd = to_adapter_command(request)
-        return {"accepted": True, "detail": "simulated", "adapter": self.name, "command": cmd}
+    def execute(self, command: dict) -> dict:
+        # fake/stub: no real protocol execution
+        return {
+            "accepted": True,
+            "detail": "simulated",
+            "adapter": self.name,
+            "command": command,
+        }

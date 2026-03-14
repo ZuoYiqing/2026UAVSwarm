@@ -1,4 +1,4 @@
-"""本轮修补点：reason/decision code 风格对齐 registry 形态，ALLOW 主因置空，REQUIRE_CONFIRM 常量化。"""
+"""本轮最后修补点：reason code 统一为冻结 registry 正式命名风格；ALLOW 主因保持空。"""
 from __future__ import annotations
 
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
@@ -11,10 +11,10 @@ from uav_runtime.protocol.enums import DecisionCode, LinkState
 DECISION_REQUIRE_CONFIRM = "REQUIRE_CONFIRM"
 DECISION_DEFER = "DEFER"
 
-# registry-style reason code skeletons (no free-form strings)
-REASON_LINK_LOST_SCOPE_RESTRICTED = "REASON.LINK.LOST.SCOPE_RESTRICTED"
-REASON_CONFIRM_REQUIRED = "REASON.CONFIRMATION.REQUIRED"
-REASON_RISK_EXCEEDED = "REASON.RISK.EXCEEDED"
+# registry-style reason codes (frozen naming style)
+POLICY_REASON_LINK_SCOPE_RESTRICTED = "POLICY_REASON_LINK_SCOPE_RESTRICTED"
+POLICY_REASON_CONFIRMATION_REQUIRED = "POLICY_REASON_CONFIRMATION_REQUIRED"
+POLICY_REASON_RISK_LIMIT_EXCEEDED = "POLICY_REASON_RISK_LIMIT_EXCEEDED"
 
 
 def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile: PolicyProfile) -> PolicyDecisionEnvelope:
@@ -38,7 +38,7 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
     secondary: list[str] = []
     if ctx.link_state == LinkState.LOST:
         effective_scope = "self_only"
-        secondary.append(REASON_LINK_LOST_SCOPE_RESTRICTED)
+        secondary.append(POLICY_REASON_LINK_SCOPE_RESTRICTED)
 
     # 7) profile 约束检查
     # TODO: check allowed/denied skill groups, concurrency, profile policy
@@ -50,7 +50,7 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
     if actx.risk_level > profile.max_risk_when_link_lost and ctx.link_state == LinkState.LOST:
         return PolicyDecisionEnvelope(
             decision_code=DecisionCode.DENY,
-            primary_reason_code=REASON_RISK_EXCEEDED,
+            primary_reason_code=POLICY_REASON_RISK_LIMIT_EXCEEDED,
             secondary_reason_codes=secondary,
             effective_scope=effective_scope,
             effective_profile_id=profile.name,
@@ -62,7 +62,7 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
     if actx.require_confirm and not profile.allow_without_confirm:
         return PolicyDecisionEnvelope(
             decision_code=DECISION_REQUIRE_CONFIRM,
-            primary_reason_code=REASON_CONFIRM_REQUIRED,
+            primary_reason_code=POLICY_REASON_CONFIRMATION_REQUIRED,
             secondary_reason_codes=secondary,
             effective_scope=effective_scope,
             effective_profile_id=profile.name,
