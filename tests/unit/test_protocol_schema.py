@@ -1,40 +1,67 @@
-"""协议形状与决策校验（含 PREEMPT 约束）单测骨架。"""
+"""协议与决策数据模型对齐测试（按当前冻结 contract 字段命名）。"""
 from __future__ import annotations
 
 import pytest
 
+from uav_runtime.policy.decision import HandoverPlan, PolicyDecisionEnvelope
 from uav_runtime.protocol.enums import DecisionCode, MessageType
 from uav_runtime.protocol.schema import Envelope, PolicyDecision
-from uav_runtime.protocol.validation import validate_envelope_instance, validate_policy_decision
+from uav_runtime.protocol.validation import validate_envelope_instance
 
 
-def test_envelope_shape_ok() -> None:
-    env = Envelope(message_type=MessageType.ACTION_REQUEST, trace_id="t-1")
-    validate_envelope_instance(env)
-
-
-def test_preempt_requires_target() -> None:
-    with pytest.raises(ValueError):
-        validate_policy_decision(PolicyDecision(decision=DecisionCode.PREEMPT, primary_reason="prio"))
-
-
-def test_preempt_requires_handover_plan() -> None:
-    with pytest.raises(ValueError):
-        validate_policy_decision(
-            PolicyDecision(
-                decision=DecisionCode.PREEMPT,
-                primary_reason="prio",
-                preempt_target_task_id="task-1",
-            )
-        )
-
-
-def test_preempt_with_handover_plan_ok() -> None:
-    validate_policy_decision(
-        PolicyDecision(
-            decision=DecisionCode.PREEMPT,
-            primary_reason="prio",
-            preempt_target_task_id="task-1",
-            handover_plan={"mode": "suspend_then_takeover"},
-        )
+def test_minimal_valid_envelope_contains_contract_fields() -> None:
+    env = Envelope(
+        message_type=MessageType.ACTION_REQUEST,
+        protocol_version="1.0",
+        schema_id="uav_runtime.envelope.v1",
+        message_id="msg-001",
+        trace_id="trace-001",
+        mission_id="mission-001",
+        source="ground_station",
+        target="runtime",
+        payload={"k": "v"},
     )
+    validate_envelope_instance(env)
+    d = env.to_dict()
+    assert d["protocol_version"] == "1.0"
+    assert d["schema_id"] == "uav_runtime.envelope.v1"
+    assert d["message_id"] == "msg-001"
+    assert d["trace_id"] == "trace-001"
+    assert d["mission_id"] == "mission-001"
+    assert d["source"] == "ground_station"
+    assert d["target"] == "runtime"
+    assert isinstance(d["timestamp"], str)
+    assert d["payload"] == {"k": "v"}
+
+
+def test_policy_decision_uses_new_field_names() -> None:
+    d = PolicyDecision(
+        decision_code=DecisionCode.DENY,
+        primary_reason_code="REASON_CODE_RISK_LEVEL_EXCEEDED",
+        secondary_reason_codes=["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"],
+        handover_plan={"mode": "none"},
+    )
+    assert d.decision_code == DecisionCode.DENY
+    assert d.primary_reason_code == "REASON_CODE_RISK_LEVEL_EXCEEDED"
+    assert d.secondary_reason_codes == ["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"]
+
+
+def test_preempt_without_handover_plan_fails() -> None:
+    env = PolicyDecisionEnvelope(
+        decision_code=DecisionCode.PREEMPT,
+        primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+        handover_plan=HandoverPlan(mode="none"),
+    )
+    with pytest.raises(ValueError):
+        env.validate_preempt_contract()
+
+
+def test_preempt_with_valid_handover_modes_passes() -> None:
+    # 说明：当前以 PolicyDecisionEnvelope 为权威决策对象；schema.PolicyDecision 后续可收敛。
+    for mode in ["abort", "suspend", "enqueue_after", "wait_until_safe_handover"]:
+        env = PolicyDecisionEnvelope(
+            decision_code=DecisionCode.PREEMPT,
+            primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+            handover_plan=HandoverPlan(mode=mode),
+        )
+        env.validate_preempt_contract()
