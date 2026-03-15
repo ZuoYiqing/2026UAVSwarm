@@ -41,7 +41,11 @@ def test_minimal_runtime_allow_flow(tmp_path) -> None:
     assert audit.exists()
 
     events = _read_audit_events(audit)
-    assert any(e.get("type") == "policy_decision_event" for e in events)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    assert decision_events
+    last = decision_events[-1]
+    assert last.get("decision_code") == "allow"
+    assert last.get("policy_trace_id")
 
 
 def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
@@ -70,11 +74,15 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     assert res["request_id"] == "req-confirm-001"
     assert res["status"] == "waiting_confirmation"
     assert res["accepted"] is False
-    assert res["code"] == "REASON_CODE_CONFIRMATION_REQUIRED"
+    assert res["code"] is not None
+    assert res["code"].endswith("CONFIRMATION_REQUIRED")
     assert audit.exists()
 
     events = _read_audit_events(audit)
-    assert any(
-        e.get("type") == "policy_decision_event" and e.get("decision_code") == "REQUIRE_CONFIRM"
-        for e in events
-    )
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    assert decision_events
+    last = decision_events[-1]
+    assert last.get("decision_code") == "REQUIRE_CONFIRM"
+    assert last.get("primary_reason_code") is not None
+    assert last.get("primary_reason_code").endswith("CONFIRMATION_REQUIRED")
+    assert last.get("effective_scope")

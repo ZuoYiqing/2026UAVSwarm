@@ -1,4 +1,9 @@
-"""协议与决策数据模型对齐测试（按当前冻结 contract 字段命名）。"""
+"""协议与决策数据模型对齐测试（按当前冻结 contract 字段命名）。
+
+说明：
+- PolicyDecisionEnvelope 是当前 policy 层权威对象。
+- schema.PolicyDecision 是协议/兼容视图；后续可收敛到单一权威对象。
+"""
 from __future__ import annotations
 
 import pytest
@@ -37,19 +42,19 @@ def test_minimal_valid_envelope_contains_contract_fields() -> None:
 def test_policy_decision_uses_new_field_names() -> None:
     d = PolicyDecision(
         decision_code=DecisionCode.DENY,
-        primary_reason_code="REASON_CODE_RISK_LEVEL_EXCEEDED",
-        secondary_reason_codes=["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"],
+        primary_reason_code="POLICY_REASON_RISK_LIMIT_EXCEEDED",
+        secondary_reason_codes=["POLICY_REASON_LINK_SCOPE_RESTRICTED"],
         handover_plan={"mode": "none"},
     )
     assert d.decision_code == DecisionCode.DENY
-    assert d.primary_reason_code == "REASON_CODE_RISK_LEVEL_EXCEEDED"
-    assert d.secondary_reason_codes == ["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"]
+    assert d.primary_reason_code == "POLICY_REASON_RISK_LIMIT_EXCEEDED"
+    assert d.secondary_reason_codes == ["POLICY_REASON_LINK_SCOPE_RESTRICTED"]
 
 
 def test_preempt_without_handover_plan_fails() -> None:
     env = PolicyDecisionEnvelope(
         decision_code=DecisionCode.PREEMPT,
-        primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+        primary_reason_code="POLICY_REASON_PREEMPT_REQUIRED",
         handover_plan=HandoverPlan(mode="none"),
     )
     with pytest.raises(ValueError):
@@ -57,11 +62,10 @@ def test_preempt_without_handover_plan_fails() -> None:
 
 
 def test_preempt_with_valid_handover_modes_passes() -> None:
-    # 说明：当前以 PolicyDecisionEnvelope 为权威决策对象；schema.PolicyDecision 后续可收敛。
     for mode in ["abort", "suspend", "enqueue_after", "wait_until_safe_handover"]:
         env = PolicyDecisionEnvelope(
             decision_code=DecisionCode.PREEMPT,
-            primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+            primary_reason_code="POLICY_REASON_PREEMPT_REQUIRED",
             handover_plan=HandoverPlan(mode=mode),
         )
         env.validate_preempt_contract()
