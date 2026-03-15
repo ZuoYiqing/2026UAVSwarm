@@ -1,8 +1,8 @@
 """policy 合同形状测试（对齐当前 gate/context/profile skeleton）。
 
 说明：
-- 这是 gate 内部 shape 测试，当前仍基于 RuntimeActionContext skeleton 输入。
-- 后续若 gate 输入收敛到 ActionRequest，可同步收敛本测试。
+- 这是 gate 内部 skeleton shape test，不是最终 protocol-level contract test。
+- 当前仍基于 RuntimeActionContext skeleton 输入；后续 gate 输入若收敛到 ActionRequest，可同步收敛测试。
 """
 from __future__ import annotations
 
@@ -10,7 +10,12 @@ import pytest
 
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.decision import HandoverPlan, PolicyDecisionEnvelope
-from uav_runtime.policy.gate import DECISION_REQUIRE_CONFIRM, unified_policy_gate
+from uav_runtime.policy.gate import (
+    DECISION_REQUIRE_CONFIRM,
+    REASON_CODE_CONFIRMATION_REQUIRED,
+    REASON_CODE_RISK_LEVEL_EXCEEDED,
+    unified_policy_gate,
+)
 from uav_runtime.policy.profile import PolicyProfile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 
@@ -68,8 +73,7 @@ def test_policy_require_confirm_path_shape() -> None:
         _profile(allow_without_confirm=False),
     )
     assert out.decision_code == DECISION_REQUIRE_CONFIRM
-    assert out.primary_reason_code is not None
-    assert out.primary_reason_code.endswith("CONFIRMATION_REQUIRED")
+    assert out.primary_reason_code == REASON_CODE_CONFIRMATION_REQUIRED
     assert out.effective_scope == AuthorityScope.SELF_ONLY
     assert out.effective_profile_id == "default_profile"
 
@@ -81,8 +85,7 @@ def test_policy_link_lost_deny_path_shape() -> None:
         _profile(max_risk_when_link_lost=1),
     )
     assert out.decision_code == DecisionCode.DENY
-    assert out.primary_reason_code is not None
-    assert out.primary_reason_code.endswith("RISK_LEVEL_EXCEEDED")
+    assert out.primary_reason_code == REASON_CODE_RISK_LEVEL_EXCEEDED
     assert out.effective_scope == "self_only"
     assert out.effective_profile_id == "default_profile"
 
@@ -90,7 +93,7 @@ def test_policy_link_lost_deny_path_shape() -> None:
 def test_preempt_contract_shape_path() -> None:
     env = PolicyDecisionEnvelope(
         decision_code=DecisionCode.PREEMPT,
-        primary_reason_code="POLICY_REASON_PREEMPT_REQUIRED",
+        primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
         handover_plan=HandoverPlan(mode="none"),
     )
     with pytest.raises(ValueError):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
@@ -10,6 +11,14 @@ from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 
 def _read_audit_events(path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _normalize_decision_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    # 待收敛点：当前代码里 enum 路径为小写("allow")，常量路径为大写("REQUIRE_CONFIRM")。
+    # 测试先按最终推荐形式统一到大写比较。
+    return value.upper()
 
 
 def test_minimal_runtime_allow_flow(tmp_path) -> None:
@@ -44,8 +53,9 @@ def test_minimal_runtime_allow_flow(tmp_path) -> None:
     decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
     assert decision_events
     last = decision_events[-1]
-    assert last.get("decision_code") == "allow"
+    assert _normalize_decision_code(last.get("decision_code")) == "ALLOW"
     assert last.get("policy_trace_id")
+    assert last.get("effective_profile_id")
 
 
 def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
@@ -74,15 +84,13 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     assert res["request_id"] == "req-confirm-001"
     assert res["status"] == "waiting_confirmation"
     assert res["accepted"] is False
-    assert res["code"] is not None
-    assert res["code"].endswith("CONFIRMATION_REQUIRED")
+    assert res["code"] == REASON_CODE_CONFIRMATION_REQUIRED
     assert audit.exists()
 
     events = _read_audit_events(audit)
     decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
     assert decision_events
     last = decision_events[-1]
-    assert last.get("decision_code") == "REQUIRE_CONFIRM"
-    assert last.get("primary_reason_code") is not None
-    assert last.get("primary_reason_code").endswith("CONFIRMATION_REQUIRED")
+    assert _normalize_decision_code(last.get("decision_code")) == "REQUIRE_CONFIRM"
+    assert last.get("primary_reason_code") == REASON_CODE_CONFIRMATION_REQUIRED
     assert last.get("effective_scope")
