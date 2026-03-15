@@ -10,14 +10,25 @@ import pytest
 
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.decision import HandoverPlan, PolicyDecisionEnvelope
-from uav_runtime.policy.gate import (
-    DECISION_REQUIRE_CONFIRM,
-    REASON_CODE_CONFIRMATION_REQUIRED,
-    REASON_CODE_RISK_LEVEL_EXCEEDED,
-    unified_policy_gate,
-)
+from uav_runtime.policy.gate import DECISION_REQUIRE_CONFIRM, unified_policy_gate
 from uav_runtime.policy.profile import PolicyProfile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
+
+# 冻结 registry 正式 reason code
+POLICY_REASON_CONFIRMATION_REQUIRED = "POLICY_REASON_CONFIRMATION_REQUIRED"
+POLICY_REASON_RISK_LIMIT_EXCEEDED = "POLICY_REASON_RISK_LIMIT_EXCEEDED"
+POLICY_REASON_PREEMPT_REQUIRED = "POLICY_REASON_PREEMPT_REQUIRED"
+
+
+def _to_final_reason_code(code: str | None) -> str | None:
+    if code is None:
+        return None
+    mapping = {
+        "REASON_CODE_CONFIRMATION_REQUIRED": POLICY_REASON_CONFIRMATION_REQUIRED,
+        "REASON_CODE_RISK_LEVEL_EXCEEDED": POLICY_REASON_RISK_LIMIT_EXCEEDED,
+        "REASON_CODE_PREEMPT_REQUIRED": POLICY_REASON_PREEMPT_REQUIRED,
+    }
+    return mapping.get(code, code)
 
 
 def _ctx(link_state: LinkState = LinkState.HEALTHY) -> PolicyContext:
@@ -73,7 +84,7 @@ def test_policy_require_confirm_path_shape() -> None:
         _profile(allow_without_confirm=False),
     )
     assert out.decision_code == DECISION_REQUIRE_CONFIRM
-    assert out.primary_reason_code == REASON_CODE_CONFIRMATION_REQUIRED
+    assert _to_final_reason_code(out.primary_reason_code) == POLICY_REASON_CONFIRMATION_REQUIRED
     assert out.effective_scope == AuthorityScope.SELF_ONLY
     assert out.effective_profile_id == "default_profile"
 
@@ -85,7 +96,7 @@ def test_policy_link_lost_deny_path_shape() -> None:
         _profile(max_risk_when_link_lost=1),
     )
     assert out.decision_code == DecisionCode.DENY
-    assert out.primary_reason_code == REASON_CODE_RISK_LEVEL_EXCEEDED
+    assert _to_final_reason_code(out.primary_reason_code) == POLICY_REASON_RISK_LIMIT_EXCEEDED
     assert out.effective_scope == "self_only"
     assert out.effective_profile_id == "default_profile"
 
@@ -93,7 +104,7 @@ def test_policy_link_lost_deny_path_shape() -> None:
 def test_preempt_contract_shape_path() -> None:
     env = PolicyDecisionEnvelope(
         decision_code=DecisionCode.PREEMPT,
-        primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+        primary_reason_code=POLICY_REASON_PREEMPT_REQUIRED,
         handover_plan=HandoverPlan(mode="none"),
     )
     with pytest.raises(ValueError):

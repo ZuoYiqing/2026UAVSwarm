@@ -3,10 +3,21 @@ from __future__ import annotations
 
 import json
 
-from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
+
+# 冻结 registry 正式 reason code
+POLICY_REASON_CONFIRMATION_REQUIRED = "POLICY_REASON_CONFIRMATION_REQUIRED"
+
+
+def _to_final_reason_code(code: str | None) -> str | None:
+    if code is None:
+        return None
+    mapping = {
+        "REASON_CODE_CONFIRMATION_REQUIRED": POLICY_REASON_CONFIRMATION_REQUIRED,
+    }
+    return mapping.get(code, code)
 
 
 def _read_audit_events(path) -> list[dict]:
@@ -84,7 +95,7 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     assert res["request_id"] == "req-confirm-001"
     assert res["status"] == "waiting_confirmation"
     assert res["accepted"] is False
-    assert res["code"] == REASON_CODE_CONFIRMATION_REQUIRED
+    assert _to_final_reason_code(res["code"]) == POLICY_REASON_CONFIRMATION_REQUIRED
     assert audit.exists()
 
     events = _read_audit_events(audit)
@@ -92,5 +103,5 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     assert decision_events
     last = decision_events[-1]
     assert _normalize_decision_code(last.get("decision_code")) == "REQUIRE_CONFIRM"
-    assert last.get("primary_reason_code") == REASON_CODE_CONFIRMATION_REQUIRED
+    assert _to_final_reason_code(last.get("primary_reason_code")) == POLICY_REASON_CONFIRMATION_REQUIRED
     assert last.get("effective_scope")

@@ -13,6 +13,25 @@ from uav_runtime.protocol.enums import DecisionCode, MessageType
 from uav_runtime.protocol.schema import Envelope, PolicyDecision
 from uav_runtime.protocol.validation import validate_envelope_instance
 
+# 冻结 registry 正式 reason code
+POLICY_REASON_CONFIRMATION_REQUIRED = "POLICY_REASON_CONFIRMATION_REQUIRED"
+POLICY_REASON_RISK_LIMIT_EXCEEDED = "POLICY_REASON_RISK_LIMIT_EXCEEDED"
+POLICY_REASON_LINK_SCOPE_RESTRICTED = "POLICY_REASON_LINK_SCOPE_RESTRICTED"
+POLICY_REASON_PREEMPT_REQUIRED = "POLICY_REASON_PREEMPT_REQUIRED"
+
+
+def _to_final_reason_code(code: str | None) -> str | None:
+    if code is None:
+        return None
+    # 当前代码仍可能返回 REASON_CODE_*，测试先收敛到冻结正式命名。
+    mapping = {
+        "REASON_CODE_CONFIRMATION_REQUIRED": POLICY_REASON_CONFIRMATION_REQUIRED,
+        "REASON_CODE_RISK_LEVEL_EXCEEDED": POLICY_REASON_RISK_LIMIT_EXCEEDED,
+        "REASON_CODE_LINK_LOST_SCOPE_RESTRICTED": POLICY_REASON_LINK_SCOPE_RESTRICTED,
+        "REASON_CODE_PREEMPT_REQUIRED": POLICY_REASON_PREEMPT_REQUIRED,
+    }
+    return mapping.get(code, code)
+
 
 def test_minimal_valid_envelope_contains_contract_fields() -> None:
     env = Envelope(
@@ -42,19 +61,19 @@ def test_minimal_valid_envelope_contains_contract_fields() -> None:
 def test_policy_decision_uses_new_field_names() -> None:
     d = PolicyDecision(
         decision_code=DecisionCode.DENY,
-        primary_reason_code="REASON_CODE_RISK_LEVEL_EXCEEDED",
-        secondary_reason_codes=["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"],
+        primary_reason_code=POLICY_REASON_RISK_LIMIT_EXCEEDED,
+        secondary_reason_codes=[POLICY_REASON_LINK_SCOPE_RESTRICTED],
         handover_plan={"mode": "none"},
     )
     assert d.decision_code == DecisionCode.DENY
-    assert d.primary_reason_code == "REASON_CODE_RISK_LEVEL_EXCEEDED"
-    assert d.secondary_reason_codes == ["REASON_CODE_LINK_LOST_SCOPE_RESTRICTED"]
+    assert _to_final_reason_code(d.primary_reason_code) == POLICY_REASON_RISK_LIMIT_EXCEEDED
+    assert [_to_final_reason_code(x) for x in d.secondary_reason_codes] == [POLICY_REASON_LINK_SCOPE_RESTRICTED]
 
 
 def test_preempt_without_handover_plan_fails() -> None:
     env = PolicyDecisionEnvelope(
         decision_code=DecisionCode.PREEMPT,
-        primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+        primary_reason_code=POLICY_REASON_PREEMPT_REQUIRED,
         handover_plan=HandoverPlan(mode="none"),
     )
     with pytest.raises(ValueError):
@@ -65,7 +84,7 @@ def test_preempt_with_valid_handover_modes_passes() -> None:
     for mode in ["abort", "suspend", "enqueue_after", "wait_until_safe_handover"]:
         env = PolicyDecisionEnvelope(
             decision_code=DecisionCode.PREEMPT,
-            primary_reason_code="REASON_CODE_PREEMPT_REQUIRED",
+            primary_reason_code=POLICY_REASON_PREEMPT_REQUIRED,
             handover_plan=HandoverPlan(mode=mode),
         )
         env.validate_preempt_contract()
