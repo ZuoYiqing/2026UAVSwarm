@@ -1,415 +1,184 @@
-# UAV Runtime MVP
+# UAV Runtime (MVP Skeleton)
 
-轻量可测试的 UAV Runtime skeleton，包含：
+## 1) 项目简介
+`uav-runtime` 是一个面向无人机/无人系统任务执行的 **运行时骨架（runtime skeleton）**。它聚焦于“控制面决策 + 执行面适配 + 审计回放”的最小闭环，而不是完整飞控系统。
 
-- canonical 协议映射
-- mission/scene 规划
-- 适配器网关
-- 2D 仿真与评估
-- CLI 与简单 API facade
+它当前**是**：
+- 一个以 `ActionRequest -> policy decision -> adapter execute -> audit/replay` 为主链路的 Python MVP。
+- 一个用于冻结协议字段命名、决策接口形状和最小测试契约的工程基础。
 
-## 快速开始
+它当前**不是**：
+- 不是普通聊天 Agent（目标不是对话体验）。
+- 不是直接输出飞控底层协议帧的控制器（目前只有 fake adapter skeleton）。
+- 不是桌面自动化工具（没有 GUI/RPA 目标）。
 
+---
+
+## 2) 当前目标
+当前 MVP 的目标是：
+1. 固化最小协议对象与决策对象（`Envelope`、`ActionRequest`、`PolicyDecisionEnvelope`、`ActionResult`）。
+2. 固化单一 policy 裁决入口（`unified_policy_gate`）并让 orchestrator 严格消费其结果。
+3. 提供可运行的执行路径（通过 `AdapterGateway + FakeAdapter` 完成最小执行）。
+4. 提供基础审计与回放能力（JSONL append + replay）。
+
+当前完成度（按代码与测试现状）：
+- skeleton 主链路已跑通。
+- 核心 contract 命名已在测试中对齐（reason code / decision shape / protocol schema）。
+- CLI 已提供最小入口命令集用于验证流程。
+
+---
+
+## 3) 核心设计原则
+1. **LLM 不直接输出飞控协议帧**  
+   上层只产生结构化请求（如 `ActionRequest`），具体执行命令由 adapter 层映射。
+
+2. **控制面与执行面分离**  
+   policy 做“能否执行”的裁决；adapter 做“如何执行”的下沉映射。
+
+3. **`unified_policy_gate` 是唯一裁决入口**  
+   运行时在执行前统一进入该 gate，输出标准化 `PolicyDecisionEnvelope`。
+
+4. **canonical protocol_json 的作用**  
+   `ActionRequest` 内 canonical 字段（如 `action_type`、`requested_scope`、`priority_hint`）是对外契约主入口；legacy alias 仅用于迁移兼容。
+
+5. **adapter gateway 的作用**  
+   `AdapterGateway` 负责：请求转执行意图、幂等检查、命令构造、adapter 调用、结果归一化。
+
+6. **audit / replay 的作用**  
+   所有关键决策事件可写入本地 JSONL 审计日志；`replay_last` 用于读取最近事件，支持问题复盘与后续可观测性扩展。
+
+---
+
+## 4) 系统分层
+- **protocol (`src/uav_runtime/protocol`)**  
+  枚举、schema dataclass、编解码与基础校验。
+
+- **runtime (`src/uav_runtime/runtime`)**  
+  orchestrator、事件总线、任务队列、审计写入、回放读取。
+
+- **policy (`src/uav_runtime/policy`)**  
+  policy context/profile/decision 结构与 `unified_policy_gate` 统一裁决逻辑。
+
+- **skills (`src/uav_runtime/skills`)**  
+  内建技能注册与执行骨架（如 `takeoff`、`land`、`goto` 等占位技能）。
+
+- **adapters (`src/uav_runtime/adapters`)**  
+  适配器网关与 fake adapter；承接执行层抽象。
+
+- **console (`src/uav_runtime/console`)**  
+  最小 CLI 入口（提交动作、查看状态/审计、回放）。
+
+- **tests (`tests`)**  
+  单元与集成测试，覆盖协议字段、policy shape、gateway/cli 对齐与最小运行时流程。
+
+---
+
+## 5) 当前核心消息与对象
+- **Envelope**  
+  通用消息封套，包含 `message_type / trace_id / mission_id / payload / timestamp` 等。
+
+- **ActionRequest**  
+  动作请求对象；canonical 字段为主契约，legacy 字段保留迁移兼容。
+
+- **PolicyDecisionEnvelope**  
+  policy 层权威决策输出，包含 `decision_code / primary_reason_code / effective_scope / handover_plan` 等。
+
+- **ActionResult**  
+  执行结果对象（状态、代码、消息、时间戳与兼容字段）。
+
+- **DelegationGrant**  
+  委派授权对象，提供有效期与撤销状态判断。
+
+- **PolicyProfile**  
+  策略配置对象（风险阈值、确认规则、并发限制及扩展行为配置）。
+
+- **PolicyContext**  
+  policy 决策上下文（source/scope/link_state + mission/runtime 状态信息）。
+
+---
+
+## 6) 当前已实现内容（基于仓库现状）
+- 已完成可运行的 **MVP skeleton**：
+  - `RuntimeOrchestrator` 串联 policy -> adapter -> audit。
+  - `AdapterGateway` 支持注册 adapter、执行调用与结果归一化。
+  - `FakeAdapter` 提供最小可执行下游。
+
+- contract 与 tests 已对齐（当前仓库内测试集）：
+  - protocol schema 与 policy decision 形状测试。
+  - policy gate 的 allow / require_confirm / deny / preempt 合同形状测试。
+  - gateway 与 CLI 的当前 API 对齐测试。
+  - 最小 runtime 集成流（allow 与 require_confirm 路径）。
+
+- 当前 `pytest` 通过范围：
+  - `tests/unit/*`
+  - `tests/integration/*`
+  - `tests/test_cli.py`
+  - `tests/test_gateway.py`
+
+---
+
+## 7) 当前未做 / 后续计划
+1. **从 fake adapter 向真实 adapter 演进**  
+   增加真实执行后端、异常分类、重试策略和超时控制。
+
+2. **PX4 SITL / MAVLink 接入**  
+   在 adapter 层增加真实协议映射与仿真联调，不在 policy 层耦合底层帧细节。
+
+3. **更完整 CLI / audit / replay 展示**  
+   增强状态查询、过滤、结构化展示与回放分析能力。
+
+4. **更完整仿真与控制台**  
+   增加更贴近任务态的仿真场景、可视化控制台和多机协作观测面。
+
+---
+
+## 8) 如何运行
+### 环境
+- Python 3.11+
+
+### 安装依赖
 ```bash
-python -m pip install -e .[dev]
-pytest -q
-python -m uav_runtime.console.cli health
+pip install -e .[dev]
 ```
-- reserved-001
-- reserved-002
-- reserved-003
-- reserved-004
-- reserved-005
-- reserved-006
-- reserved-007
-- reserved-008
-- reserved-009
-- reserved-010
-- reserved-011
-- reserved-012
-- reserved-013
-- reserved-014
-- reserved-015
-- reserved-016
-- reserved-017
-- reserved-018
-- reserved-019
-- reserved-020
-- reserved-021
-- reserved-022
-- reserved-023
-- reserved-024
-- reserved-025
-- reserved-026
-- reserved-027
-- reserved-028
-- reserved-029
-- reserved-030
-- reserved-031
-- reserved-032
-- reserved-033
-- reserved-034
-- reserved-035
-- reserved-036
-- reserved-037
-- reserved-038
-- reserved-039
-- reserved-040
-- reserved-041
-- reserved-042
-- reserved-043
-- reserved-044
-- reserved-045
-- reserved-046
-- reserved-047
-- reserved-048
-- reserved-049
-- reserved-050
-- reserved-051
-- reserved-052
-- reserved-053
-- reserved-054
-- reserved-055
-- reserved-056
-- reserved-057
-- reserved-058
-- reserved-059
-- reserved-060
-- reserved-061
-- reserved-062
-- reserved-063
-- reserved-064
-- reserved-065
-- reserved-066
-- reserved-067
-- reserved-068
-- reserved-069
-- reserved-070
-- reserved-071
-- reserved-072
-- reserved-073
-- reserved-074
-- reserved-075
-- reserved-076
-- reserved-077
-- reserved-078
-- reserved-079
-- reserved-080
-- reserved-081
-- reserved-082
-- reserved-083
-- reserved-084
-- reserved-085
-- reserved-086
-- reserved-087
-- reserved-088
-- reserved-089
-- reserved-090
-- reserved-091
-- reserved-092
-- reserved-093
-- reserved-094
-- reserved-095
-- reserved-096
-- reserved-097
-- reserved-098
-- reserved-099
-- reserved-100
-- reserved-101
-- reserved-102
-- reserved-103
-- reserved-104
-- reserved-105
-- reserved-106
-- reserved-107
-- reserved-108
-- reserved-109
-- reserved-110
-- reserved-111
-- reserved-112
-- reserved-113
-- reserved-114
-- reserved-115
-- reserved-116
-- reserved-117
-- reserved-118
-- reserved-119
-- reserved-120
-- reserved-121
-- reserved-122
-- reserved-123
-- reserved-124
-- reserved-125
-- reserved-126
-- reserved-127
-- reserved-128
-- reserved-129
-- reserved-130
-- reserved-131
-- reserved-132
-- reserved-133
-- reserved-134
-- reserved-135
-- reserved-136
-- reserved-137
-- reserved-138
-- reserved-139
-- reserved-140
-- reserved-141
-- reserved-142
-- reserved-143
-- reserved-144
-- reserved-145
-- reserved-146
-- reserved-147
-- reserved-148
-- reserved-149
-- reserved-150
-- reserved-151
-- reserved-152
-- reserved-153
-- reserved-154
-- reserved-155
-- reserved-156
-- reserved-157
-- reserved-158
-- reserved-159
-- reserved-160
-- reserved-161
-- reserved-162
-- reserved-163
-- reserved-164
-- reserved-165
-- reserved-166
-- reserved-167
-- reserved-168
-- reserved-169
-- reserved-170
-- reserved-171
-- reserved-172
-- reserved-173
-- reserved-174
-- reserved-175
-- reserved-176
-- reserved-177
-- reserved-178
-- reserved-179
-- reserved-180
-- reserved-181
-- reserved-182
-- reserved-183
-- reserved-184
-- reserved-185
-- reserved-186
-- reserved-187
-- reserved-188
-- reserved-189
-- reserved-190
-- reserved-191
-- reserved-192
-- reserved-193
-- reserved-194
-- reserved-195
-- reserved-196
-- reserved-197
-- reserved-198
-- reserved-199
-- reserved-200
-- reserved-201
-- reserved-202
-- reserved-203
-- reserved-204
-- reserved-205
-- reserved-206
-- reserved-207
-- reserved-208
-- reserved-209
-- reserved-210
-- reserved-211
-- reserved-212
-- reserved-213
-- reserved-214
-- reserved-215
-- reserved-216
-- reserved-217
-- reserved-218
-- reserved-219
-- reserved-220
-- reserved-221
-- reserved-222
-- reserved-223
-- reserved-224
-- reserved-225
-- reserved-226
-- reserved-227
-- reserved-228
-- reserved-229
-- reserved-230
-- reserved-231
-- reserved-232
-- reserved-233
-- reserved-234
-- reserved-235
-- reserved-236
-- reserved-237
-- reserved-238
-- reserved-239
-- reserved-240
-- reserved-241
-- reserved-242
-- reserved-243
-- reserved-244
-- reserved-245
-- reserved-246
-- reserved-247
-- reserved-248
-- reserved-249
-- reserved-250
-- reserved-251
-- reserved-252
-- reserved-253
-- reserved-254
-- reserved-255
-- reserved-256
-- reserved-257
-- reserved-258
-- reserved-259
-- reserved-260
-- reserved-261
-- reserved-262
-- reserved-263
-- reserved-264
-- reserved-265
-- reserved-266
-- reserved-267
-- reserved-268
-- reserved-269
-- reserved-270
-- reserved-271
-- reserved-272
-- reserved-273
-- reserved-274
-- reserved-275
-- reserved-276
-- reserved-277
-- reserved-278
-- reserved-279
-- reserved-280
-- reserved-281
-- reserved-282
-- reserved-283
-- reserved-284
-- reserved-285
-- reserved-286
-- reserved-287
-- reserved-288
-- reserved-289
-- reserved-290
-- reserved-291
-- reserved-292
-- reserved-293
-- reserved-294
-- reserved-295
-- reserved-296
-- reserved-297
-- reserved-298
-- reserved-299
-- reserved-300
-- reserved-301
-- reserved-302
-- reserved-303
-- reserved-304
-- reserved-305
-- reserved-306
-- reserved-307
-- reserved-308
-- reserved-309
-- reserved-310
-- reserved-311
-- reserved-312
-- reserved-313
-- reserved-314
-- reserved-315
-- reserved-316
-- reserved-317
-- reserved-318
-- reserved-319
-- reserved-320
-- reserved-321
-- reserved-322
-- reserved-323
-- reserved-324
-- reserved-325
-- reserved-326
-- reserved-327
-- reserved-328
-- reserved-329
-- reserved-330
-- reserved-331
-- reserved-332
-- reserved-333
-- reserved-334
-- reserved-335
-- reserved-336
-- reserved-337
-- reserved-338
-- reserved-339
-- reserved-340
-- reserved-341
-- reserved-342
-- reserved-343
-- reserved-344
-- reserved-345
-- reserved-346
-- reserved-347
-- reserved-348
-- reserved-349
-- reserved-350
-- reserved-351
-- reserved-352
-- reserved-353
-- reserved-354
-- reserved-355
-- reserved-356
-- reserved-357
-- reserved-358
-- reserved-359
-- reserved-360
-- reserved-361
-- reserved-362
-- reserved-363
-- reserved-364
-- reserved-365
-- reserved-366
-- reserved-367
-- reserved-368
-- reserved-369
-- reserved-370
-- reserved-371
-- reserved-372
-- reserved-373
-- reserved-374
-- reserved-375
-- reserved-376
-- reserved-377
-- reserved-378
-- reserved-379
-- reserved-380
-- reserved-381
-- reserved-382
-- reserved-383
-- reserved-384
-- reserved-385
-- reserved-386
-- reserved-387
-- reserved-388
-- reserved-389
-- reserved-390
-- reserved-391
-- reserved-392
-- reserved-393
-- reserved-394
-- reserved-395
-- reserved-396
-- reserved-397
-- reserved-398
+
+### 运行测试
+```bash
+pytest -q
+```
+
+### CLI 最小用法
+```bash
+# 提交动作
+python -m uav_runtime.runtime submit-action takeoff
+
+# 查看状态（骨架返回）
+python -m uav_runtime.runtime show-status
+
+# 查看审计（骨架返回）
+python -m uav_runtime.runtime show-audit
+
+# 回放最近审计
+python -m uav_runtime.runtime replay-last
+```
+
+当前支持命令：
+- `submit-mission`
+- `submit-action <action>`
+- `show-status`
+- `show-audit`
+- `replay-last`
+
+---
+
+## 9) 项目状态
+- **阶段**：MVP skeleton / contract-freeze early stage。
+- **适合**：
+  - 作为控制面-执行面分层架构的开发基线。
+  - 作为协议字段与策略裁决契约的对齐基准。
+  - 作为后续真实飞控适配（SITL/MAVLink）前的验证底座。
+- **不适合**：
+  - 直接用于生产飞行任务。
+  - 作为完整飞控替代品。
+  - 作为复杂 UI 控制台或通用 Agent 产品。
+
+> 结论：本仓库当前定位是“可测试、可演进的运行时骨架”，不是“功能完备的无人机控制系统”。
