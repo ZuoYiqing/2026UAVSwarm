@@ -13,7 +13,7 @@
 ---
 
 ## 2. 当前阶段定位
-当前阶段属于 **MVP skeleton / contract 冻结早期**：
+当前阶段属于 **MVP skeleton / contract 对齐早期**：
 
 - 已有可运行代码与测试覆盖，能够证明关键对象与关键路径形状稳定。
 - 大量模块仍是 skeleton（含 TODO），侧重接口边界和契约一致性。
@@ -28,14 +28,14 @@
 4. **适配器网关已具备最小职责**：包含注册、幂等检查、command 构造、dispatch、结果归一化。
 5. **审计/回放基础能力已存在**：JSONL append + replay last-n。
 6. **CLI 最小命令集已可运行**：支持 `submit-mission` / `submit-action` / `show-status` / `show-audit` / `replay-last`。
-7. **测试已对齐当前契约命名**：包括 reason code 冻结命名、policy shape、runtime 最小流程、gateway/cli 当前 API。
+7. **测试已对齐当前契约命名**：包括 `REASON_CODE_CONFIRMATION_REQUIRED`、`REASON_CODE_RISK_LEVEL_EXCEEDED`、`REASON_CODE_LINK_LOST_SCOPE_RESTRICTED`（及 PREEMPT 场景测试中的 `REASON_CODE_PREEMPT_REQUIRED`）、policy shape、runtime 最小流程、gateway/cli 当前 API。
 
 ---
 
 ## 4. 当前技术主线
 当前技术主线可以概括为：
 
-- **contract-first skeleton**：优先冻结协议字段和裁决输出形状。
+- **contract-first skeleton**：优先稳定协议字段和裁决输出形状。
 - **policy-first control plane**：所有执行请求先进入统一 gate 判定。
 - **adapter abstraction**：执行面通过 gateway 隔离，不让上层直接绑定底层协议。
 - **auditable runtime**：每次 policy 决策形成可追踪事件，支持最小回放。
@@ -73,7 +73,7 @@
 **当前已实现**
 - `ActionRequest` 支持 canonical 字段并保留 legacy alias 兼容，`__post_init__` 进行主字段回填。
 - `PolicyDecisionEnvelope` 支持 `decision_code + primary_reason_code + handover_plan` 形态，且 PREEMPT 合同有显式校验。
-- reason code 命名已切换并在测试中固定为 `REASON_CODE_*`。
+- reason code 命名已在当前实现/测试中明确使用：`REASON_CODE_CONFIRMATION_REQUIRED`、`REASON_CODE_RISK_LEVEL_EXCEEDED`、`REASON_CODE_LINK_LOST_SCOPE_RESTRICTED`；PREEMPT 场景测试使用 `REASON_CODE_PREEMPT_REQUIRED`。
 
 **当前未实现或仍简化**
 - protocol validation 仍是轻量级（并非严格 schema registry 驱动）。

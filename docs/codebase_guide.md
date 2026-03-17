@@ -150,7 +150,7 @@
 ---
 
 ## 5. 当前 tests 在验证什么
-- **契约字段级验证**：protocol schema、reason code、decision shape 命名与字段存在性。
+- **契约字段级验证**：protocol schema、reason code（如 `REASON_CODE_CONFIRMATION_REQUIRED` / `REASON_CODE_RISK_LEVEL_EXCEEDED` / `REASON_CODE_LINK_LOST_SCOPE_RESTRICTED` / `REASON_CODE_PREEMPT_REQUIRED`）与 decision shape 命名和字段存在性。
 - **分支行为级验证**：policy gate 在 allow / require_confirm / link_lost deny / preempt 合同下的输出。
 - **系统最小链路验证**：runtime 集成测试覆盖 allow 与 require_confirm 两条路径及审计落盘。
 - **接口对齐验证**：CLI 仅验证当前支持命令，gateway 仅验证当前 `execute(...)` API。

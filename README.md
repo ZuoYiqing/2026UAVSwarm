@@ -23,7 +23,7 @@
 
 当前完成度（按代码与测试现状）：
 - skeleton 主链路已跑通。
-- 核心 contract 命名已在测试中对齐（reason code / decision shape / protocol schema）。
+- 核心 contract 命名已在测试中对齐（包括 `REASON_CODE_CONFIRMATION_REQUIRED`、`REASON_CODE_RISK_LEVEL_EXCEEDED`、`REASON_CODE_LINK_LOST_SCOPE_RESTRICTED` 等 reason code，以及 decision shape / protocol schema）。
 - CLI 已提供最小入口命令集用于验证流程。
 
 ---
@@ -169,6 +169,10 @@ python -m uav_runtime.runtime replay-last
 - `replay-last`
 
 ---
+
+
+### 推荐阅读顺序
+建议按以下顺序阅读：`README.md -> docs/codebase_guide.md -> docs/project_summary.md -> tests/`。
 
 ## 9) 项目状态
 - **阶段**：MVP skeleton / contract-freeze early stage。
