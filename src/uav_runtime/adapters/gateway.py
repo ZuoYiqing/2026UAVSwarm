@@ -49,7 +49,7 @@ class AdapterGateway:
         return {"command": intent["action_type"], "arguments": intent["params"], "meta": intent}
 
     def _dispatch_command(self, adapter: object, command: dict[str, Any]) -> dict[str, Any]:
-        # adapter skeleton: adapter.execute(command|intent)
+        # v0.1 baseline: adapter.execute(command)（command 由 gateway 统一构造）
         try:
             return adapter.execute(command)
         except Exception:

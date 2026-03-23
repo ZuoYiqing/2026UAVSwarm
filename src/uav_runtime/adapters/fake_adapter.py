@@ -1,4 +1,4 @@
-"""本轮最后修补点：适配 gateway command 下游路径，fake adapter 仅消费 command/intention。"""
+"""v0.1 baseline：fake adapter 仅消费 gateway 下发的 command 对象。"""
 from __future__ import annotations
 
 
