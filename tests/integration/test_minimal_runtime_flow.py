@@ -55,7 +55,8 @@ def test_minimal_runtime_allow_flow(tmp_path) -> None:
     last = decision_events[-1]
     assert _normalize_decision_code(last.get("decision_code")) == "ALLOW"
     assert last.get("policy_trace_id")
-    assert last.get("effective_profile_id")
+    assert last.get("effective_profile_id") == "default_profile"
+    assert last.get("effective_scope") == "self_only"
 
 
 def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
@@ -93,4 +94,4 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     last = decision_events[-1]
     assert _normalize_decision_code(last.get("decision_code")) == "REQUIRE_CONFIRM"
     assert last.get("primary_reason_code") == REASON_CODE_CONFIRMATION_REQUIRED
-    assert last.get("effective_scope")
+    assert last.get("effective_scope") == "self_only"

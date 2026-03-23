@@ -19,6 +19,16 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _to_canonical_str(value: object | None) -> str | None:
+    """v0.1 baseline payload shape: enum -> value, str -> itself."""
+    if value is None:
+        return None
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
+    return str(value)
+
+
 class RuntimeOrchestrator:
     def __init__(self, audit_path: str = "audit/runtime.audit.jsonl") -> None:
         self.bus = EventBus()
@@ -104,8 +114,8 @@ class RuntimeOrchestrator:
             "decision_code": decision_code,
             "primary_reason_code": decision.primary_reason_code,
             "secondary_reason_codes": decision.secondary_reason_codes,
-            "effective_scope": str(decision.effective_scope),
-            "effective_profile_id": decision.effective_profile_id,
+            "effective_scope": _to_canonical_str(decision.effective_scope),
+            "effective_profile_id": _to_canonical_str(decision.effective_profile_id),
             "effective_risk_level": decision.effective_risk_level,
             "enforced_constraints": decision.enforced_constraints,
             "handover_plan": {
