@@ -29,6 +29,19 @@ def _to_canonical_str(value: object | None) -> str | None:
     return str(value)
 
 
+def _demo_link_state_from_request(req: ActionRequest) -> LinkState:
+    """Demo-only: optional control-plane state input carried in params."""
+    raw = req.params.get("demo_link_state") if isinstance(req.params, dict) else None
+    if not isinstance(raw, str):
+        return LinkState.HEALTHY
+    v = raw.strip().lower()
+    if v == LinkState.LOST.value:
+        return LinkState.LOST
+    if v == LinkState.DEGRADED.value:
+        return LinkState.DEGRADED
+    return LinkState.HEALTHY
+
+
 class RuntimeOrchestrator:
     def __init__(self, audit_path: str = "audit/runtime.audit.jsonl") -> None:
         self.bus = EventBus()
@@ -39,7 +52,7 @@ class RuntimeOrchestrator:
         return PolicyContext(
             source=req.source,
             scope=req.requested_scope or req.scope,
-            link_state=LinkState.HEALTHY,
+            link_state=_demo_link_state_from_request(req),
             mission_id=req.mission_id,
             current_phase="nominal",
             active_controller_source=req.source.value,

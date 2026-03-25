@@ -161,6 +161,10 @@ python -m uav_runtime.runtime show-audit
 python -m uav_runtime.runtime replay-last
 ```
 
+
+### Demo 最小闭环（v0.1）
+推荐按 `docs/demo_runbook.md` 的 3 条路径执行：ALLOW / DENY / REQUIRE_CONFIRM，然后用 `replay-last` 回放审计。
+
 当前支持命令：
 - `submit-mission`
 - `submit-action <action>`
