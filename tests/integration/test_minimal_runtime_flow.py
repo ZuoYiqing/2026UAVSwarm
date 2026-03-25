@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED
+from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED, REASON_CODE_RISK_LEVEL_EXCEEDED
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
@@ -95,3 +95,42 @@ def test_minimal_runtime_require_confirm_flow(tmp_path) -> None:
     assert _normalize_decision_code(last.get("decision_code")) == "REQUIRE_CONFIRM"
     assert last.get("primary_reason_code") == REASON_CODE_CONFIRMATION_REQUIRED
     assert last.get("effective_scope") == "self_only"
+
+
+def test_minimal_runtime_deny_flow_link_lost_high_risk(tmp_path) -> None:
+    audit = tmp_path / "runtime_deny.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit))
+
+    req = ActionRequest(
+        action="goto",
+        params={"x": 1, "y": 2, "demo_link_state": "lost"},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-deny-001",
+        mission_id="mission-deny-001",
+        action_type="goto",
+        skill_group="flight_core",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=5,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-deny-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-deny-001"
+    assert res["status"] == "blocked"
+    assert res["accepted"] is False
+    assert res["code"] == REASON_CODE_RISK_LEVEL_EXCEEDED
+
+    events = _read_audit_events(audit)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    action_results = [e for e in events if e.get("type") == "action_result"]
+
+    assert decision_events
+    last = decision_events[-1]
+    assert _normalize_decision_code(last.get("decision_code")) == "DENY"
+    assert last.get("effective_scope") == "self_only"
+    assert action_results == []
