@@ -149,16 +149,16 @@ pytest -q
 ### CLI 最小用法
 ```bash
 # 提交动作
-python -m uav_runtime.runtime submit-action takeoff
+python -m uav_runtime.console.cli submit-action takeoff
 
 # 查看状态（骨架返回）
-python -m uav_runtime.runtime show-status
+python -m uav_runtime.console.cli show-status
 
 # 查看审计（骨架返回）
-python -m uav_runtime.runtime show-audit
+python -m uav_runtime.console.cli show-audit
 
 # 回放最近审计
-python -m uav_runtime.runtime replay-last
+python -m uav_runtime.console.cli replay-last
 ```
 
 

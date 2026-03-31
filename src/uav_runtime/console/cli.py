@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import Any
 
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
@@ -89,13 +90,34 @@ def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
     )
 
 
+def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str, Any]:
+    request_id = result.get("request_id")
+    if not request_id:
+        return {"result": result}
+
+    events = replay_last(audit_path, n=50)
+    decision_event = next(
+        (
+            e
+            for e in reversed(events)
+            if e.get("type") == "policy_decision_event" and e.get("request_id") == request_id
+        ),
+        None,
+    )
+
+    if decision_event is None:
+        return {"result": result}
+    return {"result": result, "policy_decision_event": decision_event}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     rt = RuntimeOrchestrator()
 
     if args.cmd in {"submit-mission", "submit-action"}:
         req = _build_request_from_args(args)
-        out = rt.handle_action_request(req)
+        result = rt.handle_action_request(req)
+        out = _attach_policy_snapshot(result, str(rt.audit.path))
     elif args.cmd == "replay-last":
         out = replay_last(args.path, n=args.n)
     else:
@@ -103,3 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_output(out, pretty=bool(getattr(args, "pretty", False)))
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
