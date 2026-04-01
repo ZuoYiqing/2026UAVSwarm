@@ -2,6 +2,8 @@
 
 本 runbook 仅用于演示当前最小闭环：
 
+相关文档：`docs/demo_acceptance.md`（验收清单）与 `docs/demo_scenarios.md`（标准场景）。
+
 `submit-mission / submit-action -> runtime -> policy_decision_event -> fake adapter -> action_result -> audit -> replay`
 
 ## 1) 环境
