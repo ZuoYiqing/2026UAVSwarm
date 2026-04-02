@@ -162,7 +162,7 @@ class RuntimeOrchestrator:
             "status": result.get("status", "accepted" if result.get("accepted") else "rejected"),
             "code": result.get("code", result.get("detail", "")),
             "message": result.get("message", result.get("detail", "")),
-            "evidence_ref": None,
+            "evidence_ref": result.get("evidence_ref"),
             "timestamps": {"result_time": _utc_now_iso()},
             "accepted": result.get("accepted", False),
             "detail": result.get("detail", ""),
