@@ -46,7 +46,19 @@ class AdapterGateway:
 
     def _build_adapter_command(self, intent: dict[str, Any]) -> dict[str, Any]:
         # TODO: adapter command 构造（per-adapter mapping table）
-        return {"command": intent["action_type"], "arguments": intent["params"], "meta": intent}
+        params = dict(intent.get("params") or {})
+        sim: dict[str, Any] = {}
+        if "__simulate_fail" in params:
+            sim["fail"] = bool(params.pop("__simulate_fail"))
+        if "__simulate_timeout" in params:
+            sim["timeout"] = bool(params.pop("__simulate_timeout"))
+        if "__simulate_delay_ms" in params:
+            sim["delay_ms"] = int(params.pop("__simulate_delay_ms") or 0)
+
+        command = {"command": intent["action_type"], "arguments": params, "meta": intent}
+        if sim:
+            command["_simulate"] = sim
+        return command
 
     def _dispatch_command(self, adapter: object, command: dict[str, Any]) -> dict[str, Any]:
         # v0.1 baseline: adapter.execute(command)（command 由 gateway 统一构造）
@@ -63,14 +75,20 @@ class AdapterGateway:
 
     def _normalize_result(self, raw: dict[str, Any], request: ActionRequest) -> dict[str, Any]:
         # TODO: 返回值标准化（canonical action_result contract）
+        accepted = bool(raw.get("accepted"))
+        detail = str(raw.get("detail", ""))
+        code = str(raw.get("code", detail))
+        message = str(raw.get("message", detail))
         return {
             "request_id": request.request_id,
-            "status": "accepted" if raw.get("accepted") else "rejected",
-            "code": raw.get("detail", ""),
-            "message": raw.get("detail", ""),
-            "accepted": bool(raw.get("accepted")),
-            "detail": raw.get("detail", ""),
+            "status": "accepted" if accepted else "rejected",
+            "code": code,
+            "message": message,
+            "accepted": accepted,
+            "detail": detail,
             "adapter": raw.get("adapter", ""),
+            "evidence_ref": raw.get("evidence_ref"),
+            "execution_trace": raw.get("execution_trace"),
         }
 
     def execute(self, adapter_name: str, request: ActionRequest) -> dict[str, Any]:
