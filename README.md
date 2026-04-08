@@ -63,7 +63,7 @@
   内建技能注册与执行骨架（如 `takeoff`、`land`、`goto` 等占位技能）。
 
 - **adapters (`src/uav_runtime/adapters`)**  
-  适配器网关与 fake adapter；承接执行层抽象。
+  适配器网关与 fake adapter，并包含 `mavlink` stub（仅 contract 占位，尚未接真实 SITL/PX4）；承接执行层抽象。
 
 - **console (`src/uav_runtime/console`)**  
   最小 CLI 入口（提交动作、查看状态/审计、回放）。
@@ -102,6 +102,7 @@
   - `RuntimeOrchestrator` 串联 policy -> adapter -> audit。
   - `AdapterGateway` 支持注册 adapter、执行调用与结果归一化。
   - `FakeAdapter` 提供最小可执行下游。
+  - `MavlinkAdapter` 提供未接入状态 stub（默认 `exec_unavailable`）。
 
 - contract 与 tests 已对齐（当前仓库内测试集）：
   - protocol schema 与 policy decision 形状测试。

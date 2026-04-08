@@ -6,6 +6,8 @@
 >
 > 范围：用于指导下一阶段最小 MAVLink/SITL adapter 接入，不包含真实协议实现代码。
 
+> 进展：仓库已新增 `mavlink` adapter stub（仅 contract 占位，默认 `exec_unavailable`，未接真实 MAVLink/PX4/SITL）。
+
 ---
 
 ## 1. 背景与目标
