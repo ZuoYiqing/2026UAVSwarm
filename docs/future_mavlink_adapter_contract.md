@@ -8,6 +8,8 @@
 
 > 进展：仓库已新增 `mavlink` adapter stub（仅 contract 占位，默认 `exec_unavailable`，未接真实 MAVLink/PX4/SITL）。
 
+> 进展：已补充 command -> future mavlink-action mapping skeleton（仅 takeoff/goto/hover/land/return_home，占位映射，不接真实协议栈）。
+
 ---
 
 ## 1. 背景与目标
