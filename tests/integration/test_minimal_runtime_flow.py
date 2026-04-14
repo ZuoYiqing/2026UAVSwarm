@@ -134,3 +134,62 @@ def test_minimal_runtime_deny_flow_link_lost_high_risk(tmp_path) -> None:
     assert _normalize_decision_code(last.get("decision_code")) == "DENY"
     assert last.get("effective_scope") == "self_only"
     assert action_results == []
+
+
+def test_runtime_with_explicit_mavlink_adapter_returns_unavailable(tmp_path) -> None:
+    audit = tmp_path / "runtime_mavlink.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit), adapter_name="mavlink")
+
+    req = ActionRequest(
+        action="takeoff",
+        params={},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-mavlink-001",
+        mission_id="mission-mavlink-001",
+        action_type="takeoff",
+        skill_group="flight_core",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-mavlink-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-mavlink-001"
+    assert res["accepted"] is False
+    assert res["status"] == "rejected"
+    assert res["adapter"] == "mavlink"
+    assert res["code"] in {"exec_unavailable", "exec_unsupported"}
+
+
+def test_runtime_with_unregistered_adapter_returns_adapter_not_found(tmp_path) -> None:
+    audit = tmp_path / "runtime_missing_adapter.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit), adapter_name="unknown")
+
+    req = ActionRequest(
+        action="hover",
+        params={"duration_s": 3},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-missing-adapter-001",
+        mission_id="mission-missing-adapter-001",
+        action_type="hover",
+        skill_group="flight_core",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-missing-adapter-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["accepted"] is False
+    assert res["status"] == "rejected"
+    assert res["adapter"] == "unknown"
+    assert res["code"] == "adapter_not_found"

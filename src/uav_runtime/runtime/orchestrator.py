@@ -6,12 +6,14 @@ from datetime import datetime, timezone
 
 from uav_runtime.adapters.fake_adapter import FakeAdapter
 from uav_runtime.adapters.gateway import AdapterGateway
+from uav_runtime.adapters.mavlink_adapter import MavlinkAdapter
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.gate import DECISION_DEFER, DECISION_REQUIRE_CONFIRM, unified_policy_gate
 from uav_runtime.policy.profile import PolicyProfile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.audit_log import AuditLog
+from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.event_bus import EventBus
 
 
@@ -43,10 +45,11 @@ def _demo_link_state_from_request(req: ActionRequest) -> LinkState:
 
 
 class RuntimeOrchestrator:
-    def __init__(self, audit_path: str = "audit/runtime.audit.jsonl") -> None:
+    def __init__(self, audit_path: str = "audit/runtime.audit.jsonl", adapter_name: str = DEFAULT_ADAPTER_NAME) -> None:
         self.bus = EventBus()
         self.audit = AuditLog(audit_path)
-        self.gateway = AdapterGateway({"fake": FakeAdapter()})
+        self.adapter_name = adapter_name
+        self.gateway = AdapterGateway({"fake": FakeAdapter(), "mavlink": MavlinkAdapter()})
 
     def _build_policy_context(self, req: ActionRequest) -> PolicyContext:
         return PolicyContext(
@@ -155,8 +158,8 @@ class RuntimeOrchestrator:
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             return self._blocked_like_result(request_id, "handover_pending", reason)
 
-        # ALLOW -> execute adapter
-        result = self.gateway.execute("fake", req)
+        # ALLOW -> execute selected adapter
+        result = self.gateway.execute(self.adapter_name, req)
         normalized = {
             "request_id": request_id,
             "status": result.get("status", "accepted" if result.get("accepted") else "rejected"),

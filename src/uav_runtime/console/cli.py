@@ -7,6 +7,7 @@ from typing import Any
 
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
+from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
 
@@ -31,11 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("submit-mission")
     _add_pretty_arg(m)
     m.add_argument("--mission-id", default="mission-demo")
+    m.add_argument("--adapter", default=DEFAULT_ADAPTER_NAME)
 
     s = sub.add_parser("submit-action")
     _add_pretty_arg(s)
     s.add_argument("action")
     s.add_argument("--mission-id", default="mission-demo")
+    s.add_argument("--adapter", default=DEFAULT_ADAPTER_NAME)
     s.add_argument("--risk-hint", type=int, default=1)
     s.add_argument("--require-confirm", action="store_true")
     s.add_argument(
@@ -112,7 +115,8 @@ def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    rt = RuntimeOrchestrator()
+    selected_adapter = str(getattr(args, "adapter", DEFAULT_ADAPTER_NAME) or DEFAULT_ADAPTER_NAME)
+    rt = RuntimeOrchestrator(adapter_name=selected_adapter)
 
     if args.cmd in {"submit-mission", "submit-action"}:
         req = _build_request_from_args(args)
