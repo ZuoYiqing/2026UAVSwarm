@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uav_runtime.adapters.fake_adapter import FakeAdapter
 from uav_runtime.adapters.gateway import AdapterGateway
 from uav_runtime.adapters.mavlink_adapter import MavlinkAdapter
+from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.gate import DECISION_DEFER, DECISION_REQUIRE_CONFIRM, unified_policy_gate
 from uav_runtime.policy.profile import PolicyProfile
@@ -45,11 +46,22 @@ def _demo_link_state_from_request(req: ActionRequest) -> LinkState:
 
 
 class RuntimeOrchestrator:
-    def __init__(self, audit_path: str = "audit/runtime.audit.jsonl", adapter_name: str = DEFAULT_ADAPTER_NAME) -> None:
+    def __init__(
+        self,
+        audit_path: str = "audit/runtime.audit.jsonl",
+        adapter_name: str = DEFAULT_ADAPTER_NAME,
+        mavlink_backend_config: MavlinkBackendConfig | None = None,
+    ) -> None:
         self.bus = EventBus()
         self.audit = AuditLog(audit_path)
         self.adapter_name = adapter_name
-        self.gateway = AdapterGateway({"fake": FakeAdapter(), "mavlink": MavlinkAdapter()})
+        self.mavlink_backend_config = mavlink_backend_config or MavlinkBackendConfig()
+        self.gateway = AdapterGateway(
+            {
+                "fake": FakeAdapter(),
+                "mavlink": MavlinkAdapter(config=self.mavlink_backend_config),
+            }
+        )
 
     def _build_policy_context(self, req: ActionRequest) -> PolicyContext:
         return PolicyContext(

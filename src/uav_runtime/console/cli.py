@@ -7,6 +7,7 @@ from typing import Any
 
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
+from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
@@ -33,12 +34,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pretty_arg(m)
     m.add_argument("--mission-id", default="mission-demo")
     m.add_argument("--adapter", default=DEFAULT_ADAPTER_NAME)
+    m.add_argument("--backend-mode", choices=["stub", "sitl"], default="stub")
+    m.add_argument("--backend-enabled", action="store_true")
+    m.add_argument("--transport-endpoint", default="")
+    m.add_argument("--timeout-ms", type=int, default=3000)
+    m.add_argument("--retry-count", type=int, default=0)
 
     s = sub.add_parser("submit-action")
     _add_pretty_arg(s)
     s.add_argument("action")
     s.add_argument("--mission-id", default="mission-demo")
     s.add_argument("--adapter", default=DEFAULT_ADAPTER_NAME)
+    s.add_argument("--backend-mode", choices=["stub", "sitl"], default="stub")
+    s.add_argument("--backend-enabled", action="store_true")
+    s.add_argument("--transport-endpoint", default="")
+    s.add_argument("--timeout-ms", type=int, default=3000)
+    s.add_argument("--retry-count", type=int, default=0)
     s.add_argument("--risk-hint", type=int, default=1)
     s.add_argument("--require-confirm", action="store_true")
     s.add_argument(
@@ -116,7 +127,14 @@ def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     selected_adapter = str(getattr(args, "adapter", DEFAULT_ADAPTER_NAME) or DEFAULT_ADAPTER_NAME)
-    rt = RuntimeOrchestrator(adapter_name=selected_adapter)
+    mav_cfg = MavlinkBackendConfig(
+        backend_mode=str(getattr(args, "backend_mode", "stub") or "stub"),
+        backend_enabled=bool(getattr(args, "backend_enabled", False)),
+        transport_endpoint=str(getattr(args, "transport_endpoint", "") or ""),
+        timeout_ms=int(getattr(args, "timeout_ms", 3000) or 3000),
+        retry_count=int(getattr(args, "retry_count", 0) or 0),
+    )
+    rt = RuntimeOrchestrator(adapter_name=selected_adapter, mavlink_backend_config=mav_cfg)
 
     if args.cmd in {"submit-mission", "submit-action"}:
         req = _build_request_from_args(args)

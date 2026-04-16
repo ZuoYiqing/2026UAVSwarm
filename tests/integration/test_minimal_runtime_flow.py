@@ -6,6 +6,7 @@ import json
 from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED, REASON_CODE_RISK_LEVEL_EXCEEDED
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
+from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 
 
@@ -193,3 +194,37 @@ def test_runtime_with_unregistered_adapter_returns_adapter_not_found(tmp_path) -
     assert res["status"] == "rejected"
     assert res["adapter"] == "unknown"
     assert res["code"] == "adapter_not_found"
+
+
+def test_runtime_with_explicit_mavlink_sitl_disabled_returns_not_configured(tmp_path) -> None:
+    audit = tmp_path / "runtime_mavlink_sitl_disabled.audit.jsonl"
+    rt = RuntimeOrchestrator(
+        str(audit),
+        adapter_name="mavlink",
+        mavlink_backend_config=MavlinkBackendConfig(backend_mode="sitl", backend_enabled=False),
+    )
+
+    req = ActionRequest(
+        action="takeoff",
+        params={},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-mavlink-sitl-disabled-001",
+        mission_id="mission-mavlink-sitl-disabled-001",
+        action_type="takeoff",
+        skill_group="flight_core",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-mavlink-sitl-disabled-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-mavlink-sitl-disabled-001"
+    assert res["accepted"] is False
+    assert res["status"] == "rejected"
+    assert res["adapter"] == "mavlink"
+    assert res["code"] == "sitl_not_configured"
