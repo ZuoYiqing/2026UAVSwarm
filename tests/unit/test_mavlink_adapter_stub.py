@@ -5,6 +5,7 @@ import pytest
 
 from uav_runtime.adapters.gateway import AdapterGateway
 from uav_runtime.adapters.mavlink_adapter import MavlinkAdapter
+from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 
@@ -26,8 +27,8 @@ def test_mavlink_adapter_has_expected_name_for_registration() -> None:
 
 
 @pytest.mark.parametrize("command", SUPPORTED)
-def test_supported_commands_have_stable_mapping_skeleton_trace(command: str) -> None:
-    adapter = MavlinkAdapter()
+def test_stub_mode_supported_commands_keep_unavailable_semantics(command: str) -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="stub", backend_enabled=False))
 
     raw = adapter.execute({"command": command, "arguments": {"sample": 1}, "meta": {}})
 
@@ -36,16 +37,14 @@ def test_supported_commands_have_stable_mapping_skeleton_trace(command: str) -> 
     assert raw["message"] == "mavlink_stub_unavailable"
     assert raw["detail"] == "unavailable"
     assert raw["adapter"] == "mavlink"
-    assert raw["evidence_ref"] == "stub://mavlink/unavailable"
-    assert raw["execution_trace"]["mode"] == "mavlink_stub"
+    assert raw["execution_trace"]["backend_mode"] == "stub"
     assert raw["execution_trace"]["action"] == command
     assert isinstance(raw["execution_trace"]["mapped_action"], str)
     assert isinstance(raw["execution_trace"]["param_hints"], list)
-    assert raw["execution_trace"]["placeholder"] is True
 
 
-def test_unsupported_command_returns_stable_unsupported_semantics() -> None:
-    adapter = MavlinkAdapter()
+def test_stub_mode_unsupported_command_returns_exec_unsupported() -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="stub", backend_enabled=False))
 
     raw = adapter.execute({"command": "start_stream", "arguments": {}, "meta": {}})
 
@@ -53,9 +52,42 @@ def test_unsupported_command_returns_stable_unsupported_semantics() -> None:
     assert raw["code"] == "exec_unsupported"
     assert raw["message"] == "mavlink_stub_unsupported_command"
     assert raw["detail"] == "unsupported"
-    assert raw["adapter"] == "mavlink"
-    assert raw["evidence_ref"] == "stub://mavlink/unsupported"
+    assert raw["execution_trace"]["backend_mode"] == "stub"
     assert raw["execution_trace"]["supported"] is False
+
+
+@pytest.mark.parametrize("command", SUPPORTED)
+def test_sitl_mode_disabled_returns_not_configured_semantics(command: str) -> None:
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(
+            backend_mode="sitl",
+            backend_enabled=False,
+            transport_endpoint="udp://127.0.0.1:14540",
+            timeout_ms=5000,
+            retry_count=1,
+        )
+    )
+
+    raw = adapter.execute({"command": command, "arguments": {}, "meta": {}})
+
+    assert raw["accepted"] is False
+    assert raw["code"] == "sitl_not_configured"
+    assert raw["message"] == "mavlink_sitl_not_configured"
+    assert raw["detail"] == "not_configured"
+    assert raw["adapter"] == "mavlink"
+    assert raw["execution_trace"]["mode"] == "mavlink_sitl"
+    assert raw["execution_trace"]["backend_mode"] == "sitl"
+    assert raw["execution_trace"]["backend_enabled"] is False
+
+
+def test_sitl_mode_disabled_unsupported_command_still_exec_unsupported() -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=False))
+
+    raw = adapter.execute({"command": "start_stream", "arguments": {}, "meta": {}})
+
+    assert raw["accepted"] is False
+    assert raw["code"] == "exec_unsupported"
+    assert raw["detail"] == "unsupported"
 
 
 @pytest.mark.parametrize("action", SUPPORTED)

@@ -10,6 +10,8 @@
 
 > 进展：已补充 command -> future mavlink-action mapping skeleton（仅 takeoff/goto/hover/land/return_home，占位映射，不接真实协议栈）。
 
+> 进展：mavlink adapter 已增加 backend_mode 占位语义分流（stub / sitl-not-configured），仍不接真实 SITL。
+
 ---
 
 ## 1. 背景与目标
