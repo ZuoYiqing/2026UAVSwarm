@@ -48,3 +48,21 @@ python -m pytest tests/integration/test_minimal_runtime_flow.py -q
 python -m pytest tests/test_cli.py -q
 python -m pytest -q
 ```
+
+
+## 7) 路径 D：SITL smoke wiring（不接真实后端）
+```bash
+# 1) mavlink + stub（预期 exec_unavailable）
+python -m uav_runtime.console.cli submit-action takeoff --adapter mavlink --backend-mode stub --pretty
+
+# 2) mavlink + sitl 未启用（预期 sitl_not_configured）
+python -m uav_runtime.console.cli submit-action takeoff --adapter mavlink --backend-mode sitl --pretty
+
+# 3) mavlink + sitl 启用但未连接（预期 smoke_not_connected）
+python -m uav_runtime.console.cli submit-action takeoff --adapter mavlink --backend-mode sitl --backend-enabled --pretty
+```
+
+预期（关键 code）：
+- `exec_unavailable`（stub）
+- `sitl_not_configured`（sitl disabled）
+- `smoke_not_connected`（sitl enabled but no backend）

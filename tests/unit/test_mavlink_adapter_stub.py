@@ -90,6 +90,26 @@ def test_sitl_mode_disabled_unsupported_command_still_exec_unsupported() -> None
     assert raw["detail"] == "unsupported"
 
 
+def test_sitl_mode_enabled_without_backend_returns_smoke_not_connected() -> None:
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(
+            backend_mode="sitl",
+            backend_enabled=True,
+            transport_endpoint="udp://127.0.0.1:14540",
+            timeout_ms=5000,
+            retry_count=1,
+        )
+    )
+
+    raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
+
+    assert raw["accepted"] is False
+    assert raw["code"] == "smoke_not_connected"
+    assert raw["message"] == "mavlink_sitl_smoke_not_connected"
+    assert raw["detail"] == "not_connected"
+    assert raw["execution_trace"]["session_status"] == "not_connected"
+
+
 @pytest.mark.parametrize("action", SUPPORTED)
 def test_gateway_can_dispatch_supported_actions_to_mavlink_stub(action: str) -> None:
     gateway = AdapterGateway()
@@ -113,3 +133,23 @@ def test_gateway_dispatches_unsupported_action_with_stable_code() -> None:
     assert out["status"] == "rejected"
     assert out["code"] == "exec_unsupported"
     assert out["message"] == "mavlink_stub_unsupported_command"
+
+
+def test_takeoff_smoke_wiring_trace_tags_are_stable() -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+
+    raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
+
+    assert raw["code"] == "smoke_not_connected"
+    assert raw["execution_trace"]["smoke_action"] is True
+    assert raw["execution_trace"]["smoke_path"] == "takeoff_sitl_wiring_v1"
+
+
+def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+
+    raw = adapter.execute({"command": "hover", "arguments": {}, "meta": {}})
+
+    assert raw["code"] == "smoke_not_connected"
+    assert raw["execution_trace"]["smoke_action"] is False
+    assert raw["execution_trace"]["smoke_path"] is None

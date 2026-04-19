@@ -12,6 +12,8 @@
 
 > 进展：mavlink adapter 已增加 backend_mode 占位语义分流（stub / sitl-not-configured），仍不接真实 SITL。
 
+> 进展：已增加 backend session / smoke wiring placeholder，可区分 sitl_not_configured 与 smoke_not_connected。
+
 ---
 
 ## 1. 背景与目标

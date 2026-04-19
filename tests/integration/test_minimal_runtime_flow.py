@@ -228,3 +228,41 @@ def test_runtime_with_explicit_mavlink_sitl_disabled_returns_not_configured(tmp_
     assert res["status"] == "rejected"
     assert res["adapter"] == "mavlink"
     assert res["code"] == "sitl_not_configured"
+
+
+def test_runtime_with_explicit_mavlink_sitl_enabled_without_backend_returns_not_connected(tmp_path) -> None:
+    audit = tmp_path / "runtime_mavlink_sitl_enabled.audit.jsonl"
+    rt = RuntimeOrchestrator(
+        str(audit),
+        adapter_name="mavlink",
+        mavlink_backend_config=MavlinkBackendConfig(
+            backend_mode="sitl",
+            backend_enabled=True,
+            transport_endpoint="udp://127.0.0.1:14540",
+        ),
+    )
+
+    req = ActionRequest(
+        action="takeoff",
+        params={},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-mavlink-sitl-enabled-001",
+        mission_id="mission-mavlink-sitl-enabled-001",
+        action_type="takeoff",
+        skill_group="flight_core",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-mavlink-sitl-enabled-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-mavlink-sitl-enabled-001"
+    assert res["accepted"] is False
+    assert res["status"] == "rejected"
+    assert res["adapter"] == "mavlink"
+    assert res["code"] == "smoke_not_connected"

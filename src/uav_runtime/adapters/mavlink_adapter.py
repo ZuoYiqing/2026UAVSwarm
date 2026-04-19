@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
+from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.mavlink_mapping import resolve_mapping
 
 
@@ -19,6 +20,14 @@ class MavlinkAdapter:
     def __init__(self, config: MavlinkBackendConfig | None = None) -> None:
         self.config = config or MavlinkBackendConfig()
 
+
+    def _smoke_tags(self, action: str, mode: str) -> dict[str, Any]:
+        is_takeoff = action == "takeoff"
+        return {
+            "smoke_action": is_takeoff,
+            "smoke_path": f"{action}_{mode}_wiring_v1" if is_takeoff else None,
+        }
+
     def _unsupported(self, action: str) -> dict[str, Any]:
         mode = self.config.backend_mode
         return {
@@ -29,6 +38,7 @@ class MavlinkAdapter:
             "adapter": self.name,
             "evidence_ref": f"{mode}://mavlink/unsupported",
             "execution_trace": {
+                **self._smoke_tags(action, mode),
                 "mode": f"mavlink_{mode}",
                 "action": action,
                 "backend_mode": mode,
@@ -48,7 +58,11 @@ class MavlinkAdapter:
             return self._unsupported(action)
 
         mode = self.config.backend_mode
-        if mode == "sitl" and not self.config.backend_enabled:
+        session = MavlinkBackendSession.from_config(self.config)
+        session_status = session.status()
+        session_desc = session.availability_description()
+
+        if mode == "sitl" and session_status == "not_configured":
             return {
                 "accepted": False,
                 "code": "sitl_not_configured",
@@ -57,6 +71,7 @@ class MavlinkAdapter:
                 "adapter": self.name,
                 "evidence_ref": "sitl://mavlink/not_configured",
                 "execution_trace": {
+                    **self._smoke_tags(action, "sitl"),
                     "mode": "mavlink_sitl",
                     "action": action,
                     "mapped_action": mapping["mavlink_action"],
@@ -64,10 +79,36 @@ class MavlinkAdapter:
                     "args_keys": sorted(args.keys()),
                     "backend_mode": mode,
                     "backend_enabled": False,
+                    "session_status": session_status,
                     "transport_endpoint": self.config.transport_endpoint,
                     "timeout_ms": self.config.timeout_ms,
                     "retry_count": self.config.retry_count,
-                    "reason": "sitl_backend_disabled",
+                    "reason": session_desc,
+                },
+            }
+
+        if mode == "sitl" and session_status == "not_connected":
+            return {
+                "accepted": False,
+                "code": "smoke_not_connected",
+                "message": "mavlink_sitl_smoke_not_connected",
+                "detail": "not_connected",
+                "adapter": self.name,
+                "evidence_ref": "sitl://mavlink/not_connected",
+                "execution_trace": {
+                    **self._smoke_tags(action, "sitl"),
+                    "mode": "mavlink_sitl",
+                    "action": action,
+                    "mapped_action": mapping["mavlink_action"],
+                    "param_hints": mapping["param_hints"],
+                    "args_keys": sorted(args.keys()),
+                    "backend_mode": mode,
+                    "backend_enabled": True,
+                    "session_status": session_status,
+                    "transport_endpoint": self.config.transport_endpoint,
+                    "timeout_ms": self.config.timeout_ms,
+                    "retry_count": self.config.retry_count,
+                    "reason": session_desc,
                 },
             }
 
@@ -79,6 +120,7 @@ class MavlinkAdapter:
             "adapter": self.name,
             "evidence_ref": f"{mode}://mavlink/unavailable",
             "execution_trace": {
+                **self._smoke_tags(action, mode),
                 "mode": f"mavlink_{mode}",
                 "action": action,
                 "mapped_action": mapping["mavlink_action"],
@@ -87,6 +129,7 @@ class MavlinkAdapter:
                 "placeholder": bool(mapping.get("placeholder", True)),
                 "backend_mode": mode,
                 "backend_enabled": bool(self.config.backend_enabled),
+                "session_status": session_status,
                 "transport_endpoint": self.config.transport_endpoint,
                 "timeout_ms": self.config.timeout_ms,
                 "retry_count": self.config.retry_count,
