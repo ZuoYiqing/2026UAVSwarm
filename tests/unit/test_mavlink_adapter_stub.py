@@ -155,3 +155,20 @@ def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
     assert raw["code"] == "smoke_not_connected"
     assert raw["execution_trace"]["smoke_action"] is False
     assert raw["execution_trace"]["smoke_path"] is None
+
+
+def test_sitl_enabled_path_uses_backend_builder_seam(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+    called = {"count": 0}
+
+    original = adapter._build_sitl_backend
+
+    def _wrapped(session):
+        called["count"] += 1
+        return original(session)
+
+    monkeypatch.setattr(adapter, "_build_sitl_backend", _wrapped)
+    raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
+
+    assert called["count"] == 1
+    assert raw["code"] == "smoke_not_connected"

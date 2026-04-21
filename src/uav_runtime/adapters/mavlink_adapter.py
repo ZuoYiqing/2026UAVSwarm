@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from uav_runtime.adapters.mavlink_backend import MavlinkBackend
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.mavlink_mapping import resolve_mapping
@@ -20,6 +21,13 @@ class MavlinkAdapter:
 
     def __init__(self, config: MavlinkBackendConfig | None = None) -> None:
         self.config = config or MavlinkBackendConfig()
+
+    def _build_sitl_backend(self, session: MavlinkBackendSession) -> MavlinkBackend:
+        """Build backend implementation for SITL mode.
+
+        v0.1/v0.2-prep keeps this as a stub backend seam only.
+        """
+        return SitlBackendStub(config=self.config, session=session)
 
     def _smoke_tags(self, action: str, mode: str) -> dict[str, Any]:
         is_takeoff = action == "takeoff"
@@ -88,7 +96,7 @@ class MavlinkAdapter:
             }
 
         if mode == "sitl" and session_status == "not_connected":
-            backend = SitlBackendStub(config=self.config, session=session)
+            backend = self._build_sitl_backend(session)
             backend_raw = backend.execute_mapped_action(action, mapping, args)
             trace = dict(backend_raw.get("execution_trace") or {})
             trace.update(

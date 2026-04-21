@@ -12,6 +12,12 @@ from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 
 
 class SitlBackendStub:
+    """Non-real backend placeholder for SITL wiring.
+
+    Future real backend implementations should replace this class behind the
+    same `MavlinkBackend` interface.
+    """
+
     name = "sitl_backend_stub"
 
     def __init__(self, config: MavlinkBackendConfig, session: MavlinkBackendSession) -> None:

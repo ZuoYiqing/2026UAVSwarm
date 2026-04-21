@@ -1,6 +1,7 @@
 """SITL backend stub minimal contract tests."""
 from __future__ import annotations
 
+from uav_runtime.adapters.mavlink_backend import MavlinkBackend
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.sitl_backend_stub import SitlBackendStub
@@ -35,3 +36,10 @@ def test_sitl_backend_stub_execute_returns_placeholder_not_connected() -> None:
     assert raw["message"] == "mavlink_sitl_smoke_not_connected"
     assert raw["detail"] == "not_connected"
     assert raw["execution_trace"]["backend_impl"] == "sitl_backend_stub"
+
+
+def test_sitl_backend_stub_conforms_to_backend_interface() -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True)
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = SitlBackendStub(cfg, session)
+    assert isinstance(backend, MavlinkBackend)
