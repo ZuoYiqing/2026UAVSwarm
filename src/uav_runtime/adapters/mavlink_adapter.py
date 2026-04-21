@@ -6,6 +6,7 @@ from typing import Any
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.mavlink_mapping import resolve_mapping
+from uav_runtime.adapters.sitl_backend_stub import SitlBackendStub
 
 
 class MavlinkAdapter:
@@ -19,7 +20,6 @@ class MavlinkAdapter:
 
     def __init__(self, config: MavlinkBackendConfig | None = None) -> None:
         self.config = config or MavlinkBackendConfig()
-
 
     def _smoke_tags(self, action: str, mode: str) -> dict[str, Any]:
         is_takeoff = action == "takeoff"
@@ -88,28 +88,27 @@ class MavlinkAdapter:
             }
 
         if mode == "sitl" and session_status == "not_connected":
-            return {
-                "accepted": False,
-                "code": "smoke_not_connected",
-                "message": "mavlink_sitl_smoke_not_connected",
-                "detail": "not_connected",
-                "adapter": self.name,
-                "evidence_ref": "sitl://mavlink/not_connected",
-                "execution_trace": {
+            backend = SitlBackendStub(config=self.config, session=session)
+            backend_raw = backend.execute_mapped_action(action, mapping, args)
+            trace = dict(backend_raw.get("execution_trace") or {})
+            trace.update(
+                {
                     **self._smoke_tags(action, "sitl"),
                     "mode": "mavlink_sitl",
-                    "action": action,
-                    "mapped_action": mapping["mavlink_action"],
-                    "param_hints": mapping["param_hints"],
-                    "args_keys": sorted(args.keys()),
                     "backend_mode": mode,
                     "backend_enabled": True,
                     "session_status": session_status,
-                    "transport_endpoint": self.config.transport_endpoint,
-                    "timeout_ms": self.config.timeout_ms,
-                    "retry_count": self.config.retry_count,
-                    "reason": session_desc,
-                },
+                    "delegated_backend": backend.name,
+                }
+            )
+            return {
+                "accepted": bool(backend_raw.get("accepted", False)),
+                "code": str(backend_raw.get("code", "smoke_not_connected")),
+                "message": str(backend_raw.get("message", "mavlink_sitl_smoke_not_connected")),
+                "detail": str(backend_raw.get("detail", "not_connected")),
+                "adapter": self.name,
+                "evidence_ref": backend_raw.get("evidence_ref", "sitl://mavlink/not_connected"),
+                "execution_trace": trace,
             }
 
         return {

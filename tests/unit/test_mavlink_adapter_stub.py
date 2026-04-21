@@ -108,6 +108,8 @@ def test_sitl_mode_enabled_without_backend_returns_smoke_not_connected() -> None
     assert raw["message"] == "mavlink_sitl_smoke_not_connected"
     assert raw["detail"] == "not_connected"
     assert raw["execution_trace"]["session_status"] == "not_connected"
+    assert raw["execution_trace"]["delegated_backend"] == "sitl_backend_stub"
+    assert raw["execution_trace"]["backend_impl"] == "sitl_backend_stub"
 
 
 @pytest.mark.parametrize("action", SUPPORTED)
