@@ -78,6 +78,7 @@ def test_sitl_mode_disabled_returns_not_configured_semantics(command: str) -> No
     assert raw["execution_trace"]["mode"] == "mavlink_sitl"
     assert raw["execution_trace"]["backend_mode"] == "sitl"
     assert raw["execution_trace"]["backend_enabled"] is False
+    assert raw["execution_trace"]["connect_timeout_ms"] == 3000
 
 
 def test_sitl_mode_disabled_unsupported_command_still_exec_unsupported() -> None:
@@ -90,7 +91,29 @@ def test_sitl_mode_disabled_unsupported_command_still_exec_unsupported() -> None
     assert raw["detail"] == "unsupported"
 
 
-def test_sitl_mode_enabled_without_backend_returns_smoke_not_connected() -> None:
+def test_sitl_mode_enabled_without_endpoint_returns_probe_failed() -> None:
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(
+            backend_mode="sitl",
+            backend_enabled=True,
+            timeout_ms=5000,
+            retry_count=1,
+        )
+    )
+
+    raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
+
+    assert raw["accepted"] is False
+    assert raw["code"] == "backend_probe_failed"
+    assert raw["message"] == "mavlink_sitl_backend_probe_failed"
+    assert raw["detail"] == "probe_failed"
+    assert raw["execution_trace"]["session_status"] == "not_connected"
+    assert raw["execution_trace"]["delegated_backend"] == "sitl_backend_stub"
+    assert raw["execution_trace"]["backend_impl"] == "sitl_backend_stub"
+    assert raw["execution_trace"]["connect_timeout_ms"] == 3000
+
+
+def test_sitl_mode_enabled_with_endpoint_returns_smoke_not_connected() -> None:
     adapter = MavlinkAdapter(
         MavlinkBackendConfig(
             backend_mode="sitl",
@@ -107,9 +130,6 @@ def test_sitl_mode_enabled_without_backend_returns_smoke_not_connected() -> None
     assert raw["code"] == "smoke_not_connected"
     assert raw["message"] == "mavlink_sitl_smoke_not_connected"
     assert raw["detail"] == "not_connected"
-    assert raw["execution_trace"]["session_status"] == "not_connected"
-    assert raw["execution_trace"]["delegated_backend"] == "sitl_backend_stub"
-    assert raw["execution_trace"]["backend_impl"] == "sitl_backend_stub"
 
 
 @pytest.mark.parametrize("action", SUPPORTED)
@@ -138,7 +158,9 @@ def test_gateway_dispatches_unsupported_action_with_stable_code() -> None:
 
 
 def test_takeoff_smoke_wiring_trace_tags_are_stable() -> None:
-    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    )
 
     raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
 
@@ -148,7 +170,9 @@ def test_takeoff_smoke_wiring_trace_tags_are_stable() -> None:
 
 
 def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
-    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    )
 
     raw = adapter.execute({"command": "hover", "arguments": {}, "meta": {}})
 
@@ -158,7 +182,9 @@ def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
 
 
 def test_sitl_enabled_path_uses_backend_builder_seam(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = MavlinkAdapter(MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True))
+    adapter = MavlinkAdapter(
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    )
     called = {"count": 0}
 
     original = adapter._build_sitl_backend

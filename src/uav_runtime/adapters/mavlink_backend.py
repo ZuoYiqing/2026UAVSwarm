@@ -25,6 +25,9 @@ class MavlinkBackend(Protocol):
     def describe(self) -> dict[str, Any]:
         ...
 
+    def connect_probe(self) -> dict[str, Any]:
+        ...
+
     def execute_mapped_action(
         self,
         action: str,

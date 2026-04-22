@@ -34,19 +34,70 @@ class SitlBackendStub:
             "enabled": bool(self.config.backend_enabled),
             "status": self.session.status(),
             "transport_endpoint": self.config.transport_endpoint,
+            "connect_timeout_ms": self.config.connect_timeout_ms,
             "timeout_ms": self.config.timeout_ms,
             "retry_count": self.config.retry_count,
         }
 
-    def execute_mapped_action(self, action: str, mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    def connect_probe(self) -> dict[str, Any]:
         status = self.session.status()
-        reason = self.session.availability_description()
+        if status == "not_configured":
+            return {
+                "ok": False,
+                "code": "sitl_not_configured",
+                "reason": "sitl_backend_disabled",
+                "status": status,
+            }
+        if status == "not_connected" and not self.config.transport_endpoint:
+            return {
+                "ok": False,
+                "code": "backend_probe_failed",
+                "reason": "transport_endpoint_missing",
+                "status": status,
+            }
+        if status == "not_connected":
+            return {
+                "ok": False,
+                "code": "smoke_not_connected",
+                "reason": "backend_not_connected",
+                "status": status,
+            }
+        return {
+            "ok": True,
+            "code": "backend_connected",
+            "reason": "backend_connected",
+            "status": status,
+        }
+
+    def execute_mapped_action(self, action: str, mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        probe = self.connect_probe()
+        status = str(probe.get("status", self.session.status()))
+        code = str(probe.get("code", "smoke_not_connected"))
+        reason = str(probe.get("reason", self.session.availability_description()))
+        message_map = {
+            "backend_probe_failed": "mavlink_sitl_backend_probe_failed",
+            "sitl_not_configured": "mavlink_sitl_not_configured",
+            "smoke_not_connected": "mavlink_sitl_smoke_not_connected",
+            "backend_connected": "mavlink_sitl_backend_connected",
+        }
+        detail_map = {
+            "backend_probe_failed": "probe_failed",
+            "sitl_not_configured": "not_configured",
+            "smoke_not_connected": "not_connected",
+            "backend_connected": "connected",
+        }
+        evidence_map = {
+            "backend_probe_failed": "sitl://mavlink/probe_failed",
+            "sitl_not_configured": "sitl://mavlink/not_configured",
+            "smoke_not_connected": "sitl://mavlink/not_connected",
+            "backend_connected": "sitl://mavlink/connected",
+        }
         return {
             "accepted": False,
-            "code": "smoke_not_connected" if status == "not_connected" else "sitl_not_configured",
-            "message": "mavlink_sitl_smoke_not_connected" if status == "not_connected" else "mavlink_sitl_not_configured",
-            "detail": "not_connected" if status == "not_connected" else "not_configured",
-            "evidence_ref": "sitl://mavlink/not_connected" if status == "not_connected" else "sitl://mavlink/not_configured",
+            "code": code,
+            "message": message_map.get(code, "mavlink_sitl_smoke_not_connected"),
+            "detail": detail_map.get(code, "not_connected"),
+            "evidence_ref": evidence_map.get(code, "sitl://mavlink/not_connected"),
             "execution_trace": {
                 "backend_impl": self.name,
                 "backend_status": status,
@@ -55,8 +106,10 @@ class SitlBackendStub:
                 "param_hints": mapping.get("param_hints", []),
                 "args_keys": sorted(args.keys()),
                 "transport_endpoint": self.config.transport_endpoint,
+                "connect_timeout_ms": self.config.connect_timeout_ms,
                 "timeout_ms": self.config.timeout_ms,
                 "retry_count": self.config.retry_count,
                 "reason": reason,
+                "probe_code": code,
             },
         }

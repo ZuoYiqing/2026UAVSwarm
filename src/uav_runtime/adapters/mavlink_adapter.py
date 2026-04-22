@@ -89,6 +89,7 @@ class MavlinkAdapter:
                     "backend_enabled": False,
                     "session_status": session_status,
                     "transport_endpoint": self.config.transport_endpoint,
+                    "connect_timeout_ms": self.config.connect_timeout_ms,
                     "timeout_ms": self.config.timeout_ms,
                     "retry_count": self.config.retry_count,
                     "reason": session_desc,
@@ -97,6 +98,7 @@ class MavlinkAdapter:
 
         if mode == "sitl" and session_status == "not_connected":
             backend = self._build_sitl_backend(session)
+            probe = backend.connect_probe()
             backend_raw = backend.execute_mapped_action(action, mapping, args)
             trace = dict(backend_raw.get("execution_trace") or {})
             trace.update(
@@ -107,6 +109,7 @@ class MavlinkAdapter:
                     "backend_enabled": True,
                     "session_status": session_status,
                     "delegated_backend": backend.name,
+                    "probe_code": probe.get("code"),
                 }
             )
             return {
@@ -138,6 +141,7 @@ class MavlinkAdapter:
                 "backend_enabled": bool(self.config.backend_enabled),
                 "session_status": session_status,
                 "transport_endpoint": self.config.transport_endpoint,
+                "connect_timeout_ms": self.config.connect_timeout_ms,
                 "timeout_ms": self.config.timeout_ms,
                 "retry_count": self.config.retry_count,
                 "reason": "no_real_backend",

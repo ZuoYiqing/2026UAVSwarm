@@ -62,6 +62,8 @@ def test_parser_accepts_sitl_wiring_flags() -> None:
             "--backend-enabled",
             "--transport-endpoint",
             "udp://127.0.0.1:14540",
+            "--connect-timeout-ms",
+            "3500",
             "--timeout-ms",
             "5000",
             "--retry-count",
@@ -72,6 +74,7 @@ def test_parser_accepts_sitl_wiring_flags() -> None:
     assert args.backend_mode == "sitl"
     assert args.backend_enabled is True
     assert args.transport_endpoint == "udp://127.0.0.1:14540"
+    assert args.connect_timeout_ms == 3500
     assert args.timeout_ms == 5000
     assert args.retry_count == 1
 

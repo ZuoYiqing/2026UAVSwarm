@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--backend-mode", choices=["stub", "sitl"], default="stub")
     m.add_argument("--backend-enabled", action="store_true")
     m.add_argument("--transport-endpoint", default="")
+    m.add_argument("--connect-timeout-ms", type=int, default=3000)
     m.add_argument("--timeout-ms", type=int, default=3000)
     m.add_argument("--retry-count", type=int, default=0)
 
@@ -48,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--backend-mode", choices=["stub", "sitl"], default="stub")
     s.add_argument("--backend-enabled", action="store_true")
     s.add_argument("--transport-endpoint", default="")
+    s.add_argument("--connect-timeout-ms", type=int, default=3000)
     s.add_argument("--timeout-ms", type=int, default=3000)
     s.add_argument("--retry-count", type=int, default=0)
     s.add_argument("--risk-hint", type=int, default=1)
@@ -131,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         backend_mode=str(getattr(args, "backend_mode", "stub") or "stub"),
         backend_enabled=bool(getattr(args, "backend_enabled", False)),
         transport_endpoint=str(getattr(args, "transport_endpoint", "") or ""),
+        connect_timeout_ms=int(getattr(args, "connect_timeout_ms", 3000) or 3000),
         timeout_ms=int(getattr(args, "timeout_ms", 3000) or 3000),
         retry_count=int(getattr(args, "retry_count", 0) or 0),
     )

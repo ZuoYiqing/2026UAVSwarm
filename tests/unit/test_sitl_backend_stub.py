@@ -8,7 +8,12 @@ from uav_runtime.adapters.sitl_backend_stub import SitlBackendStub
 
 
 def test_sitl_backend_stub_describe_contains_minimal_fields() -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(
+        backend_mode="sitl",
+        backend_enabled=True,
+        transport_endpoint="udp://127.0.0.1:14540",
+        connect_timeout_ms=3500,
+    )
     session = MavlinkBackendSession.from_config(cfg)
     backend = SitlBackendStub(cfg, session)
 
@@ -18,10 +23,11 @@ def test_sitl_backend_stub_describe_contains_minimal_fields() -> None:
     assert desc["mode"] == "sitl"
     assert desc["enabled"] is True
     assert desc["status"] == "not_connected"
+    assert desc["connect_timeout_ms"] == 3500
 
 
 def test_sitl_backend_stub_execute_returns_placeholder_not_connected() -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True)
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = SitlBackendStub(cfg, session)
 
@@ -43,3 +49,15 @@ def test_sitl_backend_stub_conforms_to_backend_interface() -> None:
     session = MavlinkBackendSession.from_config(cfg)
     backend = SitlBackendStub(cfg, session)
     assert isinstance(backend, MavlinkBackend)
+
+
+def test_sitl_backend_probe_reports_failed_when_endpoint_missing() -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = SitlBackendStub(cfg, session)
+
+    probe = backend.connect_probe()
+
+    assert probe["ok"] is False
+    assert probe["code"] == "backend_probe_failed"
+    assert probe["reason"] == "transport_endpoint_missing"
