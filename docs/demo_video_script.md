@@ -1,60 +1,79 @@
-# Demo Video Script (2~3 min, leadership briefing)
+# Demo 录屏讲稿（2~3 分钟，领导汇报版）
 
 ## 录制目标
-用 2~3 分钟清楚讲明：
-1) 控制面闭环已打通；
-2) 策略裁决与执行面解耦；
-3) SITL backend 接入路径已准备。
+用 2~3 分钟讲清三件事：
+1. **控制面闭环已打通**（mission/action 到 replay 的链路完整可见）；
+2. **策略裁决与执行面解耦**（policy 与 adapter/backend 分层清晰）；
+3. **SITL 后端接入路径已预留**（当前为演示壳，不宣称真实飞控已接通）。
 
 ## 录制前准备
-1. 启动：`python -m http.server 8000`
-2. 打开：`http://localhost:8000/demo/`
-3. 全屏录制（建议 1080p, 30fps）。
+1. 启动静态服务：`python -m http.server 8000`
+2. 打开页面：`http://localhost:8000/demo/`
+3. 建议全屏录制：1080p / 30fps。
 
 ---
 
-## 推荐讲解顺序
+## 推荐讲解顺序（含话术）
 
-### 00:00 - 00:25 平台总览条
-- 展示顶部：Scene / Mission / Action / Adapter / Backend / System Status。
-- 讲解：
-  - “这是演示壳，不是正式 GUI。”
-  - “目标是展示控制面链路与执行面状态。”
+### 00:00 - 00:25 顶部总览条（Overview）
+- 指向顶部字段：
+  - 场景（Scene）
+  - 任务（Mission）
+  - 动作（Action）
+  - 适配器（Adapter）
+  - 后端（Backend）
+  - 系统状态（Status）
+- 建议话术：
+  - “这是演示壳（Demo Shell），不是最终业务 GUI。”
+  - “重点是展示控制面链路与策略/执行状态闭环。”
 
-### 00:25 - 00:55 ALLOW（正常放行）
-- 点击 `ALLOW`。
-- 指给观众看：
-  - 地图：目标点激活、航迹高亮、无人机上浮/移动；
-  - 卡片：`decision_code=allow`、`result.code=exec_ok`；
-  - 时间线：逐步高亮到 replay。
+### 00:25 - 00:55 正常放行（ALLOW）
+- 点击：`正常放行（ALLOW）`
+- 重点观察：
+  - 地图：目标点激活、航迹高亮、无人机进入执行态；
+  - 策略卡：`decision_code = allow`；
+  - 结果卡：`result.code = exec_ok`；
+  - 时间线：逐步点亮到 replay。
+- 建议话术：
+  - “该场景体现策略放行后，执行面 accepted，闭环贯通。”
 
-### 00:55 - 01:25 DENY（高风险拒绝）
-- 点击 `DENY`。
-- 指给观众看：
-  - 地图：风险区红色增强、无人机不动、目标锁定；
-  - 卡片：`decision_code=deny`、`primary_reason_code=REASON_CODE_RISK_LEVEL_EXCEEDED`；
-  - 结果：adapter skipped。
+### 00:55 - 01:25 高风险拒绝（DENY）
+- 点击：`高风险拒绝（DENY）`
+- 重点观察：
+  - 地图：禁飞区告警增强，目标锁定，无人机保持；
+  - 策略卡：`decision_code = deny`；
+  - 原因：`REASON_CODE_RISK_LEVEL_EXCEEDED`；
+  - 结果：`adapter = skipped`（执行层未下发）。
+- 建议话术：
+  - “风险超限在策略层被阻断，避免危险动作进入执行面。”
 
-### 01:25 - 01:55 REQUIRE_CONFIRM（等待确认）
-- 点击 `REQUIRE_CONFIRM`。
-- 指给观众看：
-  - 地图：黄色等待提示与暂停状态；
-  - 卡片：`decision_code=REQUIRE_CONFIRM`、`status=waiting_confirmation`。
+### 01:25 - 01:55 等待确认（REQUIRE_CONFIRM）
+- 点击：`等待确认（REQUIRE_CONFIRM）`
+- 重点观察：
+  - 地图：等待确认提示条；
+  - 策略卡：`decision_code = REQUIRE_CONFIRM`；
+  - 结果卡：`status = waiting_confirmation`。
+- 建议话术：
+  - “命中人工确认规则后，系统暂停并保留可追踪状态。”
 
-### 01:55 - 02:25 SITL_WIRING（接入位预留）
-- 点击 `SITL_WIRING`。
-- 指给观众看：
-  - 地图：SITL 提示条与虚线路径；
-  - 卡片：`adapter=mavlink`、`backend_mode=sitl`、`code=smoke_not_connected`；
-  - 文案：`SITL backend path prepared; real backend not connected`。
+### 01:55 - 02:25 接入位预留（SITL_WIRING）
+- 点击：`接入位预留（SITL_WIRING）`
+- 重点观察：
+  - 地图：SITL 提示与虚线路径；
+  - 结果卡：`adapter = mavlink`、`backend_mode = sitl`、`code = smoke_not_connected`。
+- 建议话术：
+  - “路径已到后端接入位；当前真实后端尚未连接，这是预期演示状态。”
 
-### 02:25 - 02:50 Auto Demo
-- 点击 `Auto Demo / Play All`，自动轮播四场景。
+### 02:25 - 02:50 自动演示（Auto Demo / Play All）
+- 点击：`自动演示（Auto Demo / Play All）`，自动轮播四个场景。
 - 结尾话术：
-  - “当前可用于汇报演示；后续在不改控制面 contract 的前提下替换真实 backend。”
+  - “当前版本可用于汇报演示与评审。”
+  - “后续在不改控制面 contract 的前提下替换真实 backend。”
 
 ---
 
 ## 录制注意事项
-- 每个场景停留 6~8 秒，给观众阅读时间。
-- 避免说“真实飞控已接通”；统一表述“backend path prepared / pending connection”。
+- 每个场景建议停留 6~8 秒，便于观众阅读关键字段。
+- 禁止表述“已接通真实飞控”；统一表述为：
+  - “后端接入路径已预留（prepared）”；
+  - “真实后端待连接（pending connection）”。
