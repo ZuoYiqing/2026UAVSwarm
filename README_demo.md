@@ -14,6 +14,21 @@ python -m http.server 8000
 
 浏览器打开：`http://localhost:8000/demo/`
 
+## 离线验证（重点）
+1. 先**断开网络**（关闭 Wi-Fi / 拔网线）。
+2. 在仓库根目录运行：`python -m http.server 8000`。
+3. 访问：`http://localhost:8000/demo/`。
+4. 在浏览器执行强制刷新：`Ctrl + F5`。
+5. 打开 DevTools → Network：
+   - 确认没有外部 `https://` 资源请求；
+   - 仅有本地 `demo/index.html`、`demo/styles.css`、`demo/app.js` 等请求。
+6. 手动验证四个场景与自动轮播：
+   - 正常放行（ALLOW）
+   - 高风险拒绝（DENY）
+   - 等待确认（REQUIRE_CONFIRM）
+   - 接入位预留（SITL_WIRING）
+   - 自动演示（Auto Demo / Play All）
+
 ## 演示重点（中文主叙述）
 - 顶部总览条：场景 / 任务 / 动作 / 适配器 / 后端 / 系统状态；
 - 四个核心场景：

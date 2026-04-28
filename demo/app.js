@@ -1,8 +1,3 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { createRoot } from "react-dom/client";
-import htm from "htm";
-
-const html = htm.bind(React.createElement);
 const SCENE_ORDER = ["ALLOW", "DENY", "REQUIRE_CONFIRM", "SITL_WIRING"];
 const AUTO_DWELL_MS = 7200;
 
@@ -98,7 +93,6 @@ const SCENARIOS = {
     btn: "正常放行（ALLOW）",
     title: "正常放行（ALLOW）",
     status: "READY",
-    badge: "ok",
     missionAction: { mission_id: "mission-alpha", action_type: "takeoff", requested_scope: "self_only", priority_hint: 50 },
     policy: { decision_code: "allow", primary_reason_code: "(null)", effective_scope: "self_only", policy_trace_id: "pt-allow-001" },
     result: { adapter: "fake", backend_mode: "stub", code: "exec_ok", status: "accepted", replay: "策略裁决事件与执行结果已记录" },
@@ -128,7 +122,6 @@ const SCENARIOS = {
     btn: "高风险拒绝（DENY）",
     title: "高风险拒绝（DENY）",
     status: "BLOCKED",
-    badge: "deny",
     missionAction: { mission_id: "mission-bravo", action_type: "goto", requested_scope: "self_only", priority_hint: 50 },
     policy: { decision_code: "deny", primary_reason_code: "REASON_CODE_RISK_LEVEL_EXCEEDED", effective_scope: "self_only", policy_trace_id: "pt-deny-001" },
     result: { adapter: "(skipped)", backend_mode: "n/a", code: "REASON_CODE_RISK_LEVEL_EXCEEDED", status: "blocked", replay: "拒绝链路完整留痕" },
@@ -153,7 +146,6 @@ const SCENARIOS = {
     btn: "等待确认（REQUIRE_CONFIRM）",
     title: "等待确认（REQUIRE_CONFIRM）",
     status: "WAIT_CONFIRM",
-    badge: "warn",
     missionAction: { mission_id: "mission-charlie", action_type: "goto", requested_scope: "self_only", priority_hint: 50 },
     policy: { decision_code: "REQUIRE_CONFIRM", primary_reason_code: "REASON_CODE_CONFIRMATION_REQUIRED", effective_scope: "self_only", policy_trace_id: "pt-confirm-001" },
     result: { adapter: "(pending)", backend_mode: "sitl(stub)", code: "REASON_CODE_CONFIRMATION_REQUIRED", status: "waiting_confirmation", replay: "等待确认状态已记录" },
@@ -181,7 +173,6 @@ const SCENARIOS = {
     btn: "接入位预留（SITL_WIRING）",
     title: "接入位预留（SITL_WIRING）",
     status: "SITL_PENDING",
-    badge: "sitl",
     missionAction: { mission_id: "mission-delta", action_type: "takeoff", requested_scope: "self_only", priority_hint: 50 },
     policy: { decision_code: "allow", primary_reason_code: "(null)", effective_scope: "self_only", policy_trace_id: "pt-sitl-001" },
     result: { adapter: "mavlink", backend_mode: "sitl", code: "smoke_not_connected", status: "rejected", replay: "SITL wiring 状态可追踪" },
@@ -204,156 +195,209 @@ const SCENARIOS = {
   },
 };
 
-const STATUS_CLASS = { READY: "ok", BLOCKED: "deny", WAIT_CONFIRM: "warn", SITL_PENDING: "sitl" };
+const STATUS_CLASS = {
+  READY: "ok",
+  BLOCKED: "deny",
+  WAIT_CONFIRM: "warn",
+  SITL_PENDING: "sitl",
+};
+
+const state = {
+  sceneKey: "ALLOW",
+  autoPlay: false,
+  stepIndex: 0,
+  clock: new Date(),
+  stepTimer: null,
+  autoTimer: null,
+};
+
+const root = document.getElementById("root");
 
 const explain = (value, map) => map[value] || value;
+const esc = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-function ValueLine({ k, v, strong = false }) {
-  return html`<div className="kv"><span>${k}</span><span className=${strong ? "value strong" : "value"}>${v}</span></div>`;
+function kv(label, value, strong = false) {
+  return `<div class="kv"><span>${esc(label)}</span><span class="value${strong ? " strong" : ""}">${esc(value)}</span></div>`;
 }
 
-function App() {
-  const [sceneKey, setSceneKey] = useState("ALLOW");
-  const [autoPlay, setAutoPlay] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [clock, setClock] = useState(new Date());
-  const scene = useMemo(() => SCENARIOS[sceneKey], [sceneKey]);
-
-  useEffect(() => {
-    const t = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    setStepIndex(0);
-    const timer = setInterval(() => {
-      setStepIndex((v) => (v + 1 >= scene.timeline.length ? scene.timeline.length - 1 : v + 1));
-    }, 1200);
-    return () => clearInterval(timer);
-  }, [sceneKey]);
-
-  useEffect(() => {
-    if (!autoPlay) return;
-    const timer = setInterval(() => {
-      setSceneKey((prev) => {
-        const idx = SCENE_ORDER.indexOf(prev);
-        return SCENE_ORDER[(idx + 1) % SCENE_ORDER.length];
-      });
-    }, AUTO_DWELL_MS);
-    return () => clearInterval(timer);
-  }, [autoPlay]);
-
+function render() {
+  const scene = SCENARIOS[state.sceneKey];
   const badgeClass = STATUS_CLASS[scene.status] || "warn";
 
-  return html`
-    <div className="app">
-      <header className="topbar panel">
-        <div className="brand">
+  const pathsHtml = scene.paths
+    .map(
+      (path, idx) => `<svg data-path="${idx}" class="path-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <line class="${path.cls}" x1="${path.from[0]}" y1="${path.from[1]}" x2="${path.to[0]}" y2="${path.to[1]}" />
+      </svg>`
+    )
+    .join("");
+
+  const dronesHtml = scene.drones
+    .map(
+      (drone) => `<div class="drone ${drone.state}" style="left:${drone.x}%;top:${drone.y}%;background:${drone.color}">
+        <span>${esc(drone.id)}</span>
+      </div>`
+    )
+    .join("");
+
+  const timelineHtml = scene.timeline
+    .map((entry, idx) => {
+      const active = idx <= state.stepIndex ? " active" : "";
+      const cursor = idx === state.stepIndex ? " cursor" : "";
+      return `<div class="line${active}${cursor} ${entry[3]}">
+        <span class="dot"></span>
+        <span class="ts">${esc(entry[0])}</span>
+        <span class="ev">${esc(EVENT_NAME_TEXT[entry[1]])}</span>
+        <span class="desc">${esc(entry[2])}</span>
+      </div>`;
+    })
+    .join("");
+
+  root.innerHTML = `
+    <div class="app">
+      <header class="topbar panel">
+        <div class="brand">
           <h1>2026UAVSwarm Demo Shell</h1>
           <p>控制面闭环已打通 · 策略裁决与执行面解耦</p>
         </div>
-        <div className="top-metrics">
-          <span className="metric"><label>${LABELS.scene}</label><b>${scene.title}</b></span>
-          <span className="metric"><label>${LABELS.mission}</label><b>${scene.missionAction.mission_id}</b></span>
-          <span className="metric"><label>${LABELS.action}</label><b>${explain(scene.missionAction.action_type, ACTION_TEXT)}</b></span>
-          <span className="metric"><label>${LABELS.adapter}</label><b>${explain(scene.result.adapter, ADAPTER_TEXT)}</b></span>
-          <span className="metric"><label>${LABELS.backend}</label><b>${explain(scene.result.backend_mode, MODE_TEXT)}</b></span>
-          <span className=${`status ${badgeClass}`}>${STATUS_TEXT[scene.status]}</span>
-          <span className="lamp"></span>
-          <span className="metric clock"><label>演示时间（Time）</label><b>${clock.toLocaleTimeString()}</b></span>
+        <div class="top-metrics">
+          <span class="metric"><label>${LABELS.scene}</label><b>${esc(scene.title)}</b></span>
+          <span class="metric"><label>${LABELS.mission}</label><b>${esc(scene.missionAction.mission_id)}</b></span>
+          <span class="metric"><label>${LABELS.action}</label><b>${esc(explain(scene.missionAction.action_type, ACTION_TEXT))}</b></span>
+          <span class="metric"><label>${LABELS.adapter}</label><b>${esc(explain(scene.result.adapter, ADAPTER_TEXT))}</b></span>
+          <span class="metric"><label>${LABELS.backend}</label><b>${esc(explain(scene.result.backend_mode, MODE_TEXT))}</b></span>
+          <span class="status ${badgeClass}">${esc(STATUS_TEXT[scene.status])}</span>
+          <span class="lamp"></span>
+          <span class="metric clock"><label>演示时间（Time）</label><b>${esc(state.clock.toLocaleTimeString())}</b></span>
         </div>
       </header>
 
-      <main className="main">
-        <section className="panel map-panel">
-          <div className="panel-title">
+      <main class="main">
+        <section class="panel map-panel">
+          <div class="panel-title">
             <h2>2D Fleet Situation / 集群态势</h2>
-            <div className="hint">${scene.mapHint}</div>
+            <div class="hint">${esc(scene.mapHint)}</div>
           </div>
 
-          <div className="tag-row">
-            <span className="tag">控制面闭环已打通</span>
-            <span className="tag">策略裁决与执行面解耦</span>
-            ${sceneKey === "SITL_WIRING" ? html`<span className="tag sitl">SITL backend path prepared</span>` : null}
+          <div class="tag-row">
+            <span class="tag">控制面闭环已打通</span>
+            <span class="tag">策略裁决与执行面解耦</span>
+            ${state.sceneKey === "SITL_WIRING" ? '<span class="tag sitl">SITL backend path prepared</span>' : ""}
           </div>
 
-          <div className="map">
-            <div className="ground-station" style=${{ left: `${COMMON.groundStation.x}%`, top: `${COMMON.groundStation.y}%` }}>地面站</div>
-            <div className=${`target ${scene.targetState}`} style=${{ left: `${COMMON.targetPoint.x}%`, top: `${COMMON.targetPoint.y}%` }}>
-              ${scene.targetState === "locked" ? "目标锁定" : "目标点"}
-            </div>
-            <div className=${`zone ${sceneKey === "DENY" ? "danger active" : "danger"}`}
-              style=${{ left: `${COMMON.noFlyZone.x}%`, top: `${COMMON.noFlyZone.y}%`, width: `${COMMON.noFlyZone.r * 2}%`, height: `${COMMON.noFlyZone.r * 2}%` }}>禁飞区</div>
-
-            ${scene.paths.map((p, idx) => html`<svg key=${idx} className="path-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <line className=${p.cls} x1=${p.from[0]} y1=${p.from[1]} x2=${p.to[0]} y2=${p.to[1]} />
-            </svg>`)}
-
-            ${scene.drones.map((d) => html`<div key=${d.id} className=${`drone ${d.state}`} style=${{ left: `${d.x}%`, top: `${d.y}%`, background: d.color }}>
-              <span>${d.id}</span>
-            </div>`)}
-
-            ${sceneKey === "REQUIRE_CONFIRM" ? html`<div className="confirm-banner">任务暂停，等待人工确认</div>` : null}
-            ${sceneKey === "SITL_WIRING" ? html`<div className="sitl-banner">SITL后端路径已预留，真实后端尚未连接</div>` : null}
+          <div class="map">
+            <div class="ground-station" style="left:${COMMON.groundStation.x}%;top:${COMMON.groundStation.y}%">地面站</div>
+            <div class="target ${scene.targetState}" style="left:${COMMON.targetPoint.x}%;top:${COMMON.targetPoint.y}%">${scene.targetState === "locked" ? "目标锁定" : "目标点"}</div>
+            <div class="zone ${state.sceneKey === "DENY" ? "danger active" : "danger"}" style="left:${COMMON.noFlyZone.x}%;top:${COMMON.noFlyZone.y}%;width:${COMMON.noFlyZone.r * 2}%;height:${COMMON.noFlyZone.r * 2}%">禁飞区</div>
+            ${pathsHtml}
+            ${dronesHtml}
+            ${state.sceneKey === "REQUIRE_CONFIRM" ? '<div class="confirm-banner">任务暂停，等待人工确认</div>' : ""}
+            ${state.sceneKey === "SITL_WIRING" ? '<div class="sitl-banner">SITL后端路径已预留，真实后端尚未连接</div>' : ""}
           </div>
         </section>
 
-        <aside className="panel side">
-          <div className="controls-row">
-            ${SCENE_ORDER.map((k) => html`<button className=${sceneKey === k ? "active" : ""} onClick=${() => setSceneKey(k)}>${SCENARIOS[k].btn}</button>`)}
-          </div>
-          <div className="controls-row">
-            <button className=${autoPlay ? "active glow" : ""} onClick=${() => setAutoPlay((v) => !v)}>${autoPlay ? "停止自动演示" : "自动演示（Auto Demo / Play All）"}</button>
-            <button onClick=${() => setSceneKey("ALLOW")}>重置演示（Restart）</button>
+        <aside class="panel side">
+          <div class="controls-row" id="scene-buttons"></div>
+          <div class="controls-row">
+            <button id="auto-toggle" class="${state.autoPlay ? "active glow" : ""}">${state.autoPlay ? "停止自动演示" : "自动演示（Auto Demo / Play All）"}</button>
+            <button id="restart-btn">重置演示（Restart）</button>
           </div>
 
-          <section className="card">
+          <section class="card">
             <h3>任务 / 动作（Mission / Action）</h3>
-            <${ValueLine} k="任务编号（mission_id）" v=${scene.missionAction.mission_id} />
-            <${ValueLine} k="动作类型（action_type）" v=${explain(scene.missionAction.action_type, ACTION_TEXT)} strong=${true} />
-            <${ValueLine} k="优先级提示（priority_hint）" v=${scene.missionAction.priority_hint} />
-            <${ValueLine} k="请求范围（requested_scope）" v=${explain(scene.missionAction.requested_scope, SCOPE_TEXT)} />
+            ${kv("任务编号（mission_id）", scene.missionAction.mission_id)}
+            ${kv("动作类型（action_type）", explain(scene.missionAction.action_type, ACTION_TEXT), true)}
+            ${kv("优先级提示（priority_hint）", scene.missionAction.priority_hint)}
+            ${kv("请求范围（requested_scope）", explain(scene.missionAction.requested_scope, SCOPE_TEXT))}
           </section>
 
-          <section className="card">
+          <section class="card">
             <h3>策略决策（Policy Decision）</h3>
-            <${ValueLine} k="裁决结果（decision_code）" v=${explain(scene.policy.decision_code, DECISION_TEXT)} strong=${true} />
-            <${ValueLine} k="主要原因（primary_reason_code）" v=${explain(scene.policy.primary_reason_code, REASON_TEXT)} />
-            <${ValueLine} k="生效范围（effective_scope）" v=${explain(scene.policy.effective_scope, SCOPE_TEXT)} />
-            <${ValueLine} k="策略追踪号（policy_trace_id）" v=${scene.policy.policy_trace_id} />
-            <p className="summary">${scene.summary.policy}</p>
+            ${kv("裁决结果（decision_code）", explain(scene.policy.decision_code, DECISION_TEXT), true)}
+            ${kv("主要原因（primary_reason_code）", explain(scene.policy.primary_reason_code, REASON_TEXT))}
+            ${kv("生效范围（effective_scope）", explain(scene.policy.effective_scope, SCOPE_TEXT))}
+            ${kv("策略追踪号（policy_trace_id）", scene.policy.policy_trace_id)}
+            <p class="summary">${esc(scene.summary.policy)}</p>
           </section>
 
-          <section className="card">
+          <section class="card">
             <h3>执行结果（Adapter / Backend / Result）</h3>
-            <${ValueLine} k="执行适配器（adapter）" v=${explain(scene.result.adapter, ADAPTER_TEXT)} strong=${true} />
-            <${ValueLine} k="后端模式（backend_mode）" v=${explain(scene.result.backend_mode, MODE_TEXT)} />
-            <${ValueLine} k="结果代码（result.code）" v=${explain(scene.result.code, RESULT_CODE_TEXT)} strong=${true} />
-            <${ValueLine} k="执行状态（result.status）" v=${explain(scene.result.status, RESULT_STATUS_TEXT)} />
-            <p className="summary">${scene.summary.result}</p>
+            ${kv("执行适配器（adapter）", explain(scene.result.adapter, ADAPTER_TEXT), true)}
+            ${kv("后端模式（backend_mode）", explain(scene.result.backend_mode, MODE_TEXT))}
+            ${kv("结果代码（result.code）", explain(scene.result.code, RESULT_CODE_TEXT), true)}
+            ${kv("执行状态（result.status）", explain(scene.result.status, RESULT_STATUS_TEXT))}
+            <p class="summary">${esc(scene.summary.result)}</p>
           </section>
 
-          <section className="card">
+          <section class="card">
             <h3>回放审计（Replay & Audit）</h3>
-            <p>${scene.result.replay}</p>
-            <p className="summary">${scene.summary.replay}</p>
+            <p>${esc(scene.result.replay)}</p>
+            <p class="summary">${esc(scene.summary.replay)}</p>
           </section>
         </aside>
       </main>
 
-      <section className="panel timeline-wrap">
+      <section class="panel timeline-wrap">
         <h2>事件时间线（Event Timeline）</h2>
-        ${scene.timeline.map((ev, idx) => html`<div className=${`line ${idx <= stepIndex ? "active" : ""} ${idx === stepIndex ? "cursor" : ""} ${ev[3]}`} key=${idx}>
-          <span className="dot"></span>
-          <span className="ts">${ev[0]}</span>
-          <span className="ev">${EVENT_NAME_TEXT[ev[1]]}</span>
-          <span className="desc">${ev[2]}</span>
-        </div>`)}
+        ${timelineHtml}
       </section>
 
-      <footer className="footer">演示模式（Demo Mode）· 当前未连接真实 PX4/MAVLink/SITL</footer>
+      <footer class="footer">演示模式（Demo Mode）· 当前未连接真实 PX4/MAVLink/SITL</footer>
     </div>
   `;
+
+  const buttonsWrap = document.getElementById("scene-buttons");
+  buttonsWrap.innerHTML = SCENE_ORDER
+    .map((key) => `<button data-scene="${key}" class="${state.sceneKey === key ? "active" : ""}">${esc(SCENARIOS[key].btn)}</button>`)
+    .join("");
+
+  buttonsWrap.querySelectorAll("button[data-scene]").forEach((btn) => {
+    btn.addEventListener("click", () => setScene(btn.dataset.scene));
+  });
+
+  document.getElementById("auto-toggle").addEventListener("click", () => {
+    state.autoPlay = !state.autoPlay;
+    syncAutoTimer();
+    render();
+  });
+
+  document.getElementById("restart-btn").addEventListener("click", () => setScene("ALLOW"));
 }
 
-createRoot(document.getElementById("root")).render(html`<${App} />`);
+function setScene(sceneKey) {
+  state.sceneKey = sceneKey;
+  state.stepIndex = 0;
+  syncStepTimer();
+  render();
+}
+
+function syncStepTimer() {
+  clearInterval(state.stepTimer);
+  state.stepTimer = setInterval(() => {
+    const total = SCENARIOS[state.sceneKey].timeline.length;
+    state.stepIndex = Math.min(state.stepIndex + 1, total - 1);
+    render();
+  }, 1200);
+}
+
+function syncAutoTimer() {
+  clearInterval(state.autoTimer);
+  if (!state.autoPlay) {
+    return;
+  }
+  state.autoTimer = setInterval(() => {
+    const idx = SCENE_ORDER.indexOf(state.sceneKey);
+    setScene(SCENE_ORDER[(idx + 1) % SCENE_ORDER.length]);
+  }, AUTO_DWELL_MS);
+}
+
+setInterval(() => {
+  state.clock = new Date();
+  const clockNode = document.querySelector(".metric.clock b");
+  if (clockNode) {
+    clockNode.textContent = state.clock.toLocaleTimeString();
+  }
+}, 1000);
+
+syncStepTimer();
+render();
