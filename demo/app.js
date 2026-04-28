@@ -82,6 +82,16 @@ const BASE_DRONES = [
   { id: "UAV-05", x: 66, y: 63, color: "#d7a1ff" },
 ];
 
+function shiftDrone(drone, dx, dy, state) {
+  return {
+    id: drone.id,
+    x: drone.x + dx,
+    y: drone.y + dy,
+    color: drone.color,
+    state: state,
+  };
+}
+
 const COMMON = {
   groundStation: { x: 8, y: 86 },
   targetPoint: { x: 82, y: 22 },
@@ -103,7 +113,7 @@ const SCENARIOS = {
     },
     mapHint: "目标激活，航迹高亮，无人机进入执行态。",
     targetState: "active",
-    drones: BASE_DRONES.map((d, i) => ({ ...d, x: d.x + (i + 1) * 4, y: d.y - (i % 2 ? 16 : 10), state: "takeoff" })),
+    drones: BASE_DRONES.map((d, i) => shiftDrone(d, (i + 1) * 4, -(i % 2 ? 16 : 10), "takeoff")),
     paths: [
       { from: [18, 70], to: [28, 56], cls: "path allow" },
       { from: [27, 58], to: [39, 45], cls: "path allow" },
@@ -132,7 +142,7 @@ const SCENARIOS = {
     },
     mapHint: "风险区告警，目标锁定，无人机保持当前位置。",
     targetState: "locked",
-    drones: BASE_DRONES.map((d) => ({ ...d, state: "hold" })),
+    drones: BASE_DRONES.map((d) => shiftDrone(d, 0, 0, "hold")),
     paths: [{ from: [39, 66], to: [82, 22], cls: "path denied" }],
     timeline: [
       ["00:00", "mission_request", "任务 mission-bravo 已提交", "neutral"],
@@ -156,7 +166,7 @@ const SCENARIOS = {
     },
     mapHint: "任务暂停，等待人工确认。",
     targetState: "pending",
-    drones: BASE_DRONES.map((d, i) => ({ ...d, x: d.x + (i % 2 ? 3 : -2), y: d.y + (i % 2 ? -4 : 2), state: "confirm" })),
+    drones: BASE_DRONES.map((d, i) => shiftDrone(d, i % 2 ? 3 : -2, i % 2 ? -4 : 2, "confirm")),
     paths: [
       { from: [27, 58], to: [56, 36], cls: "path pending" },
       { from: [39, 66], to: [63, 30], cls: "path pending" },
@@ -183,7 +193,7 @@ const SCENARIOS = {
     },
     mapHint: "SITL后端路径已预留，真实后端尚未连接。",
     targetState: "sitl",
-    drones: BASE_DRONES.map((d, i) => ({ ...d, x: d.x + (i % 2 ? 1 : -1), y: d.y - (i % 2 ? 2 : 1), state: "sitl" })),
+    drones: BASE_DRONES.map((d, i) => shiftDrone(d, i % 2 ? 1 : -1, -(i % 2 ? 2 : 1), "sitl")),
     paths: [{ from: [18, 70], to: [30, 50], cls: "path sitl" }],
     timeline: [
       ["00:00", "mission_request", "任务 mission-delta 已提交", "neutral"],
@@ -214,7 +224,11 @@ const state = {
 const root = document.getElementById("root");
 
 const explain = (value, map) => map[value] || value;
-const esc = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+const esc = (value) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 
 function kv(label, value, strong = false) {
   return `<div class="kv"><span>${esc(label)}</span><span class="value${strong ? " strong" : ""}">${esc(value)}</span></div>`;
