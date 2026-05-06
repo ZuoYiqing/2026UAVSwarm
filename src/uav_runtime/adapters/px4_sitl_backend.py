@@ -11,6 +11,7 @@ v1 target (future):
 """
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
@@ -38,6 +39,10 @@ class Px4SitlBackend:
     def status(self) -> str:
         return self.session.status()
 
+    @staticmethod
+    def _is_pymavlink_available() -> bool:
+        return importlib.util.find_spec("pymavlink") is not None
+
     def describe(self) -> dict[str, Any]:
         return {
             "backend": self.name,
@@ -60,6 +65,13 @@ class Px4SitlBackend:
                 "ok": False,
                 "code": "sitl_not_configured",
                 "reason": "sitl_backend_disabled",
+                "status": status,
+            }
+        if not self._is_pymavlink_available():
+            return {
+                "ok": False,
+                "code": "dependency_missing",
+                "reason": "pymavlink_not_installed",
                 "status": status,
             }
         if status == "not_connected":
@@ -86,12 +98,13 @@ class Px4SitlBackend:
             "accepted": False,
             "code": code,
             "message": "px4_sitl_backend_placeholder",
-            "detail": "not_implemented",
-            "evidence_ref": "sitl://px4/not_implemented",
+            "detail": str(probe.get("reason", "not_implemented")),
+            "evidence_ref": f"sitl://px4/{code}",
             "execution_trace": {
                 "backend_impl": self.name,
                 "backend_status": status,
                 "probe_code": code,
+                "probe_reason": str(probe.get("reason", "")),
                 "action": action,
                 "mapped_action": mapping.get("mavlink_action", ""),
                 "args_keys": sorted(args.keys()),
