@@ -1,6 +1,8 @@
 """CLI skeleton tests aligned with currently supported commands."""
 from __future__ import annotations
 
+import json
+
 from uav_runtime.console.cli import build_parser, main
 from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 
@@ -94,3 +96,29 @@ def test_main_accepts_submit_action_with_mavlink_sitl_wiring_flags() -> None:
         "sitl",
     ])
     assert rc == 0
+
+
+def test_parser_accepts_check_backend_command() -> None:
+    args = build_parser().parse_args([
+        "check-backend",
+        "--backend",
+        "px4_sitl",
+        "--backend-mode",
+        "sitl",
+        "--backend-enabled",
+        "--transport-endpoint",
+        "udp://127.0.0.1:14540",
+    ])
+    assert args.cmd == "check-backend"
+    assert args.backend == "px4_sitl"
+    assert args.backend_mode == "sitl"
+    assert args.backend_enabled is True
+
+
+def test_main_check_backend_outputs_readiness_json(capsys) -> None:
+    rc = main(["check-backend", "--backend-enabled"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["backend"] == "px4_sitl"
+    assert payload["dependency"]["name"] == "pymavlink"
+    assert payload["readiness"] == "not_ready"

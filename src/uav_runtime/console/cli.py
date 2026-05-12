@@ -8,6 +8,8 @@ from typing import Any
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
+from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
+from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
@@ -66,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_audit = sub.add_parser("show-audit")
     _add_pretty_arg(show_audit)
+
+    c = sub.add_parser("check-backend")
+    _add_pretty_arg(c)
+    c.add_argument("--backend", choices=["px4_sitl"], default="px4_sitl")
+    c.add_argument("--backend-mode", choices=["stub", "sitl"], default="sitl")
+    c.add_argument("--backend-enabled", action="store_true")
+    c.add_argument("--transport-endpoint", default="")
+    c.add_argument("--connect-timeout-ms", type=int, default=3000)
+    c.add_argument("--timeout-ms", type=int, default=3000)
+    c.add_argument("--retry-count", type=int, default=0)
 
     r = sub.add_parser("replay-last")
     _add_pretty_arg(r)
@@ -143,6 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         req = _build_request_from_args(args)
         result = rt.handle_action_request(req)
         out = _attach_policy_snapshot(result, str(rt.audit.path))
+    elif args.cmd == "check-backend":
+        session = MavlinkBackendSession.from_config(mav_cfg)
+        backend = Px4SitlBackend(mav_cfg, session)
+        out = backend.readiness_diagnostic()
     elif args.cmd == "replay-last":
         out = replay_last(args.path, n=args.n)
     else:

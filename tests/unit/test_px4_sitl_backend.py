@@ -29,7 +29,7 @@ def test_px4_sitl_backend_returns_stable_placeholder_semantics() -> None:
     assert raw["accepted"] is False
     assert raw["code"] in {"dependency_missing", "backend_probe_failed"}
     assert raw["message"] == "px4_sitl_backend_placeholder"
-    assert raw["detail"] in {"pymavlink_not_installed", "px4_sitl_backend_not_implemented"}
+    assert raw["detail"] in {"pymavlink_not_installed", "heartbeat_timeout", "connection_failed", "probe_exception"}
     assert raw["evidence_ref"].startswith("sitl://px4/")
     assert raw["execution_trace"]["backend_impl"] == "px4_sitl_backend"
     assert raw["execution_trace"]["integration_stage"] == "placeholder"
@@ -68,3 +68,83 @@ def test_px4_sitl_backend_dependency_missing_probe_is_stable(monkeypatch) -> Non
     assert raw["code"] == "dependency_missing"
     assert raw["detail"] == "pymavlink_not_installed"
     assert raw["execution_trace"]["probe_code"] == "dependency_missing"
+
+
+def test_px4_sitl_backend_readiness_diagnostic_dependency_missing(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: False))
+
+    diag = backend.readiness_diagnostic()
+
+    assert diag["backend"] == "px4_sitl"
+    assert diag["dependency"]["name"] == "pymavlink"
+    assert diag["dependency"]["present"] is False
+    assert diag["backend_enabled"] is True
+    assert diag["backend_mode"] == "sitl"
+    assert diag["transport_endpoint_configured"] is True
+    assert diag["connect_timeout_ms"] == 3000
+    assert diag["connect_probe"]["code"] == "dependency_missing"
+    assert diag["connect_probe"]["reason"] == "pymavlink_not_installed"
+    assert diag["readiness"] == "not_ready"
+
+
+def test_px4_sitl_backend_readiness_diagnostic_endpoint_missing(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    diag = backend.readiness_diagnostic()
+
+    assert diag["transport_endpoint"] == ""
+    assert diag["transport_endpoint_configured"] is False
+    assert diag["connect_probe"]["code"] == "backend_not_configured"
+    assert diag["connect_probe"]["reason"] == "transport_endpoint_missing"
+    assert diag["readiness"] == "not_ready"
+
+
+def test_px4_sitl_backend_probe_maps_timeout_reason(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+    monkeypatch.setattr(Px4SitlBackend, "_probe_via_pymavlink", lambda self: (False, "heartbeat_timeout"))
+
+    probe = backend.connect_probe()
+
+    assert probe["ok"] is False
+    assert probe["code"] == "backend_probe_failed"
+    assert probe["reason"] == "heartbeat_timeout"
+
+
+def test_px4_sitl_backend_probe_maps_exception_reason(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+    monkeypatch.setattr(Px4SitlBackend, "_probe_via_pymavlink", lambda self: (False, "probe_exception"))
+
+    probe = backend.connect_probe()
+
+    assert probe["ok"] is False
+    assert probe["code"] == "backend_probe_failed"
+    assert probe["reason"] == "probe_exception"
+
+
+def test_px4_sitl_backend_probe_success_returns_backend_connected(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    session = MavlinkBackendSession.from_config(cfg)
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+    monkeypatch.setattr(Px4SitlBackend, "_probe_via_pymavlink", lambda self: (True, "backend_connected"))
+
+    probe = backend.connect_probe()
+    diag = backend.readiness_diagnostic()
+
+    assert probe["ok"] is True
+    assert probe["code"] == "backend_connected"
+    assert probe["status"] == "connected"
+    assert diag["connect_probe"]["code"] == "backend_connected"
+    assert diag["readiness"] == "ready"

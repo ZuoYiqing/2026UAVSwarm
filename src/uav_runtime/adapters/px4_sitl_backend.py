@@ -12,7 +12,7 @@ v1 target (future):
 from __future__ import annotations
 
 import importlib.util
-from typing import Any
+from typing import Any, Tuple
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
@@ -58,6 +58,57 @@ class Px4SitlBackend:
             "planned_transport": "single_endpoint",
         }
 
+    def _probe_via_pymavlink(self) -> Tuple[bool, str]:
+        """Best-effort connect probe (no control command).
+
+        Returns:
+            (ok, reason)
+        """
+        try:
+            from pymavlink import mavutil  # type: ignore
+
+            conn = mavutil.mavlink_connection(
+                self.config.transport_endpoint,
+                timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1),
+            )
+            hb = conn.wait_heartbeat(timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
+            if hb is None:
+                return False, "heartbeat_timeout"
+            return True, "backend_connected"
+        except TimeoutError:
+            return False, "heartbeat_timeout"
+        except OSError:
+            return False, "connection_failed"
+        except Exception:
+            return False, "probe_exception"
+
+    def readiness_diagnostic(self) -> dict[str, Any]:
+        probe = self.connect_probe()
+        code = str(probe.get("code", "backend_probe_failed"))
+        reason = str(probe.get("reason", "unknown"))
+        status = str(probe.get("status", self.session.status()))
+        dep_ok = self._is_pymavlink_available()
+        endpoint = str(self.config.transport_endpoint or "").strip()
+        endpoint_configured = bool(endpoint)
+        ready = bool(
+            dep_ok
+            and self.config.backend_mode == "sitl"
+            and bool(self.config.backend_enabled)
+            and endpoint_configured
+            and code not in {"dependency_missing", "sitl_not_configured", "backend_not_configured"}
+        )
+        return {
+            "backend": "px4_sitl",
+            "dependency": {"name": "pymavlink", "present": dep_ok},
+            "backend_enabled": bool(self.config.backend_enabled),
+            "backend_mode": self.config.backend_mode,
+            "transport_endpoint": endpoint,
+            "transport_endpoint_configured": endpoint_configured,
+            "connect_timeout_ms": self.config.connect_timeout_ms,
+            "connect_probe": {"code": code, "reason": reason, "status": status},
+            "readiness": "ready" if ready else "not_ready",
+        }
+
     def connect_probe(self) -> dict[str, Any]:
         status = self.session.status()
         if status == "not_configured":
@@ -65,6 +116,13 @@ class Px4SitlBackend:
                 "ok": False,
                 "code": "sitl_not_configured",
                 "reason": "sitl_backend_disabled",
+                "status": status,
+            }
+        if not str(self.config.transport_endpoint or "").strip():
+            return {
+                "ok": False,
+                "code": "backend_not_configured",
+                "reason": "transport_endpoint_missing",
                 "status": status,
             }
         if not self._is_pymavlink_available():
@@ -75,10 +133,18 @@ class Px4SitlBackend:
                 "status": status,
             }
         if status == "not_connected":
+            ok, reason = self._probe_via_pymavlink()
+            if ok:
+                return {
+                    "ok": True,
+                    "code": "backend_connected",
+                    "reason": "backend_connected",
+                    "status": "connected",
+                }
             return {
                 "ok": False,
                 "code": "backend_probe_failed",
-                "reason": "px4_sitl_backend_not_implemented",
+                "reason": reason,
                 "status": status,
             }
         return {
