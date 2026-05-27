@@ -90,13 +90,7 @@ class Px4SitlBackend:
         dep_ok = self._is_pymavlink_available()
         endpoint = str(self.config.transport_endpoint or "").strip()
         endpoint_configured = bool(endpoint)
-        ready = bool(
-            dep_ok
-            and self.config.backend_mode == "sitl"
-            and bool(self.config.backend_enabled)
-            and endpoint_configured
-            and code not in {"dependency_missing", "sitl_not_configured", "backend_not_configured"}
-        )
+        ready = code == "backend_connected"
         return {
             "backend": "px4_sitl",
             "dependency": {"name": "pymavlink", "present": dep_ok},

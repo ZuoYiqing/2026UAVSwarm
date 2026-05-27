@@ -133,3 +133,29 @@ python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mod
 - 环境信息（Python 版本、pymavlink 版本）。
 
 该记录将作为后续真实动作接入（仍先单动作）前的基线证据。
+
+
+## 8) backend_connected 手工验证准备（进入 smoke 前置）
+
+`backend_connected` 是进入“真实 takeoff smoke（仍仅 SITL）”前的**前置条件**，但它本身不代表已执行任何飞控动作。
+
+请在验证记录中明确保存以下信息：
+- PX4 SITL 启动命令（完整命令行）；
+- SITL 实际监听 endpoint（与 `--transport-endpoint` 一致）；
+- `check-backend` 原始 JSON 输出。
+
+关键解释：
+- `backend_connected` 仅表示 `pymavlink` 已完成最小连接/heartbeat probe；
+- 不等于 `arm`/`set_mode`/`takeoff` 成功；
+- 本阶段 adapter 侧只做 MAVLink heartbeat/probe，不发送控制命令。
+
+---
+
+## 9) 启动与执行原则（通用）
+
+- PX4 SITL 需独立启动（与 runtime 进程解耦）；
+- 推荐先使用单机 endpoint（如 `udp://127.0.0.1:14540`）；
+- 暂不做多机 endpoint 验证；
+- 暂不执行 `arm` / `set_mode` / `takeoff`。
+
+---

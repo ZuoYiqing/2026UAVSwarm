@@ -113,10 +113,12 @@ def test_px4_sitl_backend_probe_maps_timeout_reason(monkeypatch) -> None:
     monkeypatch.setattr(Px4SitlBackend, "_probe_via_pymavlink", lambda self: (False, "heartbeat_timeout"))
 
     probe = backend.connect_probe()
+    diag = backend.readiness_diagnostic()
 
     assert probe["ok"] is False
     assert probe["code"] == "backend_probe_failed"
     assert probe["reason"] == "heartbeat_timeout"
+    assert diag["readiness"] == "not_ready"
 
 
 def test_px4_sitl_backend_probe_maps_exception_reason(monkeypatch) -> None:
@@ -127,10 +129,12 @@ def test_px4_sitl_backend_probe_maps_exception_reason(monkeypatch) -> None:
     monkeypatch.setattr(Px4SitlBackend, "_probe_via_pymavlink", lambda self: (False, "probe_exception"))
 
     probe = backend.connect_probe()
+    diag = backend.readiness_diagnostic()
 
     assert probe["ok"] is False
     assert probe["code"] == "backend_probe_failed"
     assert probe["reason"] == "probe_exception"
+    assert diag["readiness"] == "not_ready"
 
 
 def test_px4_sitl_backend_probe_success_returns_backend_connected(monkeypatch) -> None:
