@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import json
 
-from uav_runtime.policy.gate import REASON_CODE_CONFIRMATION_REQUIRED, REASON_CODE_RISK_LEVEL_EXCEEDED
+from uav_runtime.policy.gate import (
+    REASON_CODE_CONFIRMATION_REQUIRED,
+    REASON_CODE_DELEGATION_REQUIRED,
+    REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED,
+    REASON_CODE_RISK_LEVEL_EXCEEDED,
+)
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
@@ -242,27 +247,71 @@ def test_runtime_with_explicit_mavlink_sitl_enabled_without_backend_returns_not_
         ),
     )
 
+
+def test_runtime_delegated_peer_without_delegation_is_denied_and_auditable(tmp_path) -> None:
+    audit = tmp_path / "runtime_delegation_denied.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit))
+
     req = ActionRequest(
-        action="takeoff",
-        params={},
-        source=CommandSource.SELF_LOCAL,
-        scope=AuthorityScope.SELF_ONLY,
-        request_id="req-mavlink-sitl-enabled-001",
-        mission_id="mission-mavlink-sitl-enabled-001",
-        action_type="takeoff",
+        action="goto",
+        params={"x": 1, "y": 2},
+        source=CommandSource.DELEGATED_PEER,
+        scope=AuthorityScope.PEER_CONTROL_LIMITED,
+        request_id="req-delegation-deny-001",
+        mission_id="mission-delegation-deny-001",
+        action_type="goto",
         skill_group="flight_core",
-        target_set=["self"],
-        requested_scope=AuthorityScope.SELF_ONLY,
+        target_set=["peer-1"],
+        requested_scope=AuthorityScope.PEER_CONTROL_LIMITED,
         risk_hint=1,
         priority_hint=50,
         requires_confirmation_hint=False,
-        idempotency_key="idem-mavlink-sitl-enabled-001",
+        idempotency_key="idem-delegation-deny-001",
     )
 
     res = rt.handle_action_request(req)
-
-    assert res["request_id"] == "req-mavlink-sitl-enabled-001"
+    assert res["status"] == "blocked"
     assert res["accepted"] is False
-    assert res["status"] == "rejected"
-    assert res["adapter"] == "mavlink"
-    assert res["code"] == "smoke_not_connected"
+    assert res["code"] == REASON_CODE_DELEGATION_REQUIRED
+
+    events = _read_audit_events(audit)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    assert decision_events
+    last = decision_events[-1]
+    assert _normalize_decision_code(last.get("decision_code")) == "DENY"
+    assert last.get("primary_reason_code") == REASON_CODE_DELEGATION_REQUIRED
+
+
+def test_runtime_link_lost_non_fallback_source_denied_and_auditable(tmp_path) -> None:
+    audit = tmp_path / "runtime_link_lost_nonfallback.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit))
+
+    req = ActionRequest(
+        action="goto",
+        params={"x": 1, "y": 2, "demo_link_state": "lost"},
+        source=CommandSource.CLUSTER_HEAD,
+        scope=AuthorityScope.PEER_CONTROL_LIMITED,
+        request_id="req-linklost-nonfallback-001",
+        mission_id="mission-linklost-nonfallback-001",
+        action_type="goto",
+        skill_group="flight_core",
+        target_set=["peer-1"],
+        requested_scope=AuthorityScope.PEER_CONTROL_LIMITED,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-linklost-nonfallback-001",
+    )
+
+    res = rt.handle_action_request(req)
+    assert res["status"] == "blocked"
+    assert res["accepted"] is False
+    assert res["code"] == REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED
+
+    events = _read_audit_events(audit)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    assert decision_events
+    last = decision_events[-1]
+    assert _normalize_decision_code(last.get("decision_code")) == "DENY"
+    assert last.get("primary_reason_code") == REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED
+
