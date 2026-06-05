@@ -2,6 +2,7 @@
 
 from uav_runtime.adapters.fake_adapter import FakeAdapter
 from uav_runtime.adapters.mavlink_adapter import MavlinkAdapter
+from uav_runtime.adapters.payload_adapter import PayloadAdapter
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 
-__all__ = ["FakeAdapter", "MavlinkAdapter", "Px4SitlBackend"]
+__all__ = ["FakeAdapter", "MavlinkAdapter", "PayloadAdapter", "Px4SitlBackend"]
