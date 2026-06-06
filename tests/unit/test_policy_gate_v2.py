@@ -29,8 +29,8 @@ def _profile() -> PolicyProfile:
     )
 
 
-def _act(risk: int = 1, require_confirm: bool = False) -> RuntimeActionContext:
-    return RuntimeActionContext(task_id="t1", action="hover", risk_level=risk, require_confirm=require_confirm)
+def _act(risk: int = 1, require_confirm: bool = False, action: str = "hover") -> RuntimeActionContext:
+    return RuntimeActionContext(task_id="t1", action=action, risk_level=risk, require_confirm=require_confirm)
 
 
 def _ctx(source: CommandSource, *, link: LinkState = LinkState.HEALTHY, scope: AuthorityScope = AuthorityScope.SELF_ONLY) -> PolicyContext:
@@ -78,7 +78,7 @@ def test_link_lost_non_fallback_source_denied() -> None:
 
 def test_link_lost_self_local_fallback_allow() -> None:
     ctx = _ctx(CommandSource.SELF_LOCAL, link=LinkState.LOST)
-    out = unified_policy_gate(ctx, _act(risk=1), _profile())
+    out = unified_policy_gate(ctx, _act(risk=1, action="hold_position"), _profile())
     assert out.decision_code == DecisionCode.ALLOW
 
 

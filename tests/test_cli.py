@@ -122,3 +122,36 @@ def test_main_check_backend_outputs_readiness_json(capsys) -> None:
     assert payload["backend"] == "px4_sitl"
     assert payload["dependency"]["name"] == "pymavlink"
     assert payload["readiness"] == "not_ready"
+
+
+def test_parser_accepts_payload_adapter_override_for_submit_action() -> None:
+    args = build_parser().parse_args(["submit-action", "health_query", "--adapter", "payload"])
+
+    assert args.cmd == "submit-action"
+    assert args.action == "health_query"
+    assert args.adapter == "payload"
+
+
+def test_main_submit_action_with_payload_adapter_outputs_result_and_policy(capsys) -> None:
+    rc = main(["submit-action", "health_query", "--adapter", "payload"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["accepted"] is True
+    assert payload["result"]["adapter"] == "payload"
+    assert payload["result"]["code"] == "payload_placeholder_ok"
+    assert payload["result"]["execution_trace"]["device_type"] == "health_monitor"
+    assert payload["policy_decision_event"]["decision_code"] == "allow"
+
+
+def test_main_submit_action_with_payload_adapter_keeps_unsupported_stable(capsys) -> None:
+    rc = main(["submit-action", "payload_release", "--adapter", "payload"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"]["accepted"] is False
+    assert payload["result"]["status"] == "blocked"
+    assert payload["result"]["adapter"] == ""
+    assert payload["result"]["code"] == "REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED"
+    assert payload["policy_decision_event"]["decision_code"] == "deny"
+    assert payload["policy_decision_event"]["primary_reason_code"] == "REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED"

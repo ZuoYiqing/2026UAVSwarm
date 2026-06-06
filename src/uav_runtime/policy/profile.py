@@ -21,3 +21,47 @@ class PolicyProfile:
     fallback_behavior: dict[str, Any] = field(default_factory=dict)
     recovery_behavior: dict[str, Any] = field(default_factory=dict)
     runtime_constraints: dict[str, Any] = field(default_factory=dict)
+
+
+def build_policy_profile(name: str = "standard") -> PolicyProfile:
+    """Build a minimal Policy Profile v0.2 profile by name."""
+    normalized = (name or "standard").strip().lower()
+    if normalized == "conservative":
+        return PolicyProfile(
+            name="conservative",
+            allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
+            max_risk_when_link_lost=1,
+            require_confirm_for_risk_ge=2,
+            allow_without_confirm=False,
+            runtime_constraints={"max_risk_allow": 3, "degraded_high_risk": "deny"},
+            fallback_behavior={"lost_link_profile": "conservative", "lost_link_fallback_only": True},
+        )
+    if normalized == "aggressive":
+        return PolicyProfile(
+            name="aggressive",
+            allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
+            max_risk_when_link_lost=1,
+            require_confirm_for_risk_ge=4,
+            allow_without_confirm=False,
+            runtime_constraints={"max_risk_allow": 5, "degraded_high_risk": "require_confirm"},
+            fallback_behavior={"lost_link_profile": "aggressive", "lost_link_fallback_only": True},
+        )
+    if normalized == "lost_link":
+        return PolicyProfile(
+            name="lost_link",
+            allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
+            max_risk_when_link_lost=1,
+            require_confirm_for_risk_ge=2,
+            allow_without_confirm=False,
+            runtime_constraints={"max_risk_allow": 2, "degraded_high_risk": "require_confirm"},
+            fallback_behavior={"lost_link_profile": "lost_link", "lost_link_fallback_only": True},
+        )
+    return PolicyProfile(
+        name="standard",
+        allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],
+        max_risk_when_link_lost=1,
+        require_confirm_for_risk_ge=3,
+        allow_without_confirm=False,
+        runtime_constraints={"max_risk_allow": 4, "degraded_high_risk": "require_confirm"},
+        fallback_behavior={"lost_link_profile": "standard", "lost_link_fallback_only": True},
+    )

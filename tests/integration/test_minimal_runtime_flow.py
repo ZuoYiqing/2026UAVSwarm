@@ -8,11 +8,13 @@ from uav_runtime.policy.gate import (
     REASON_CODE_DELEGATION_REQUIRED,
     REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED,
     REASON_CODE_RISK_LEVEL_EXCEEDED,
+    REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED,
 )
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
+from uav_runtime.runtime.replay import replay_last
 
 
 def _read_audit_events(path) -> list[dict]:
@@ -129,7 +131,7 @@ def test_minimal_runtime_deny_flow_link_lost_high_risk(tmp_path) -> None:
     assert res["request_id"] == "req-deny-001"
     assert res["status"] == "blocked"
     assert res["accepted"] is False
-    assert res["code"] == REASON_CODE_RISK_LEVEL_EXCEEDED
+    assert res["code"] == REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED
 
     events = _read_audit_events(audit)
     decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
@@ -314,4 +316,91 @@ def test_runtime_link_lost_non_fallback_source_denied_and_auditable(tmp_path) ->
     last = decision_events[-1]
     assert _normalize_decision_code(last.get("decision_code")) == "DENY"
     assert last.get("primary_reason_code") == REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED
+
+
+def test_runtime_payload_health_query_executes_and_is_auditable(tmp_path) -> None:
+    audit = tmp_path / "runtime_payload_health_query.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit), adapter_name="payload")
+
+    req = ActionRequest(
+        action="health_query",
+        params={},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-payload-health-001",
+        mission_id="mission-payload-health-001",
+        action_type="health_query",
+        skill_group="payload",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-payload-health-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-payload-health-001"
+    assert res["accepted"] is True
+    assert res["status"] == "accepted"
+    assert res["code"] == "payload_placeholder_ok"
+    assert res["adapter"] == "payload"
+    assert res["evidence_ref"] == "payload://health_monitor/placeholder"
+    assert res["execution_trace"]["device_type"] == "health_monitor"
+
+    events = _read_audit_events(audit)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    action_results = [e for e in events if e.get("type") == "action_result"]
+
+    assert decision_events
+    last_decision = decision_events[-1]
+    assert _normalize_decision_code(last_decision.get("decision_code")) == "ALLOW"
+    assert last_decision.get("primary_reason_code") is None
+
+    assert action_results
+    last_result = action_results[-1]
+    assert last_result["adapter"] == "payload"
+    assert last_result["code"] == "payload_placeholder_ok"
+    assert last_result["execution_trace"]["device_type"] == "health_monitor"
+
+    replayed = replay_last(str(audit), n=5)
+    assert any(e.get("type") == "action_result" and e.get("adapter") == "payload" for e in replayed)
+
+
+def test_runtime_payload_unsupported_action_is_auditable(tmp_path) -> None:
+    audit = tmp_path / "runtime_payload_unsupported.audit.jsonl"
+    rt = RuntimeOrchestrator(str(audit), adapter_name="payload")
+
+    req = ActionRequest(
+        action="payload_release",
+        params={},
+        source=CommandSource.SELF_LOCAL,
+        scope=AuthorityScope.SELF_ONLY,
+        request_id="req-payload-unsupported-001",
+        mission_id="mission-payload-unsupported-001",
+        action_type="payload_release",
+        skill_group="payload",
+        target_set=["self"],
+        requested_scope=AuthorityScope.SELF_ONLY,
+        risk_hint=1,
+        priority_hint=50,
+        requires_confirmation_hint=False,
+        idempotency_key="idem-payload-unsupported-001",
+    )
+
+    res = rt.handle_action_request(req)
+
+    assert res["request_id"] == "req-payload-unsupported-001"
+    assert res["accepted"] is False
+    assert res["status"] == "blocked"
+    assert res["code"] == REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED
+    assert res["adapter"] == ""
+
+    events = _read_audit_events(audit)
+    decision_events = [e for e in events if e.get("type") == "policy_decision_event"]
+    action_results = [e for e in events if e.get("type") == "action_result"]
+    assert _normalize_decision_code(decision_events[-1].get("decision_code")) == "DENY"
+    assert decision_events[-1]["primary_reason_code"] == REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED
+    assert action_results == []
 

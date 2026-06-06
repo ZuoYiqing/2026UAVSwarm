@@ -123,3 +123,34 @@ Payload adapter 与 fake/mavlink adapter 共享最小 raw result contract：
 python -m pytest tests/unit/test_payload_adapter.py -q
 python -m pytest -q
 ```
+
+---
+
+## 9) Runtime wiring 与 audit/replay 集成
+
+Payload adapter 进入 runtime wiring 后，仍保持默认执行路径不变：未显式选择 adapter 时继续使用 `fake`，只有显式选择 `payload` 时才进入 payload/device stub。
+
+### 选择方式
+
+- Runtime：`RuntimeOrchestrator(adapter_name="payload")`
+- CLI：`submit-action health_query --adapter payload`
+
+### 当前最小 CLI 动作
+
+为避免引入复杂参数系统，当前 CLI 优先使用无必填参数动作：
+
+- `health_query`
+- `sensor_read`
+- `camera_capture`
+
+需要参数的动作（例如 `gimbal_set_angle`、`speaker_play_message`、`light_set_state`）暂时仍由 runtime/API 层传入 params，后续如确有需要再设计极简 `--params-json`。
+
+### audit/replay 期望
+
+payload 路径与 fake/mavlink 路径保持一致，成功或 unsupported 都应产生：
+
+- `policy_decision_event`
+- `action_result`
+- 可由 `replay-last` / replay 工具读取的 audit record
+
+其中 `action_result.adapter == "payload"`，支持动作返回 `payload_placeholder_ok`，unsupported 动作返回 `exec_unsupported`。

@@ -14,6 +14,15 @@ from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
 
+PAYLOAD_ACTIONS = {
+    "camera_capture",
+    "gimbal_set_angle",
+    "speaker_play_message",
+    "light_set_state",
+    "sensor_read",
+    "health_query",
+}
+
 
 def _print_output(payload: object, pretty: bool = False) -> None:
     if pretty:
@@ -103,6 +112,9 @@ def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
             requires_confirmation_hint=False,
         )
 
+    selected_adapter = str(getattr(args, "adapter", DEFAULT_ADAPTER_NAME) or DEFAULT_ADAPTER_NAME)
+    skill_group = "payload" if selected_adapter == "payload" and args.action in PAYLOAD_ACTIONS else "flight_core"
+
     return ActionRequest(
         action=args.action,
         params={"demo_link_state": args.demo_link_state},
@@ -110,7 +122,7 @@ def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
         scope=AuthorityScope.SELF_ONLY,
         mission_id=args.mission_id,
         action_type=args.action,
-        skill_group="flight_core",
+        skill_group=skill_group,
         target_set=["self"],
         risk_hint=args.risk_hint,
         priority_hint=50,

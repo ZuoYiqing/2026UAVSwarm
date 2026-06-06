@@ -3,8 +3,13 @@ from __future__ import annotations
 
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.decision import HandoverPlan, PolicyDecisionEnvelope
+from uav_runtime.policy.fallback_actions import (
+    DEGRADED_REQUIRE_CONFIRM_ACTIONS,
+    is_lost_link_fallback_action,
+    is_unsafe_payload_action,
+)
 from uav_runtime.policy.profile import PolicyProfile
-from uav_runtime.protocol.enums import CommandSource, DecisionCode, LinkState
+from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 
 
 # decision-code constants for non-enum contract branches
@@ -23,6 +28,8 @@ REASON_CODE_PREEMPT_REVERSE_HIERARCHY_DENIED = "REASON_CODE_PREEMPT_REVERSE_HIER
 REASON_CODE_PREEMPT_GRANTED = "REASON_CODE_PREEMPT_GRANTED"
 REASON_CODE_DEGRADED_CONFIRM_REQUIRED = "REASON_CODE_DEGRADED_CONFIRM_REQUIRED"
 REASON_CODE_RECOVERING_DEFER = "REASON_CODE_RECOVERING_DEFER"
+REASON_CODE_PROFILE_RISK_EXCEEDS_MAX = "REASON_CODE_PROFILE_RISK_EXCEEDS_MAX"
+REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED = "REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED"
 
 SOURCE_PRIORITY: dict[CommandSource, int] = {
     CommandSource.GROUND_STATION: 100,
@@ -67,13 +74,26 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
                 audit_tags=["policy", "deny", "delegation"],
             )
 
+    action_type = (actx.action or "").strip()
+
+    if is_unsafe_payload_action(action_type):
+        return PolicyDecisionEnvelope(
+            decision_code=DecisionCode.DENY,
+            primary_reason_code=REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED,
+            effective_scope=ctx.scope,
+            effective_profile_id=profile.name,
+            effective_risk_level=actx.risk_level,
+            policy_trace_id=f"policy-{actx.task_id}",
+            audit_tags=["policy", "deny", "unsafe_payload"],
+        )
+
     # 6) scope 收缩
     effective_scope = ctx.scope
     secondary: list[str] = []
     if ctx.link_state == LinkState.LOST:
         effective_scope = "self_only"
         secondary.append(REASON_CODE_LINK_LOST_SCOPE_RESTRICTED)
-        if ctx.source != CommandSource.SELF_LOCAL:
+        if ctx.source != CommandSource.SELF_LOCAL or ctx.scope != AuthorityScope.SELF_ONLY:
             return PolicyDecisionEnvelope(
                 decision_code=DecisionCode.DENY,
                 primary_reason_code=REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED,
@@ -82,7 +102,18 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
                 effective_profile_id=profile.name,
                 effective_risk_level=actx.risk_level,
                 policy_trace_id=f"policy-{actx.task_id}",
-                audit_tags=["policy", "deny", "link_lost"],
+                audit_tags=["policy", "deny", "link_lost", "scope"],
+            )
+        if not is_lost_link_fallback_action(action_type):
+            return PolicyDecisionEnvelope(
+                decision_code=DecisionCode.DENY,
+                primary_reason_code=REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED,
+                secondary_reason_codes=secondary,
+                effective_scope=effective_scope,
+                effective_profile_id=profile.name,
+                effective_risk_level=actx.risk_level,
+                policy_trace_id=f"policy-{actx.task_id}",
+                audit_tags=["policy", "deny", "link_lost", "fallback_required"],
             )
 
     # 4) source priority 计算
@@ -125,7 +156,21 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
             audit_tags=["policy", "deny", "preempt"],
         )
 
-    if ctx.link_state == LinkState.DEGRADED and actx.risk_level >= profile.require_confirm_for_risk_ge:
+    if ctx.link_state == LinkState.DEGRADED and (
+        actx.risk_level >= profile.require_confirm_for_risk_ge or action_type in DEGRADED_REQUIRE_CONFIRM_ACTIONS
+    ):
+        degraded_behavior = str(profile.runtime_constraints.get("degraded_high_risk", "require_confirm"))
+        if degraded_behavior == "deny":
+            return PolicyDecisionEnvelope(
+                decision_code=DecisionCode.DENY,
+                primary_reason_code=REASON_CODE_PROFILE_RISK_EXCEEDS_MAX,
+                secondary_reason_codes=secondary,
+                effective_scope=effective_scope,
+                effective_profile_id=profile.name,
+                effective_risk_level=actx.risk_level,
+                policy_trace_id=f"policy-{actx.task_id}",
+                audit_tags=["policy", "deny", "degraded", "profile"],
+            )
         return PolicyDecisionEnvelope(
             decision_code=DECISION_REQUIRE_CONFIRM,
             primary_reason_code=REASON_CODE_DEGRADED_CONFIRM_REQUIRED,
@@ -152,7 +197,7 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
     if ctx.link_state == LinkState.LOST and actx.risk_level > profile.max_risk_when_link_lost:
         return PolicyDecisionEnvelope(
             decision_code=DecisionCode.DENY,
-            primary_reason_code=REASON_CODE_RISK_LEVEL_EXCEEDED,
+            primary_reason_code=REASON_CODE_PROFILE_RISK_EXCEEDS_MAX,
             secondary_reason_codes=secondary,
             effective_scope=effective_scope,
             effective_profile_id=profile.name,

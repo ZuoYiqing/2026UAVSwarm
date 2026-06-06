@@ -1,12 +1,14 @@
 """本轮最后修补点：非 ALLOW 路径严格消费 gate 主因；若缺失主因则触发 contract violation。"""
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import datetime, timezone
 
 from uav_runtime.adapters.fake_adapter import FakeAdapter
 from uav_runtime.adapters.gateway import AdapterGateway
 from uav_runtime.adapters.mavlink_adapter import MavlinkAdapter
+from uav_runtime.adapters.payload_adapter import PayloadAdapter
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.gate import DECISION_DEFER, DECISION_REQUIRE_CONFIRM, unified_policy_gate
@@ -16,6 +18,7 @@ from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.event_bus import EventBus
+from uav_runtime.runtime.mission_context import PendingTakeover, RunningAction
 
 
 def _utc_now_iso() -> str:
@@ -60,20 +63,33 @@ class RuntimeOrchestrator:
             {
                 "fake": FakeAdapter(),
                 "mavlink": MavlinkAdapter(config=self.mavlink_backend_config),
+                "payload": PayloadAdapter(),
             }
         )
+        self.running_actions: list[RunningAction] = []
+        self.pending_takeovers: list[PendingTakeover] = []
 
-    def _build_policy_context(self, req: ActionRequest) -> PolicyContext:
+    def _active_controller_source(self, fallback: CommandSource) -> str:
+        if not self.running_actions:
+            return fallback.value
+        return self.running_actions[0].source.value
+
+    def _current_phase(self) -> str:
+        if any(action.non_preemptible for action in self.running_actions):
+            return "non_preemptible"
+        return "nominal"
+
+    def _build_policy_context(self, req: ActionRequest, *, phase_override: str | None = None) -> PolicyContext:
         return PolicyContext(
             source=req.source,
             scope=req.requested_scope or req.scope,
             link_state=_demo_link_state_from_request(req),
             mission_id=req.mission_id,
-            current_phase="nominal",
-            active_controller_source=req.source.value,
+            current_phase=phase_override or self._current_phase(),
+            active_controller_source=self._active_controller_source(req.source),
             active_delegations=[req.delegation_id] if req.delegation_id else [],
-            running_actions=[],
-            pending_takeovers=[],
+            running_actions=[action.request_id for action in self.running_actions],
+            pending_takeovers=[takeover.takeover_id for takeover in self.pending_takeovers if takeover.status == "pending"],
             runtime_limits={"max_queue": 64, "max_concurrency": 1},
             active_profile="default_profile",
             flags={"context_skeleton_ready": True},
@@ -92,7 +108,7 @@ class RuntimeOrchestrator:
             degradation_behavior={},
             fallback_behavior={},
             recovery_behavior={},
-            runtime_constraints={},
+            runtime_constraints={"non_preemptible_phases": ["non_preemptible"]},
         )
 
     def _blocked_like_result(self, request_id: str, status: str, code: str) -> dict:
@@ -112,6 +128,113 @@ class RuntimeOrchestrator:
         if not primary_reason_code:
             raise AssertionError(f"contract violation: primary_reason_code missing for decision {decision_code}")
         return primary_reason_code
+
+
+    def add_running_action(
+        self,
+        request_id: str,
+        action_type: str = "hover",
+        source: CommandSource = CommandSource.SELF_LOCAL,
+        priority: int = 50,
+        non_preemptible: bool = False,
+    ) -> RunningAction:
+        running = RunningAction(
+            request_id=request_id,
+            action_type=action_type,
+            source=source,
+            priority=priority,
+            non_preemptible=non_preemptible,
+        )
+        self.running_actions.append(running)
+        return running
+
+    def _append_takeover_event(self, event_type: str, takeover: PendingTakeover, **extra: object) -> None:
+        event = {
+            "type": event_type,
+            **takeover.to_audit_event(),
+            "timestamp": _utc_now_iso(),
+            **extra,
+        }
+        self.bus.publish(event_type, event)
+        self.audit.append(event)
+
+    def _create_pending_takeover(self, req: ActionRequest, reason_code: str) -> PendingTakeover:
+        now = time.time()
+        ttl_s = 30.0
+        if isinstance(req.params, dict) and "takeover_ttl_s" in req.params:
+            ttl_s = float(req.params.get("takeover_ttl_s") or ttl_s)
+        takeover = PendingTakeover(
+            takeover_id=f"takeover-{uuid.uuid4().hex[:8]}",
+            request_id=req.request_id,
+            mission_id=req.mission_id,
+            action_type=req.action_type or req.action,
+            source=req.source,
+            priority=int(req.priority_hint),
+            created_at=now,
+            ttl_s=ttl_s,
+            status="pending",
+            reason_code=reason_code,
+            request=req,
+        )
+        self.pending_takeovers.append(takeover)
+        self._append_takeover_event("pending_takeover_created", takeover)
+        return takeover
+
+    def drop_expired_pending_takeovers(self, *, now: float | None = None) -> list[PendingTakeover]:
+        current = time.time() if now is None else now
+        dropped: list[PendingTakeover] = []
+        for takeover in self.pending_takeovers:
+            if takeover.status != "pending" or not takeover.is_expired(current):
+                continue
+            takeover.status = "expired"
+            self._append_takeover_event("pending_takeover_expired", takeover)
+            takeover.status = "dropped"
+            self._append_takeover_event("pending_takeover_dropped", takeover)
+            dropped.append(takeover)
+        return dropped
+
+    def handle_phase_exit(self, mission_id: str | None = None) -> dict:
+        self.audit.append({"type": "phase_exit", "mission_id": mission_id, "timestamp": _utc_now_iso()})
+        self.drop_expired_pending_takeovers()
+        candidates = [
+            takeover
+            for takeover in self.pending_takeovers
+            if takeover.status == "pending" and (mission_id is None or takeover.mission_id == mission_id)
+        ]
+        if not candidates:
+            return {"status": "no_pending_takeover", "activated": False}
+
+        selected = sorted(candidates, key=lambda item: (-item.priority, item.created_at))[0]
+        req = selected.request
+        if req is None:
+            selected.status = "dropped"
+            self._append_takeover_event("pending_takeover_dropped", selected, reason="missing_request")
+            return {"status": "dropped", "activated": False, "takeover_id": selected.takeover_id}
+
+        actx = RuntimeActionContext(
+            task_id=f"task-{uuid.uuid4().hex[:8]}",
+            action=req.action_type,
+            risk_level=max(0, int(req.risk_hint)),
+            require_confirm=bool(req.requires_confirmation_hint),
+        )
+        decision = unified_policy_gate(self._build_policy_context(req, phase_override="nominal"), actx, self._build_profile())
+        decision_code = decision.decision_code.value if isinstance(decision.decision_code, DecisionCode) else decision.decision_code
+        if decision_code not in {DecisionCode.ALLOW.value, DecisionCode.PREEMPT.value}:
+            selected.status = "dropped"
+            self._append_takeover_event(
+                "pending_takeover_dropped",
+                selected,
+                reason="recheck_failed",
+                decision_code=decision_code,
+                primary_reason_code=decision.primary_reason_code,
+            )
+            return {"status": "dropped", "activated": False, "takeover_id": selected.takeover_id}
+
+        selected.status = "admitted"
+        self._append_takeover_event("pending_takeover_admitted", selected, decision_code=decision_code)
+        selected.status = "activated"
+        self._append_takeover_event("pending_takeover_activated", selected, decision_code=decision_code)
+        return {"status": "activated", "activated": True, "takeover_id": selected.takeover_id, "request_id": selected.request_id}
 
     def handle_action_request(self, req: ActionRequest) -> dict:
         request_id = req.request_id or f"req-{uuid.uuid4().hex[:10]}"
@@ -162,7 +285,11 @@ class RuntimeOrchestrator:
             return self._blocked_like_result(request_id, "blocked", reason)
         if decision_code == DECISION_DEFER:
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
-            return self._blocked_like_result(request_id, "deferred", reason)
+            takeover = self._create_pending_takeover(req, reason)
+            result = self._blocked_like_result(request_id, "deferred", reason)
+            result["takeover_status"] = takeover.status
+            result["takeover_id"] = takeover.takeover_id
+            return result
         if decision_code == DECISION_REQUIRE_CONFIRM:
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             return self._blocked_like_result(request_id, "waiting_confirmation", reason)
@@ -178,6 +305,7 @@ class RuntimeOrchestrator:
             "code": result.get("code", result.get("detail", "")),
             "message": result.get("message", result.get("detail", "")),
             "evidence_ref": result.get("evidence_ref"),
+            "execution_trace": result.get("execution_trace"),
             "timestamps": {"result_time": _utc_now_iso()},
             "accepted": result.get("accepted", False),
             "detail": result.get("detail", ""),
