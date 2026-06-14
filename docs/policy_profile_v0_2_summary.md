@@ -157,6 +157,17 @@ Unsafe payload-like actions are denied by policy even before adapter execution.
 
 Existing Policy Gate v0.2, Mission Runtime v0.2, Payload Adapter, CLI, and PX4 readiness tests continue to run without requiring PX4/SITL or hardware.
 
+`tests/integration/test_policy_profile_runtime_flow.py` 覆盖 runtime / audit / replay 关键路径：
+
+- `lost_link + self_local + hold_position` 在 runtime 中 allow，`policy_decision_event` 可见 `effective_profile_id=lost_link`、`effective_scope=self_only`、`primary_reason_code=null`；
+- `lost_link + self_local + goto` 在 runtime 中 deny，`primary_reason_code=REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED`，且不产生 `action_result`；
+- `payload_release` 在 policy 层提前 deny，`primary_reason_code=REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED`，不进入 PayloadAdapter 执行；
+- `standard + degraded + high risk` 在 runtime 中 `REQUIRE_CONFIRM`；
+- `conservative + degraded + high risk` 在 runtime 中 deny；
+- replay 可读取这些 `policy_decision_event`，用于复盘 profile/fallback 裁决原因。
+
+这些 integration 覆盖仍然是 control-plane policy 验证：fallback action 被 policy allow 不代表真实 `return_home` / `land_safe` 已实现，也不代表真实飞控动作已经执行。
+
 ---
 
 ## 9) 当前非目标

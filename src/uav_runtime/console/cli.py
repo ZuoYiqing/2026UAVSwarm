@@ -5,6 +5,7 @@ import argparse
 import json
 from typing import Any
 
+from uav_runtime.policy.action_registry import capability_manifest
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
@@ -88,6 +89,13 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--timeout-ms", type=int, default=3000)
     c.add_argument("--retry-count", type=int, default=0)
 
+    caps = sub.add_parser("list-capabilities")
+    _add_pretty_arg(caps)
+    caps.add_argument("--domain", choices=["flight", "payload", "system", "coordination"], default=None)
+    caps.add_argument("--adapter", default=None)
+    caps.add_argument("--fallback-only", action="store_true")
+    caps.add_argument("--include-dangerous", action="store_true")
+
     r = sub.add_parser("replay-last")
     _add_pretty_arg(r)
     r.add_argument("--path", default="audit/runtime.audit.jsonl")
@@ -152,6 +160,18 @@ def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "list-capabilities":
+        out = {
+            "capabilities": capability_manifest(
+                domain=getattr(args, "domain", None),
+                adapter=getattr(args, "adapter", None),
+                fallback_only=bool(getattr(args, "fallback_only", False)),
+                include_dangerous=bool(getattr(args, "include_dangerous", False)),
+            )
+        }
+        _print_output(out, pretty=bool(getattr(args, "pretty", False)))
+        return 0
+
     selected_adapter = str(getattr(args, "adapter", DEFAULT_ADAPTER_NAME) or DEFAULT_ADAPTER_NAME)
     mav_cfg = MavlinkBackendConfig(
         backend_mode=str(getattr(args, "backend_mode", "stub") or "stub"),

@@ -12,7 +12,7 @@ from uav_runtime.adapters.payload_adapter import PayloadAdapter
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.policy.context import PolicyContext, RuntimeActionContext
 from uav_runtime.policy.gate import DECISION_DEFER, DECISION_REQUIRE_CONFIRM, unified_policy_gate
-from uav_runtime.policy.profile import PolicyProfile
+from uav_runtime.policy.profile import PolicyProfile, build_policy_profile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.audit_log import AuditLog
@@ -54,10 +54,12 @@ class RuntimeOrchestrator:
         audit_path: str = "audit/runtime.audit.jsonl",
         adapter_name: str = DEFAULT_ADAPTER_NAME,
         mavlink_backend_config: MavlinkBackendConfig | None = None,
+        policy_profile_name: str | None = None,
     ) -> None:
         self.bus = EventBus()
         self.audit = AuditLog(audit_path)
         self.adapter_name = adapter_name
+        self.policy_profile_name = policy_profile_name
         self.mavlink_backend_config = mavlink_backend_config or MavlinkBackendConfig()
         self.gateway = AdapterGateway(
             {
@@ -91,11 +93,17 @@ class RuntimeOrchestrator:
             running_actions=[action.request_id for action in self.running_actions],
             pending_takeovers=[takeover.takeover_id for takeover in self.pending_takeovers if takeover.status == "pending"],
             runtime_limits={"max_queue": 64, "max_concurrency": 1},
-            active_profile="default_profile",
+            active_profile=self.policy_profile_name or "default_profile",
             flags={"context_skeleton_ready": True},
         )
 
     def _build_profile(self) -> PolicyProfile:
+        if self.policy_profile_name:
+            profile = build_policy_profile(self.policy_profile_name)
+            constraints = dict(profile.runtime_constraints)
+            constraints.setdefault("non_preemptible_phases", ["non_preemptible"])
+            profile.runtime_constraints = constraints
+            return profile
         return PolicyProfile(
             name="default_profile",
             allowed_skill_groups=["flight_core", "payload", "coordination", "generic"],

@@ -155,3 +155,72 @@ def test_main_submit_action_with_payload_adapter_keeps_unsupported_stable(capsys
     assert payload["result"]["code"] == "REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED"
     assert payload["policy_decision_event"]["decision_code"] == "deny"
     assert payload["policy_decision_event"]["primary_reason_code"] == "REASON_CODE_UNSAFE_PAYLOAD_ACTION_DENIED"
+
+
+def test_parser_accepts_list_capabilities_filters() -> None:
+    args = build_parser().parse_args([
+        "list-capabilities",
+        "--domain",
+        "payload",
+        "--adapter",
+        "payload",
+        "--fallback-only",
+        "--include-dangerous",
+        "--pretty",
+    ])
+    assert args.cmd == "list-capabilities"
+    assert args.domain == "payload"
+    assert args.adapter == "payload"
+    assert args.fallback_only is True
+    assert args.include_dangerous is True
+    assert args.pretty is True
+
+
+def test_main_list_capabilities_outputs_complete_default_manifest(capsys) -> None:
+    rc = main(["list-capabilities"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    capabilities = payload["capabilities"]
+    assert capabilities
+    action_types = {row["action_type"] for row in capabilities}
+    assert "payload_release" not in action_types
+
+    required_fields = {
+        "action_type",
+        "domain",
+        "skill_group",
+        "risk_level",
+        "supported_adapters",
+        "fallback_allowed",
+        "allowed_link_states",
+        "requires_confirmation_by_default",
+        "dangerous",
+        "policy_default",
+        "notes",
+    }
+    assert required_fields <= set(capabilities[0])
+
+
+def test_main_list_capabilities_include_dangerous_and_filters(capsys) -> None:
+    rc = main(["list-capabilities", "--include-dangerous", "--domain", "payload"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    capabilities = payload["capabilities"]
+    assert capabilities
+    assert all(row["domain"] == "payload" for row in capabilities)
+    action_types = {row["action_type"] for row in capabilities}
+    assert {"payload_release", "drop", "strike", "attack"} <= action_types
+
+
+def test_main_list_capabilities_fallback_and_adapter_filters(capsys) -> None:
+    rc = main(["list-capabilities", "--fallback-only", "--adapter", "payload"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    capabilities = payload["capabilities"]
+    assert capabilities
+    assert all(row["fallback_allowed"] is True for row in capabilities)
+    assert all("payload" in row["supported_adapters"] for row in capabilities)
+    assert all(row["dangerous"] is False for row in capabilities)
