@@ -16,6 +16,14 @@ LinkStateName = Literal["healthy", "degraded", "lost"]
 
 @dataclass(frozen=True, slots=True)
 class ActionCapability:
+    """Metadata row for one action_type.
+
+    This is deliberately descriptive, not executable:
+    - Policy Gate may reference the same concepts but is not replaced by this dataclass.
+    - Adapter mapping may be checked against supported_adapters but is not dispatched from here.
+    - Hardware inventory can use this as a checklist for what needs real interfaces.
+    """
+
     action_type: str
     domain: ActionDomain
     skill_group: str
@@ -30,6 +38,8 @@ class ActionCapability:
 
 
 _REGISTRY: dict[str, ActionCapability] = {
+    # flight/control actions -------------------------------------------------
+    # These entries describe current skeleton knowledge, not proven real flight capability.
     "takeoff": ActionCapability(
         action_type="takeoff",
         domain="flight",
@@ -114,6 +124,9 @@ _REGISTRY: dict[str, ActionCapability] = {
         fallback_allowed=True,
         allowed_link_states=("healthy", "degraded", "lost"),
     ),
+    # payload/device and system-health actions ------------------------------
+    # These are limited to non-destructive devices.  Real hardware support must be proven
+    # later through the hardware capability mapping template and bench tests.
     "camera_capture": ActionCapability(
         action_type="camera_capture",
         domain="payload",
@@ -179,6 +192,9 @@ _REGISTRY: dict[str, ActionCapability] = {
         fallback_allowed=True,
         allowed_link_states=("healthy", "degraded", "lost"),
     ),
+    # unsafe / explicitly denied actions ------------------------------------
+    # Keep these visible as forbidden metadata so reviewers can see the boundary.
+    # They must not appear in payload_mapping.py or mavlink_mapping.py supported actions.
     "payload_release": ActionCapability(
         action_type="payload_release",
         domain="payload",
@@ -252,6 +268,8 @@ def list_action_capabilities() -> tuple[ActionCapability, ...]:
 
 def action_capability_to_manifest(capability: ActionCapability) -> dict[str, Any]:
     """Return a JSON-ready manifest row for an action capability."""
+    # dataclasses.asdict keeps tuples as tuples; convert tuple fields to lists so CLI JSON
+    # output is easy for non-Python readers and hardware inventory spreadsheets.
     row = asdict(capability)
     row["supported_adapters"] = list(capability.supported_adapters)
     row["allowed_link_states"] = list(capability.allowed_link_states)
@@ -273,6 +291,8 @@ def capability_manifest(
     """
     rows: list[dict[str, Any]] = []
     for capability in list_action_capabilities():
+        # Safety default: manifest hides dangerous actions unless a reviewer explicitly asks
+        # to audit forbidden capabilities via --include-dangerous.
         if capability.dangerous and not include_dangerous:
             continue
         if domain is not None and capability.domain != domain:

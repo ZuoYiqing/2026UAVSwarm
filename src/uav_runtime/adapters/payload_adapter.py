@@ -22,6 +22,8 @@ class PayloadAdapter:
     name = "payload"
 
     def _unsupported(self, action: str) -> dict[str, Any]:
+        # Unsupported means "this payload skeleton has no safe placeholder mapping".
+        # Dangerous actions should normally be denied by Policy Gate before reaching this adapter.
         return {
             "accepted": False,
             "code": "exec_unsupported",
@@ -38,6 +40,8 @@ class PayloadAdapter:
         }
 
     def _missing_params(self, action: str, missing: list[str], mapping: dict[str, Any]) -> dict[str, Any]:
+        # Some future payload actions need parameters (for example gimbal angle).
+        # We validate presence only; no real device command is sent in this stage.
         return {
             "accepted": False,
             "code": "payload_param_missing",
@@ -58,6 +62,8 @@ class PayloadAdapter:
         }
 
     def execute(self, command: dict[str, Any]) -> dict[str, Any]:
+        # The gateway passes {"command": action_type, "arguments": params, ...}.
+        # Keep this adapter deterministic and hardware-free so tests never require cameras/gimbals/speakers.
         cmd = command if isinstance(command, dict) else {}
         action = str(cmd.get("command", "") or "")
         args = cmd.get("arguments") if isinstance(cmd.get("arguments"), dict) else {}
@@ -71,6 +77,8 @@ class PayloadAdapter:
         if missing:
             return self._missing_params(action, missing, mapping)
 
+        # Placeholder success: "mapping exists and required params are present".
+        # This is not hardware success and must not be described as real capture/angle/audio/light execution.
         return {
             "accepted": True,
             "code": "payload_placeholder_ok",

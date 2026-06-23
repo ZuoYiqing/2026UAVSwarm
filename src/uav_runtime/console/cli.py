@@ -1,4 +1,10 @@
-"""CLI 命令骨架（submit-mission / submit-action / show-status / show-audit / replay-last）。"""
+"""Command-line entry points for demo, tests, and operator-facing diagnostics.
+
+给新同学的阅读提示：
+- CLI 是最容易上手的入口：先跑 list-capabilities / check-backend / submit-action。
+- CLI 不绕过 RuntimeOrchestrator；submit-action 仍会经过 Policy Gate 和 audit/replay。
+- list-capabilities 是只读 registry visibility，不执行任何动作，也不连接硬件。
+"""
 from __future__ import annotations
 
 import argparse
@@ -23,9 +29,12 @@ PAYLOAD_ACTIONS = {
     "sensor_read",
     "health_query",
 }
+# CLI 用这个集合给 payload adapter 的动作选择 skill_group="payload"。
+# 真实策略仍由 Policy Gate 决定，不能把这里当作安全白名单。
 
 
 def _print_output(payload: object, pretty: bool = False) -> None:
+    # 所有 CLI 输出保持 JSON，便于脚本、演示页面和人工检查复用。
     if pretty:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
@@ -37,6 +46,7 @@ def _add_pretty_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # argparse parser 是 CLI contract 的中心。新增命令时请同步 tests/test_cli.py。
     p = argparse.ArgumentParser(prog="uav-runtime")
     _add_pretty_arg(p)
 
@@ -91,6 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     caps = sub.add_parser("list-capabilities")
     _add_pretty_arg(caps)
+    # Capability manifest filters are read-only inventory helpers.  They must not
+    # trigger runtime execution or mutate policy/adapter state.
     caps.add_argument("--domain", choices=["flight", "payload", "system", "coordination"], default=None)
     caps.add_argument("--adapter", default=None)
     caps.add_argument("--fallback-only", action="store_true")
@@ -105,6 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
+    # Convert CLI flags into the protocol-level ActionRequest shape expected by runtime.
+    # Keep this thin; avoid hiding policy logic in CLI helpers.
     if args.cmd == "submit-mission":
         return ActionRequest(
             action="submit_mission",
@@ -121,6 +135,8 @@ def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
         )
 
     selected_adapter = str(getattr(args, "adapter", DEFAULT_ADAPTER_NAME) or DEFAULT_ADAPTER_NAME)
+    # Payload skeleton actions use skill_group="payload" so Policy Gate/profile can
+    # reason about them separately from flight_core.
     skill_group = "payload" if selected_adapter == "payload" and args.action in PAYLOAD_ACTIONS else "flight_core"
 
     return ActionRequest(
@@ -139,6 +155,8 @@ def _build_request_from_args(args: argparse.Namespace) -> ActionRequest:
 
 
 def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str, Any]:
+    # For demo readability, attach the latest matching policy_decision_event beside
+    # the result.  The authoritative record remains the audit JSONL file.
     request_id = result.get("request_id")
     if not request_id:
         return {"result": result}
@@ -161,6 +179,8 @@ def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.cmd == "list-capabilities":
+        # Read-only fast path: do not instantiate RuntimeOrchestrator, do not create
+        # audit files, and do not connect to PX4/payload hardware.
         out = {
             "capabilities": capability_manifest(
                 domain=getattr(args, "domain", None),

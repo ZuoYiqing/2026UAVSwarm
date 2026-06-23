@@ -1,4 +1,12 @@
-"""本轮最后修补点：非 ALLOW 路径严格消费 gate 主因；若缺失主因则触发 contract violation。"""
+"""Mission Runtime orchestration entry point.
+
+给新同学的阅读提示：
+- 这个文件不是“飞控驱动”，而是控制面 runtime glue。
+- 所有 ActionRequest 先进入 Policy Gate；只有 ALLOW 才会走 AdapterGateway。
+- DENY / REQUIRE_CONFIRM / DEFER / PREEMPT 都在这里被转成稳定 action_result 形状，
+  并写入 audit/replay，方便事后解释“为什么执行/为什么没执行”。
+- pending_takeover 也属于 runtime 状态，不属于 adapter/backend；adapter 只负责执行已获准的命令。
+"""
 from __future__ import annotations
 
 import time
@@ -36,7 +44,11 @@ def _to_canonical_str(value: object | None) -> str | None:
 
 
 def _demo_link_state_from_request(req: ActionRequest) -> LinkState:
-    """Demo-only: optional control-plane state input carried in params."""
+    """Demo-only link-state override carried in params.
+
+    生产系统里 link state 应来自链路监测/遥测模块；当前项目为了让测试和演示不依赖真实
+    通信链路，把 `demo_link_state` 放在 request.params 中。新同学不要把它理解成最终协议字段。
+    """
     raw = req.params.get("demo_link_state") if isinstance(req.params, dict) else None
     if not isinstance(raw, str):
         return LinkState.HEALTHY
@@ -49,6 +61,22 @@ def _demo_link_state_from_request(req: ActionRequest) -> LinkState:
 
 
 class RuntimeOrchestrator:
+    """Small runtime coordinator used by CLI/tests/demo flows.
+
+    Responsibilities:
+    1. Build policy context from request + runtime state.
+    2. Call unified_policy_gate.
+    3. Persist policy_decision_event into audit.
+    4. Convert non-ALLOW decisions into blocked/deferred/confirmation results.
+    5. Dispatch ALLOW requests to the selected adapter through AdapterGateway.
+    6. Maintain minimal Mission Runtime v0.2 pending_takeover state.
+
+    Non-responsibilities:
+    - It does not talk to PX4 directly.
+    - It does not enforce hardware-specific policy inside adapters.
+    - It does not implement a full scheduler or multi-vehicle optimizer.
+    """
+
     def __init__(
         self,
         audit_path: str = "audit/runtime.audit.jsonl",
@@ -82,6 +110,8 @@ class RuntimeOrchestrator:
         return "nominal"
 
     def _build_policy_context(self, req: ActionRequest, *, phase_override: str | None = None) -> PolicyContext:
+        # PolicyContext is the compact view Policy Gate needs.  Keep vendor/hardware
+        # details out of this object so protocol/policy do not drift when hardware changes.
         return PolicyContext(
             source=req.source,
             scope=req.requested_scope or req.scope,
@@ -98,6 +128,9 @@ class RuntimeOrchestrator:
         )
 
     def _build_profile(self) -> PolicyProfile:
+        # Profiles are intentionally built here as data objects.  If a team member
+        # adds a new profile, prefer editing policy/profile.py and tests instead of
+        # adding ad-hoc if/else checks in adapters.
         if self.policy_profile_name:
             profile = build_policy_profile(self.policy_profile_name)
             constraints = dict(profile.runtime_constraints)
@@ -120,6 +153,8 @@ class RuntimeOrchestrator:
         )
 
     def _blocked_like_result(self, request_id: str, status: str, code: str) -> dict:
+        # Non-ALLOW decisions still return action_result-shaped payloads so callers
+        # and replay tooling can handle DENY/DEFER/REQUIRE_CONFIRM/PREEMPT uniformly.
         return {
             "request_id": request_id,
             "status": status,
@@ -133,6 +168,8 @@ class RuntimeOrchestrator:
         }
 
     def _require_primary_reason(self, decision_code: str, primary_reason_code: str | None) -> str:
+        # Contract rule: every non-ALLOW policy decision must explain itself with
+        # primary_reason_code.  This makes audit/replay useful for reviews.
         if not primary_reason_code:
             raise AssertionError(f"contract violation: primary_reason_code missing for decision {decision_code}")
         return primary_reason_code
@@ -167,6 +204,9 @@ class RuntimeOrchestrator:
         self.audit.append(event)
 
     def _create_pending_takeover(self, req: ActionRequest, reason_code: str) -> PendingTakeover:
+        # DEFER from Policy Gate means "not now, but remember the takeover request".
+        # Runtime owns that memory because adapter/backend should not know about
+        # command hierarchy, phase_exit, or takeover TTL.
         now = time.time()
         ttl_s = 30.0
         if isinstance(req.params, dict) and "takeover_ttl_s" in req.params:
@@ -189,6 +229,8 @@ class RuntimeOrchestrator:
         return takeover
 
     def drop_expired_pending_takeovers(self, *, now: float | None = None) -> list[PendingTakeover]:
+        # Expiry is two-step in audit: expired -> dropped.  The explicit chain makes
+        # replay timelines easier for new operators to understand.
         current = time.time() if now is None else now
         dropped: list[PendingTakeover] = []
         for takeover in self.pending_takeovers:
@@ -202,6 +244,8 @@ class RuntimeOrchestrator:
         return dropped
 
     def handle_phase_exit(self, mission_id: str | None = None) -> dict:
+        # phase_exit is the minimal hook that says a non-preemptible phase ended.
+        # We re-check pending takeover under a nominal phase before admitting it.
         self.audit.append({"type": "phase_exit", "mission_id": mission_id, "timestamp": _utc_now_iso()})
         self.drop_expired_pending_takeovers()
         candidates = [
@@ -213,6 +257,7 @@ class RuntimeOrchestrator:
             return {"status": "no_pending_takeover", "activated": False}
 
         selected = sorted(candidates, key=lambda item: (-item.priority, item.created_at))[0]
+        # Highest priority wins; created_at is the deterministic tie-breaker.
         req = selected.request
         if req is None:
             selected.status = "dropped"
@@ -245,6 +290,8 @@ class RuntimeOrchestrator:
         return {"status": "activated", "activated": True, "takeover_id": selected.takeover_id, "request_id": selected.request_id}
 
     def handle_action_request(self, req: ActionRequest) -> dict:
+        # Normalize legacy/minimal request fields before policy evaluation.  Tests and
+        # CLI paths may omit ids, but audit/replay require stable request_id/mission_id.
         request_id = req.request_id or f"req-{uuid.uuid4().hex[:10]}"
         req.request_id = request_id
         if not req.action_type:
@@ -267,6 +314,8 @@ class RuntimeOrchestrator:
         decision_code = decision.decision_code.value if isinstance(decision.decision_code, DecisionCode) else decision.decision_code
 
         policy_decision_event = {
+            # This event is the key audit/replay artifact for control-plane behavior.
+            # If someone asks "why did the system deny/defer/allow?", start here.
             "type": "policy_decision_event",
             "request_id": request_id,
             "mission_id": req.mission_id,
@@ -289,9 +338,11 @@ class RuntimeOrchestrator:
         self.audit.append(policy_decision_event)
 
         if decision_code == DecisionCode.DENY.value:
+            # Policy blocked the request.  Do not call adapters.
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             return self._blocked_like_result(request_id, "blocked", reason)
         if decision_code == DECISION_DEFER:
+            # Runtime records a pending takeover for later phase_exit re-evaluation.
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             takeover = self._create_pending_takeover(req, reason)
             result = self._blocked_like_result(request_id, "deferred", reason)
@@ -299,15 +350,21 @@ class RuntimeOrchestrator:
             result["takeover_id"] = takeover.takeover_id
             return result
         if decision_code == DECISION_REQUIRE_CONFIRM:
+            # Current MVP does not implement an interactive confirmation workflow;
+            # it returns a stable waiting_confirmation result for callers/tests.
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             return self._blocked_like_result(request_id, "waiting_confirmation", reason)
         if decision_code == DecisionCode.PREEMPT.value:
+            # PREEMPT is currently control-plane intent only; no real abort/suspend
+            # command is sent to hardware in this project stage.
             reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
             return self._blocked_like_result(request_id, "handover_pending", reason)
 
         # ALLOW -> execute selected adapter
         result = self.gateway.execute(self.adapter_name, req)
         normalized = {
+            # Normalize adapter-specific raw output back to the shared action_result
+            # shape expected by tests, CLI, audit, and replay.
             "request_id": request_id,
             "status": result.get("status", "accepted" if result.get("accepted") else "rejected"),
             "code": result.get("code", result.get("detail", "")),

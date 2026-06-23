@@ -41,6 +41,8 @@ class Px4SitlBackend:
 
     @staticmethod
     def _is_pymavlink_available() -> bool:
+        # pymavlink is optional.  Readiness must degrade cleanly when it is missing,
+        # because default pytest/CI should not require PX4 or MAVLink dependencies.
         return importlib.util.find_spec("pymavlink") is not None
 
     def describe(self) -> dict[str, Any]:
@@ -65,8 +67,11 @@ class Px4SitlBackend:
             (ok, reason)
         """
         try:
+            # Import inside the probe so importing the package never requires pymavlink.
             from pymavlink import mavutil  # type: ignore
 
+            # This is intentionally a heartbeat-only probe.  Do not add arm/set_mode/
+            # command_long/takeoff here; those belong to later SITL smoke stages.
             conn = mavutil.mavlink_connection(
                 self.config.transport_endpoint,
                 timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1),
@@ -83,6 +88,8 @@ class Px4SitlBackend:
             return False, "probe_exception"
 
     def readiness_diagnostic(self) -> dict[str, Any]:
+        # readiness is derived only from connect_probe.code.  The frozen rule is:
+        # backend_connected -> ready; every other code -> not_ready.
         probe = self.connect_probe()
         code = str(probe.get("code", "backend_probe_failed"))
         reason = str(probe.get("reason", "unknown"))
@@ -104,6 +111,11 @@ class Px4SitlBackend:
         }
 
     def connect_probe(self) -> dict[str, Any]:
+        # Order matters for operator diagnostics:
+        # 1. backend disabled/not SITL -> sitl_not_configured
+        # 2. missing endpoint -> backend_not_configured
+        # 3. missing optional dependency -> dependency_missing
+        # 4. endpoint + dependency present but heartbeat fails -> backend_probe_failed
         status = self.session.status()
         if status == "not_configured":
             return {
@@ -149,6 +161,8 @@ class Px4SitlBackend:
         }
 
     def execute_mapped_action(self, action: str, mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        # Execution remains placeholder-only.  Even if backend_connected is true,
+        # this method does not send a real MAVLink control command.
         probe = self.connect_probe()
         code = str(probe.get("code", "backend_probe_failed"))
         status = str(probe.get("status", self.session.status()))

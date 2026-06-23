@@ -1,4 +1,11 @@
-"""本轮修补点：确保 gateway 走 canonical->intent->command 下游路径，adapter 不再接收原始 request。"""
+"""Adapter Gateway: convert approved ActionRequest into adapter commands.
+
+给新同学的阅读提示：
+- RuntimeOrchestrator 只有在 Policy Gate ALLOW 后才会调用这里。
+- Gateway 是“通用执行入口”，负责把协议层 ActionRequest 转成 adapter.execute(command)。
+- Adapter 不应直接拿原始 request 做策略判断；策略边界在 policy 层，执行边界在 adapter 层。
+- 这里仍是 skeleton：参数裁剪、限速、幂等窗口后续可逐步增强。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,9 +20,11 @@ class AdapterGateway:
     _idempotency_seen: set[str] = field(default_factory=set)
 
     def register(self, adapter: object) -> None:
+        # Adapter 只需要暴露 name 和 execute(command)；gateway 不关心硬件细节。
         self.adapters[getattr(adapter, "name")] = adapter
 
     def to_execution_intent(self, request: ActionRequest) -> dict[str, Any]:
+        # intent 是 adapter 前的中间形态，便于未来做参数裁剪、限速、审计和映射。
         return {
             "request_id": request.request_id,
             "action_type": request.action_type,
@@ -46,6 +55,7 @@ class AdapterGateway:
 
     def _build_adapter_command(self, intent: dict[str, Any]) -> dict[str, Any]:
         # TODO: adapter command 构造（per-adapter mapping table）
+        # 当前把 action_type 放入 command，把 params 放入 arguments，保持 fake/mavlink/payload 路径一致。
         params = dict(intent.get("params") or {})
         sim: dict[str, Any] = {}
         if "__simulate_fail" in params:
@@ -65,7 +75,8 @@ class AdapterGateway:
         try:
             return adapter.execute(command)
         except Exception:
-            # fake/stub fallback path
+            # fake/stub fallback path. 真实 adapter 接入时应尽量返回结构化错误，
+            # 不应依赖这里吞异常；这个分支主要保护 demo/test skeleton。
             return {
                 "accepted": True,
                 "detail": "simulated",
@@ -75,6 +86,7 @@ class AdapterGateway:
 
     def _normalize_result(self, raw: dict[str, Any], request: ActionRequest) -> dict[str, Any]:
         # TODO: 返回值标准化（canonical action_result contract）
+        # 这里保证不同 adapter 的 raw result 至少收敛成统一字段，便于 CLI/audit/replay 读取。
         accepted = bool(raw.get("accepted"))
         detail = str(raw.get("detail", ""))
         code = str(raw.get("code", detail))
@@ -92,6 +104,7 @@ class AdapterGateway:
         }
 
     def execute(self, adapter_name: str, request: ActionRequest) -> dict[str, Any]:
+        # execute 的输入必须已经通过 Policy Gate；不要在这里新增“策略拒绝”。
         adapter = self.adapters.get(adapter_name)
         if adapter is None:
             return {
