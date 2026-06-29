@@ -37,11 +37,27 @@ pip install -e .[sitl]
 
 ---
 
-## 3) PX4 SITL 启动方式（占位）
+## 3) PX4 SITL 启动方式（WSL 本地已验证）
 
-> 本文不绑定具体 PX4 仓库版本或仿真器细节，仅给出 readiness 流程占位。
+本轮已在 WSL Ubuntu 22.04.4 + PX4-Autopilot + Gazebo Harmonic 环境完成 `backend_connected` 验证。
 
-请按你们内部已验证的 PX4 SITL 启动流程先启动仿真实例，并确认监听 endpoint（示例常见为 `udp://127.0.0.1:14540`）。
+正确启动命令：
+
+```bash
+HEADLESS=1 make px4_sitl gz_x500
+```
+
+验证时 PX4 已进入 `pxh>`，并观察到 Onboard MAVLink 端口打印：
+
+```text
+udp port 14580 remote port 14540
+```
+
+语义说明：
+- PX4 本地 Onboard MAVLink 端口是 `14580`；
+- PX4 会向 remote port `14540` 发送 MAVLink；
+- 外部 `pymavlink` / `uav_runtime` 应监听 `14540`；
+- 本轮验证成功 endpoint 是 `udpin:127.0.0.1:14540` 和 `udpin:0.0.0.0:14540`。
 
 建议记录：
 - SITL 启动命令；
@@ -56,8 +72,8 @@ pip install -e .[sitl]
 - `--backend px4_sitl`
 - `--backend-mode sitl`
 - `--backend-enabled`
-- `--transport-endpoint udp://127.0.0.1:14540`
-- `--connect-timeout-ms 3000`
+- `--transport-endpoint udpin:127.0.0.1:14540`
+- `--connect-timeout-ms 5000`
 
 ---
 
@@ -65,7 +81,7 @@ pip install -e .[sitl]
 
 ### 5.1 依赖缺失场景
 ```bash
-python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mode sitl --backend-enabled --transport-endpoint udp://127.0.0.1:14540 --pretty
+python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mode sitl --backend-enabled --transport-endpoint udpin:127.0.0.1:14540 --pretty
 ```
 预期（示意）：
 - `connect_probe.code = dependency_missing`
@@ -82,7 +98,7 @@ python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mod
 
 ### 5.3 endpoint 已配置但探测失败
 ```bash
-python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mode sitl --backend-enabled --transport-endpoint udp://127.0.0.1:14540 --connect-timeout-ms 1500 --pretty
+python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mode sitl --backend-enabled --transport-endpoint udpin:127.0.0.1:14540 --connect-timeout-ms 1500 --pretty
 ```
 预期（示意）：
 - `connect_probe.code = backend_probe_failed`
@@ -91,7 +107,13 @@ python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mod
 
 ### 5.4 endpoint 已配置且探测成功
 ```bash
-python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mode sitl --backend-enabled --transport-endpoint udp://127.0.0.1:14540 --connect-timeout-ms 3000 --pretty
+python -m uav_runtime.console.cli check-backend \
+  --backend px4_sitl \
+  --backend-mode sitl \
+  --backend-enabled \
+  --transport-endpoint udpin:127.0.0.1:14540 \
+  --connect-timeout-ms 5000 \
+  --pretty
 ```
 预期（示意）：
 - `connect_probe.code = backend_connected`
@@ -121,6 +143,23 @@ python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mod
 5. **返回 `backend_probe_failed` + `probe_exception`**
    - 保存 traceback 与命令参数；
    - 先复现最小命令，再定位 pymavlink 版本/环境问题。
+
+### 6.1 `udp://127.0.0.1:14540` 为什么可能失败
+
+本轮 WSL + PX4 SITL + Gazebo Harmonic 验证中，`udp://127.0.0.1:14540` 返回：
+
+```text
+backend_probe_failed / connection_failed
+```
+
+原因是 PX4 Onboard MAVLink 打印为：
+
+```text
+udp port 14580 remote port 14540
+```
+
+这表示 PX4 向 remote port `14540` 发出 MAVLink；外部程序应在 `14540` 上监听 heartbeat。
+因此本轮验证使用 pymavlink listener endpoint：`udpin:127.0.0.1:14540`。
 
 ---
 
@@ -154,7 +193,7 @@ python -m uav_runtime.console.cli check-backend --backend px4_sitl --backend-mod
 ## 9) 启动与执行原则（通用）
 
 - PX4 SITL 需独立启动（与 runtime 进程解耦）；
-- 推荐先使用单机 endpoint（如 `udp://127.0.0.1:14540`）；
+- 推荐先使用单机 endpoint（如 `udpin:127.0.0.1:14540`）；
 - 暂不做多机 endpoint 验证；
 - 暂不执行 `arm` / `set_mode` / `takeoff`。
 

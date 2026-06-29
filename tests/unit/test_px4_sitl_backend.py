@@ -8,7 +8,7 @@ from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 
 
 def test_px4_sitl_backend_conforms_to_mavlink_backend_interface() -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
 
@@ -16,7 +16,7 @@ def test_px4_sitl_backend_conforms_to_mavlink_backend_interface() -> None:
 
 
 def test_px4_sitl_backend_returns_stable_placeholder_semantics() -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
 
@@ -48,7 +48,7 @@ def test_px4_sitl_backend_not_configured_probe_is_stable() -> None:
 
 
 def test_px4_sitl_backend_dependency_missing_probe_is_stable(monkeypatch) -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
 
@@ -71,7 +71,7 @@ def test_px4_sitl_backend_dependency_missing_probe_is_stable(monkeypatch) -> Non
 
 
 def test_px4_sitl_backend_readiness_diagnostic_dependency_missing(monkeypatch) -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
     monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: False))
@@ -106,7 +106,7 @@ def test_px4_sitl_backend_readiness_diagnostic_endpoint_missing(monkeypatch) -> 
 
 
 def test_px4_sitl_backend_probe_maps_timeout_reason(monkeypatch) -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
     monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
@@ -122,7 +122,7 @@ def test_px4_sitl_backend_probe_maps_timeout_reason(monkeypatch) -> None:
 
 
 def test_px4_sitl_backend_probe_maps_exception_reason(monkeypatch) -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
     monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
@@ -138,7 +138,7 @@ def test_px4_sitl_backend_probe_maps_exception_reason(monkeypatch) -> None:
 
 
 def test_px4_sitl_backend_probe_success_returns_backend_connected(monkeypatch) -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
     monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))

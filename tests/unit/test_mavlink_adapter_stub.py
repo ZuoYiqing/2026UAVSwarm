@@ -62,7 +62,7 @@ def test_sitl_mode_disabled_returns_not_configured_semantics(command: str) -> No
         MavlinkBackendConfig(
             backend_mode="sitl",
             backend_enabled=False,
-            transport_endpoint="udp://127.0.0.1:14540",
+            transport_endpoint="udpin:127.0.0.1:14540",
             timeout_ms=5000,
             retry_count=1,
         )
@@ -118,7 +118,7 @@ def test_sitl_mode_enabled_with_endpoint_returns_smoke_not_connected() -> None:
         MavlinkBackendConfig(
             backend_mode="sitl",
             backend_enabled=True,
-            transport_endpoint="udp://127.0.0.1:14540",
+            transport_endpoint="udpin:127.0.0.1:14540",
             timeout_ms=5000,
             retry_count=1,
         )
@@ -159,7 +159,7 @@ def test_gateway_dispatches_unsupported_action_with_stable_code() -> None:
 
 def test_takeoff_smoke_wiring_trace_tags_are_stable() -> None:
     adapter = MavlinkAdapter(
-        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     )
 
     raw = adapter.execute({"command": "takeoff", "arguments": {}, "meta": {}})
@@ -171,7 +171,7 @@ def test_takeoff_smoke_wiring_trace_tags_are_stable() -> None:
 
 def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
     adapter = MavlinkAdapter(
-        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     )
 
     raw = adapter.execute({"command": "hover", "arguments": {}, "meta": {}})
@@ -183,7 +183,7 @@ def test_non_takeoff_command_does_not_mark_smoke_action() -> None:
 
 def test_sitl_enabled_path_uses_backend_builder_seam(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = MavlinkAdapter(
-        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     )
     called = {"count": 0}
 

@@ -11,7 +11,7 @@ def test_sitl_backend_stub_describe_contains_minimal_fields() -> None:
     cfg = MavlinkBackendConfig(
         backend_mode="sitl",
         backend_enabled=True,
-        transport_endpoint="udp://127.0.0.1:14540",
+        transport_endpoint="udpin:127.0.0.1:14540",
         connect_timeout_ms=3500,
     )
     session = MavlinkBackendSession.from_config(cfg)
@@ -27,7 +27,7 @@ def test_sitl_backend_stub_describe_contains_minimal_fields() -> None:
 
 
 def test_sitl_backend_stub_execute_returns_placeholder_not_connected() -> None:
-    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp://127.0.0.1:14540")
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = SitlBackendStub(cfg, session)
 

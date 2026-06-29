@@ -63,7 +63,7 @@ def test_parser_accepts_sitl_wiring_flags() -> None:
             "sitl",
             "--backend-enabled",
             "--transport-endpoint",
-            "udp://127.0.0.1:14540",
+            "udpin:127.0.0.1:14540",
             "--connect-timeout-ms",
             "3500",
             "--timeout-ms",
@@ -75,7 +75,7 @@ def test_parser_accepts_sitl_wiring_flags() -> None:
     assert args.adapter == "mavlink"
     assert args.backend_mode == "sitl"
     assert args.backend_enabled is True
-    assert args.transport_endpoint == "udp://127.0.0.1:14540"
+    assert args.transport_endpoint == "udpin:127.0.0.1:14540"
     assert args.connect_timeout_ms == 3500
     assert args.timeout_ms == 5000
     assert args.retry_count == 1
@@ -107,12 +107,13 @@ def test_parser_accepts_check_backend_command() -> None:
         "sitl",
         "--backend-enabled",
         "--transport-endpoint",
-        "udp://127.0.0.1:14540",
+        "udpin:127.0.0.1:14540",
     ])
     assert args.cmd == "check-backend"
     assert args.backend == "px4_sitl"
     assert args.backend_mode == "sitl"
     assert args.backend_enabled is True
+    assert args.transport_endpoint == "udpin:127.0.0.1:14540"
 
 
 def test_main_check_backend_outputs_readiness_json(capsys) -> None:

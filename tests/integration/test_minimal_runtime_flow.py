@@ -245,7 +245,7 @@ def test_runtime_with_explicit_mavlink_sitl_enabled_without_backend_returns_not_
         mavlink_backend_config=MavlinkBackendConfig(
             backend_mode="sitl",
             backend_enabled=True,
-            transport_endpoint="udp://127.0.0.1:14540",
+            transport_endpoint="udpin:127.0.0.1:14540",
         ),
     )
 
