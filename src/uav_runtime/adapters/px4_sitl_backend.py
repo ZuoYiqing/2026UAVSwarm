@@ -160,14 +160,198 @@ class Px4SitlBackend:
             "status": status,
         }
 
+    def _base_action_result(self, action: str) -> dict[str, Any]:
+        return {
+            "action": action,
+            "backend": "px4_sitl",
+            "backend_mode": self.config.backend_mode,
+            "endpoint": self.config.transport_endpoint,
+            "heartbeat_connected": False,
+            "gcs_heartbeat_started": False,
+            "local_position_stream_requested": False,
+            "arm_ack": None,
+            "takeoff_ack": None,
+            "land_ack": None,
+            "target_altitude_m": None,
+            "max_altitude_m": 0.0,
+            "threshold_ratio": None,
+            "threshold_altitude_m": None,
+            "threshold_reached": False,
+            "auto_land": False,
+            "result": "fail",
+            "failure_reason": None,
+        }
+
+    def _preflight_rejection(self, action: str, reason: str) -> dict[str, Any]:
+        result = self._base_action_result(action)
+        result.update(
+            {
+                "accepted": False,
+                "code": reason,
+                "message": reason,
+                "detail": reason,
+                "adapter": "mavlink",
+                "failure_reason": reason,
+                "execution_trace": {
+                    "backend_impl": self.name,
+                    "backend_mode": self.config.backend_mode,
+                    "backend_enabled": bool(self.config.backend_enabled),
+                    "transport_endpoint": self.config.transport_endpoint,
+                    "integration_stage": "px4_sitl_action_v0_1",
+                },
+            }
+        )
+        return result
+
+    def _ensure_sitl_action_allowed(self, action: str) -> dict[str, Any] | None:
+        if self.config.backend_mode != "sitl":
+            return self._preflight_rejection(action, "sitl_only_required")
+        if not self.config.backend_enabled:
+            return self._preflight_rejection(action, "sitl_backend_disabled")
+        if not str(self.config.transport_endpoint or "").strip():
+            return self._preflight_rejection(action, "transport_endpoint_missing")
+        if not self._is_pymavlink_available():
+            return self._preflight_rejection(action, "dependency_missing")
+        return None
+
+    def execute_takeoff_smoke(
+        self,
+        *,
+        altitude_m: float = 3.0,
+        auto_land: bool = True,
+        command_timeout_ms: int | None = None,
+        observe_timeout_ms: int | None = None,
+        threshold_ratio: float = 0.70,
+    ) -> dict[str, Any]:
+        rejected = self._ensure_sitl_action_allowed("takeoff")
+        if rejected is not None:
+            return rejected
+
+        command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
+        observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
+        target_altitude = float(altitude_m)
+        threshold_altitude = round(target_altitude * float(threshold_ratio), 2)
+        result = self._base_action_result("takeoff")
+        result.update(
+            {
+                "target_altitude_m": target_altitude,
+                "threshold_ratio": float(threshold_ratio),
+                "threshold_altitude_m": threshold_altitude,
+                "auto_land": bool(auto_land),
+            }
+        )
+
+        try:
+            self.session.connect(timeout_s=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
+            result["heartbeat_connected"] = True
+            self.session.start_gcs_heartbeat()
+            result["gcs_heartbeat_started"] = True
+
+            interval_ack = self.session.request_local_position_stream(rate_hz=10.0, timeout_s=command_timeout_s)
+            result["local_position_stream_ack"] = interval_ack
+            result["local_position_stream_requested"] = not bool(interval_ack.get("timeout")) and int(interval_ack.get("result") if interval_ack.get("result") is not None else -1) == 0
+
+            arm_ack = self.session.arm(timeout_s=command_timeout_s)
+            result["arm_ack"] = arm_ack
+            if bool(arm_ack.get("timeout")) or int(arm_ack.get("result") if arm_ack.get("result") is not None else -1) != 0:
+                result["failure_reason"] = "arm_rejected_or_timeout"
+                return self._finish_smoke_result(result)
+
+            takeoff_ack = self.session.takeoff(altitude_m=target_altitude, timeout_s=command_timeout_s)
+            result["takeoff_ack"] = takeoff_ack
+            if bool(takeoff_ack.get("timeout")) or int(takeoff_ack.get("result") if takeoff_ack.get("result") is not None else -1) != 0:
+                result["failure_reason"] = "takeoff_rejected_or_timeout"
+                return self._finish_smoke_result(result)
+
+            observation = self.session.observe_local_position_altitude(timeout_s=observe_timeout_s)
+            result["altitude_observation"] = observation
+            result["max_altitude_m"] = float(observation.get("max_altitude_m", 0.0) or 0.0)
+            result["threshold_reached"] = result["max_altitude_m"] >= threshold_altitude
+            if not result["threshold_reached"]:
+                result["failure_reason"] = "altitude_threshold_not_reached"
+
+            if auto_land:
+                result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
+
+            if result["threshold_reached"]:
+                result["result"] = "pass"
+            return self._finish_smoke_result(result)
+        except TimeoutError:
+            result["failure_reason"] = "heartbeat_timeout"
+            return self._finish_smoke_result(result)
+        except OSError:
+            result["failure_reason"] = "connection_failed"
+            return self._finish_smoke_result(result)
+        except Exception as exc:
+            result["failure_reason"] = f"px4_action_exception:{type(exc).__name__}"
+            return self._finish_smoke_result(result)
+        finally:
+            self.session.stop_gcs_heartbeat()
+
+    def execute_land_action(self, *, command_timeout_ms: int | None = None) -> dict[str, Any]:
+        rejected = self._ensure_sitl_action_allowed("land")
+        if rejected is not None:
+            return rejected
+        command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
+        result = self._base_action_result("land")
+        try:
+            self.session.connect(timeout_s=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
+            result["heartbeat_connected"] = True
+            self.session.start_gcs_heartbeat()
+            result["gcs_heartbeat_started"] = True
+            result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
+            if not bool(result["land_ack"].get("timeout")) and int(result["land_ack"].get("result") if result["land_ack"].get("result") is not None else -1) == 0:
+                result["result"] = "pass"
+            else:
+                result["failure_reason"] = "land_rejected_or_timeout"
+            return self._finish_smoke_result(result)
+        except Exception as exc:
+            result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
+            return self._finish_smoke_result(result)
+        finally:
+            self.session.stop_gcs_heartbeat()
+
+    def _finish_smoke_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        result.update(
+            {
+                "accepted": result.get("result") == "pass",
+                "code": "px4_sitl_action_pass" if result.get("result") == "pass" else "px4_sitl_action_failed",
+                "message": "px4_sitl_action_v0_1",
+                "detail": result.get("failure_reason") or result.get("result"),
+                "adapter": "mavlink",
+                "evidence_ref": f"sitl://px4/{result.get('action')}/{result.get('result')}",
+                "execution_trace": {
+                    "backend_impl": self.name,
+                    "backend_mode": self.config.backend_mode,
+                    "backend_enabled": bool(self.config.backend_enabled),
+                    "transport_endpoint": self.config.transport_endpoint,
+                    "command_timeout_ms": self.config.command_timeout_ms,
+                    "observe_timeout_ms": self.config.observe_timeout_ms,
+                    "integration_stage": "px4_sitl_action_v0_1",
+                },
+            }
+        )
+        return result
+
     def execute_mapped_action(self, action: str, mapping: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-        # Execution remains placeholder-only.  Even if backend_connected is true,
-        # this method does not send a real MAVLink control command.
+        # Runtime smoke actions must opt into real SITL command execution explicitly.
+        # Existing submit-action mavlink paths keep placeholder semantics unless the
+        # CLI/runtime passes __real_sitl_action=True after Policy Gate approval.
+        if bool(args.get("__real_sitl_action")) and action == "takeoff":
+            return self.execute_takeoff_smoke(
+                altitude_m=float(args.get("altitude_m", 3.0) or 3.0),
+                auto_land=bool(args.get("auto_land", True)),
+                command_timeout_ms=int(args.get("command_timeout_ms", self.config.command_timeout_ms) or self.config.command_timeout_ms),
+                observe_timeout_ms=int(args.get("observe_timeout_ms", self.config.observe_timeout_ms) or self.config.observe_timeout_ms),
+                threshold_ratio=float(args.get("threshold_ratio", 0.70) or 0.70),
+            )
+        if bool(args.get("__real_sitl_action")) and action == "land":
+            return self.execute_land_action(command_timeout_ms=int(args.get("command_timeout_ms", self.config.command_timeout_ms) or self.config.command_timeout_ms))
+
         probe = self.connect_probe()
         code = str(probe.get("code", "backend_probe_failed"))
         status = str(probe.get("status", self.session.status()))
 
-        # Placeholder semantics only: never pretend success in current phase.
         return {
             "accepted": False,
             "code": code,

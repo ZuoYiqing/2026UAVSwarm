@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from uav_runtime.policy.action_registry import capability_manifest
@@ -98,6 +99,21 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--connect-timeout-ms", type=int, default=3000)
     c.add_argument("--timeout-ms", type=int, default=3000)
     c.add_argument("--retry-count", type=int, default=0)
+
+    smoke = sub.add_parser("smoke-takeoff")
+    _add_pretty_arg(smoke)
+    smoke.add_argument("--backend", choices=["px4_sitl"], default="px4_sitl")
+    smoke.add_argument("--backend-mode", choices=["stub", "sitl"], default="sitl")
+    smoke.add_argument("--backend-enabled", action="store_true")
+    smoke.add_argument("--transport-endpoint", default="")
+    smoke.add_argument("--altitude-m", type=float, default=3.0)
+    smoke.add_argument("--connect-timeout-ms", type=int, default=5000)
+    smoke.add_argument("--command-timeout-ms", type=int, default=10000)
+    smoke.add_argument("--observe-timeout-ms", type=int, default=25000)
+    smoke.add_argument("--threshold-ratio", type=float, default=0.70)
+    smoke.add_argument("--auto-land", action="store_true")
+    smoke.add_argument("--timeout-ms", type=int, default=3000)
+    smoke.add_argument("--retry-count", type=int, default=0)
 
     caps = sub.add_parser("list-capabilities")
     _add_pretty_arg(caps)
@@ -198,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         backend_enabled=bool(getattr(args, "backend_enabled", False)),
         transport_endpoint=str(getattr(args, "transport_endpoint", "") or ""),
         connect_timeout_ms=int(getattr(args, "connect_timeout_ms", 3000) or 3000),
+        command_timeout_ms=int(getattr(args, "command_timeout_ms", 10000) or 10000),
+        observe_timeout_ms=int(getattr(args, "observe_timeout_ms", 25000) or 25000),
         timeout_ms=int(getattr(args, "timeout_ms", 3000) or 3000),
         retry_count=int(getattr(args, "retry_count", 0) or 0),
     )
@@ -207,6 +225,62 @@ def main(argv: list[str] | None = None) -> int:
         req = _build_request_from_args(args)
         result = rt.handle_action_request(req)
         out = _attach_policy_snapshot(result, str(rt.audit.path))
+    elif args.cmd == "smoke-takeoff":
+        req = ActionRequest(
+            action="takeoff",
+            params={"altitude_m": float(args.altitude_m)},
+            source=CommandSource.SELF_LOCAL,
+            scope=AuthorityScope.SELF_ONLY,
+            mission_id="mission-px4-smoke-takeoff",
+            action_type="takeoff",
+            skill_group="flight_core",
+            target_set=["self"],
+            risk_hint=1,
+            priority_hint=50,
+            requires_confirmation_hint=False,
+        )
+        decision_code, policy_event = rt.evaluate_policy_request(req)
+        if decision_code != "allow":
+            out = {
+                "action": "takeoff",
+                "backend": "px4_sitl",
+                "backend_mode": mav_cfg.backend_mode,
+                "endpoint": mav_cfg.transport_endpoint,
+                "policy_decision": policy_event,
+                "result": "fail",
+                "failure_reason": f"policy_{decision_code.lower()}",
+            }
+        else:
+            session = MavlinkBackendSession.from_config(mav_cfg)
+            backend = Px4SitlBackend(mav_cfg, session)
+            out = backend.execute_takeoff_smoke(
+                altitude_m=float(args.altitude_m),
+                auto_land=bool(args.auto_land),
+                command_timeout_ms=int(args.command_timeout_ms),
+                observe_timeout_ms=int(args.observe_timeout_ms),
+                threshold_ratio=float(args.threshold_ratio),
+            )
+            out["policy_decision"] = policy_event
+        rt.audit.append({
+            "type": "px4_sitl_smoke_takeoff",
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "action": out.get("action", "takeoff"),
+            "backend": out.get("backend", "px4_sitl"),
+            "backend_mode": out.get("backend_mode", mav_cfg.backend_mode),
+            "endpoint": out.get("endpoint", mav_cfg.transport_endpoint),
+            "policy_decision": out.get("policy_decision"),
+            "mavlink_commands": ["MAV_CMD_SET_MESSAGE_INTERVAL", "MAV_CMD_COMPONENT_ARM_DISARM", "MAV_CMD_NAV_TAKEOFF", "MAV_CMD_NAV_LAND"],
+            "ack": {
+                "arm_ack": out.get("arm_ack"),
+                "takeoff_ack": out.get("takeoff_ack"),
+                "land_ack": out.get("land_ack"),
+            },
+            "altitude_observation": out.get("altitude_observation"),
+            "max_altitude_m": out.get("max_altitude_m"),
+            "threshold_reached": out.get("threshold_reached"),
+            "result": out.get("result"),
+            "failure_reason": out.get("failure_reason"),
+        })
     elif args.cmd == "check-backend":
         session = MavlinkBackendSession.from_config(mav_cfg)
         backend = Px4SitlBackend(mav_cfg, session)

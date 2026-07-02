@@ -116,6 +116,38 @@ def test_parser_accepts_check_backend_command() -> None:
     assert args.transport_endpoint == "udpin:127.0.0.1:14540"
 
 
+def test_parser_accepts_smoke_takeoff_command() -> None:
+    args = build_parser().parse_args([
+        "smoke-takeoff",
+        "--backend",
+        "px4_sitl",
+        "--backend-mode",
+        "sitl",
+        "--backend-enabled",
+        "--transport-endpoint",
+        "udpin:127.0.0.1:14540",
+        "--altitude-m",
+        "3",
+        "--connect-timeout-ms",
+        "5000",
+        "--command-timeout-ms",
+        "10000",
+        "--observe-timeout-ms",
+        "25000",
+        "--auto-land",
+    ])
+
+    assert args.cmd == "smoke-takeoff"
+    assert args.backend == "px4_sitl"
+    assert args.backend_mode == "sitl"
+    assert args.backend_enabled is True
+    assert args.transport_endpoint == "udpin:127.0.0.1:14540"
+    assert args.altitude_m == 3
+    assert args.command_timeout_ms == 10000
+    assert args.observe_timeout_ms == 25000
+    assert args.auto_land is True
+
+
 def test_main_check_backend_outputs_readiness_json(capsys) -> None:
     rc = main(["check-backend", "--backend-enabled"])
     assert rc == 0
@@ -225,3 +257,32 @@ def test_main_list_capabilities_fallback_and_adapter_filters(capsys) -> None:
     assert all(row["fallback_allowed"] is True for row in capabilities)
     assert all("payload" in row["supported_adapters"] for row in capabilities)
     assert all(row["dangerous"] is False for row in capabilities)
+
+
+def test_main_smoke_takeoff_non_sitl_outputs_policy_and_audit(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    rc = main([
+        "smoke-takeoff",
+        "--backend",
+        "px4_sitl",
+        "--backend-mode",
+        "stub",
+        "--backend-enabled",
+        "--transport-endpoint",
+        "udpin:127.0.0.1:14540",
+        "--auto-land",
+    ])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["endpoint"] == "udpin:127.0.0.1:14540"
+    assert payload["policy_decision"]["decision_code"] == "allow"
+    assert payload["result"] == "fail"
+    assert payload["failure_reason"] == "sitl_only_required"
+
+    audit_text = (tmp_path / "audit" / "runtime.audit.jsonl").read_text(encoding="utf-8")
+    assert "policy_decision_event" in audit_text
+    assert "px4_sitl_smoke_takeoff" in audit_text
+    assert "udpin:127.0.0.1:14540" in audit_text
+    assert "MAV_CMD_NAV_TAKEOFF" in audit_text

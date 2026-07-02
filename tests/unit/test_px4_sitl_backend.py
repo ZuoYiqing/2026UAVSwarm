@@ -152,3 +152,65 @@ def test_px4_sitl_backend_probe_success_returns_backend_connected(monkeypatch) -
     assert probe["status"] == "connected"
     assert diag["connect_probe"]["code"] == "backend_connected"
     assert diag["readiness"] == "ready"
+
+class _FakePx4ActionSession:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def status(self) -> str:
+        return "not_connected"
+
+    def connect(self, *, timeout_s: float):
+        return object()
+
+    def start_gcs_heartbeat(self) -> bool:
+        return True
+
+    def stop_gcs_heartbeat(self, **kwargs) -> None:
+        self.stopped = True
+
+    def request_local_position_stream(self, *, rate_hz: float, timeout_s: float) -> dict:
+        return {"command": 511, "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+
+    def arm(self, *, timeout_s: float) -> dict:
+        return {"command": 400, "command_name": "MAV_CMD_COMPONENT_ARM_DISARM", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+
+    def takeoff(self, *, altitude_m: float, timeout_s: float) -> dict:
+        return {"command": 22, "command_name": "MAV_CMD_NAV_TAKEOFF", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+
+    def land(self, *, timeout_s: float) -> dict:
+        return {"command": 21, "command_name": "MAV_CMD_NAV_LAND", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+
+    def observe_local_position_altitude(self, *, timeout_s: float) -> dict:
+        return {"observed": True, "samples": 3, "max_altitude_m": 2.13}
+
+
+def test_px4_sitl_takeoff_smoke_rejects_non_sitl_mode(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="stub", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
+    backend = Px4SitlBackend(cfg, _FakePx4ActionSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_takeoff_smoke()
+
+    assert result["accepted"] is False
+    assert result["failure_reason"] == "sitl_only_required"
+
+
+def test_px4_sitl_takeoff_smoke_result_contains_ack_and_threshold_fields(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
+    session = _FakePx4ActionSession()
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_takeoff_smoke(altitude_m=3.0, auto_land=True)
+
+    assert result["action"] == "takeoff"
+    assert result["endpoint"] == "udpin:127.0.0.1:14540"
+    assert result["arm_ack"]["result"] == 0
+    assert result["takeoff_ack"]["result"] == 0
+    assert result["land_ack"]["result"] == 0
+    assert result["max_altitude_m"] == 2.13
+    assert result["threshold_altitude_m"] == 2.1
+    assert result["threshold_reached"] is True
+    assert result["result"] == "pass"
+    assert session.stopped is True

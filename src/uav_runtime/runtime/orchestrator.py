@@ -289,9 +289,12 @@ class RuntimeOrchestrator:
         self._append_takeover_event("pending_takeover_activated", selected, decision_code=decision_code)
         return {"status": "activated", "activated": True, "takeover_id": selected.takeover_id, "request_id": selected.request_id}
 
-    def handle_action_request(self, req: ActionRequest) -> dict:
-        # Normalize legacy/minimal request fields before policy evaluation.  Tests and
-        # CLI paths may omit ids, but audit/replay require stable request_id/mission_id.
+    def evaluate_policy_request(self, req: ActionRequest) -> tuple[str, dict]:
+        """Normalize request, run Policy Gate, and append policy_decision_event.
+
+        This helper lets explicit SITL smoke commands share the same Policy Gate
+        and audit path as normal submit-action without dispatching an adapter first.
+        """
         request_id = req.request_id or f"req-{uuid.uuid4().hex[:10]}"
         req.request_id = request_id
         if not req.action_type:
@@ -314,8 +317,6 @@ class RuntimeOrchestrator:
         decision_code = decision.decision_code.value if isinstance(decision.decision_code, DecisionCode) else decision.decision_code
 
         policy_decision_event = {
-            # This event is the key audit/replay artifact for control-plane behavior.
-            # If someone asks "why did the system deny/defer/allow?", start here.
             "type": "policy_decision_event",
             "request_id": request_id,
             "mission_id": req.mission_id,
@@ -336,14 +337,19 @@ class RuntimeOrchestrator:
         }
         self.bus.publish("policy_decision_event", policy_decision_event)
         self.audit.append(policy_decision_event)
+        return decision_code, policy_decision_event
+
+    def handle_action_request(self, req: ActionRequest) -> dict:
+        decision_code, policy_decision_event = self.evaluate_policy_request(req)
+        request_id = req.request_id
 
         if decision_code == DecisionCode.DENY.value:
             # Policy blocked the request.  Do not call adapters.
-            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
             return self._blocked_like_result(request_id, "blocked", reason)
         if decision_code == DECISION_DEFER:
             # Runtime records a pending takeover for later phase_exit re-evaluation.
-            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
             takeover = self._create_pending_takeover(req, reason)
             result = self._blocked_like_result(request_id, "deferred", reason)
             result["takeover_status"] = takeover.status
@@ -352,12 +358,12 @@ class RuntimeOrchestrator:
         if decision_code == DECISION_REQUIRE_CONFIRM:
             # Current MVP does not implement an interactive confirmation workflow;
             # it returns a stable waiting_confirmation result for callers/tests.
-            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
             return self._blocked_like_result(request_id, "waiting_confirmation", reason)
         if decision_code == DecisionCode.PREEMPT.value:
             # PREEMPT is currently control-plane intent only; no real abort/suspend
             # command is sent to hardware in this project stage.
-            reason = self._require_primary_reason(decision_code, decision.primary_reason_code)
+            reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
             return self._blocked_like_result(request_id, "handover_pending", reason)
 
         # ALLOW -> execute selected adapter

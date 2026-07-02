@@ -198,3 +198,74 @@ udp port 14580 remote port 14540
 - 暂不执行 `arm` / `set_mode` / `takeoff`。
 
 ---
+
+## 10) Minimal takeoff smoke 收尾记录（pymavlink 临时脚本）
+
+`backend_connected` 后，本轮已使用临时 pymavlink 脚本完成一次 **PX4 SITL minimal takeoff smoke**。
+
+边界说明：
+- 这是 SITL-only 临时脚本验证；
+- 不是 `uav_runtime submit-action takeoff` 正式闭环；
+- 不代表真实无人机可飞；
+- 不做多机；
+- 不接 QGroundControl；
+- 不修改 policy/protocol contract。
+
+验证环境与 endpoint：
+- WSL Ubuntu 22.04.4；
+- PX4 commit：`171f0f38cffa95f28d5e159f7aaf7599756f9e0e`；
+- Gazebo：`8.14.0`；
+- runtime commit：`aca6d40`；
+- PX4 启动命令：`HEADLESS=1 make px4_sitl gz_x500`；
+- endpoint：`udpin:127.0.0.1:14540`。
+
+smoke 流程：
+1. wait heartbeat；
+2. start GCS heartbeat；
+3. request `LOCAL_POSITION_NED` interval；
+4. ARM；
+5. TAKEOFF 3m；
+6. observe `LOCAL_POSITION_NED` altitude rise；
+7. LAND。
+
+验收结果：
+- ARM ACK `result=0`；
+- TAKEOFF ACK `result=0`；
+- LAND ACK `result=0`；
+- `max_altitude_m=2.13`；
+- `threshold_reached=True`；
+- `RESULT=PASS`。
+
+已知问题：首次 ARM 在没有持续 GCS heartbeat 时返回 `TEMPORARILY_REJECTED`。加入 GCS heartbeat thread 后 ARM accepted。
+因此下一阶段 runtime PX4 action 接入必须维持 companion/GCS heartbeat session，不能只做一次性命令连接。
+
+详细记录见 `docs/px4_sitl_minimal_takeoff_smoke_validation_log.md`。
+下一阶段设计见 `docs/px4_runtime_takeoff_action_integration_plan.md`。
+
+
+## 11) Runtime smoke-takeoff v0.1 command
+
+After PX4 is running with:
+
+```bash
+HEADLESS=1 make px4_sitl gz_x500
+```
+
+run the SITL-only runtime smoke command:
+
+```bash
+python -m uav_runtime.console.cli smoke-takeoff \
+  --backend px4_sitl \
+  --backend-mode sitl \
+  --backend-enabled \
+  --transport-endpoint udpin:127.0.0.1:14540 \
+  --altitude-m 3 \
+  --connect-timeout-ms 5000 \
+  --command-timeout-ms 10000 \
+  --observe-timeout-ms 25000 \
+  --auto-land \
+  --pretty
+```
+
+This command is still a minimal SITL action closure, not a full mission planner.
+It keeps the GCS heartbeat active before ARM and records ACK / altitude / threshold evidence in the JSON action result and audit log.
