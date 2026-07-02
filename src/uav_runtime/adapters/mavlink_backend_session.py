@@ -6,6 +6,7 @@ only when connect() is called by explicit SITL smoke commands.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,11 @@ def ack_dict(command: int | str, result: int | None, *, timeout: bool = False) -
         "result_name": mav_result_name(result),
         "timeout": bool(timeout),
     }
+
+
+def ned_down_z_to_altitude_m(z: float) -> float:
+    """Convert PX4 LOCAL_POSITION_NED positive-down z into above-origin altitude."""
+    return max(0.0, -float(z))
 
 
 @dataclass(slots=True)
@@ -202,7 +208,11 @@ class MavlinkBackendSession:
 
     def takeoff(self, *, altitude_m: float, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_TAKEOFF", 22)
-        self.send_command_long(command, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float(altitude_m)])
+        # Match the locally validated temporary pymavlink smoke script:
+        # [pitch=NaN, param2=0, param3=0, yaw=NaN, lat=NaN, lon=NaN, altitude].
+        # Do not send yaw/lat/lon as 0 because that can be interpreted as concrete
+        # coordinate/yaw intent rather than "use current" in PX4 SITL tests.
+        self.send_command_long(command, [math.nan, 0.0, 0.0, math.nan, math.nan, math.nan, float(altitude_m)])
         ack = self.wait_command_ack(command, timeout_s=timeout_s)
         ack["command_name"] = "MAV_CMD_NAV_TAKEOFF"
         return ack
@@ -214,18 +224,47 @@ class MavlinkBackendSession:
         ack["command_name"] = "MAV_CMD_NAV_LAND"
         return ack
 
-    def observe_local_position_altitude(self, *, timeout_s: float) -> dict[str, Any]:
+    def observe_local_position_altitude(
+        self,
+        *,
+        timeout_s: float,
+        threshold_altitude_m: float | None = None,
+    ) -> dict[str, Any]:
         if self.connection is None:
             raise RuntimeError("connection_required")
         deadline = time.time() + max(timeout_s, 0.1)
         max_altitude = 0.0
-        count = 0
+        sample_count = 0
+        first_z: float | None = None
+        last_z: float | None = None
+        min_z: float | None = None
+        max_z: float | None = None
+        threshold_reached = False
         while time.time() < deadline:
             msg = self.connection.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=max(min(deadline - time.time(), 0.5), 0.01))
             if msg is None:
                 continue
-            count += 1
             z = float(getattr(msg, "z", 0.0))
-            # PX4 LOCAL_POSITION_NED uses positive-down z, so altitude above takeoff is -z.
-            max_altitude = max(max_altitude, -z)
-        return {"observed": count > 0, "samples": count, "max_altitude_m": round(max_altitude, 2)}
+            sample_count += 1
+            first_z = z if first_z is None else first_z
+            last_z = z
+            min_z = z if min_z is None else min(min_z, z)
+            max_z = z if max_z is None else max(max_z, z)
+            # PX4 LOCAL_POSITION_NED uses NED positive-down z; climbing makes z negative.
+            altitude_m = ned_down_z_to_altitude_m(z)
+            max_altitude = max(max_altitude, altitude_m)
+            if threshold_altitude_m is not None and max_altitude >= float(threshold_altitude_m):
+                threshold_reached = True
+                break
+        return {
+            "observed": sample_count > 0,
+            "samples": sample_count,
+            "sample_count": sample_count,
+            "first_z": first_z,
+            "last_z": last_z,
+            "min_z": min_z,
+            "max_z": max_z,
+            "max_altitude_m": round(max_altitude, 2),
+            "threshold_altitude_m": threshold_altitude_m,
+            "threshold_reached": threshold_reached if threshold_altitude_m is not None else None,
+        }

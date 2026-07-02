@@ -181,8 +181,8 @@ class _FakePx4ActionSession:
     def land(self, *, timeout_s: float) -> dict:
         return {"command": 21, "command_name": "MAV_CMD_NAV_LAND", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
 
-    def observe_local_position_altitude(self, *, timeout_s: float) -> dict:
-        return {"observed": True, "samples": 3, "max_altitude_m": 2.13}
+    def observe_local_position_altitude(self, *, timeout_s: float, threshold_altitude_m: float | None = None) -> dict:
+        return {"observed": True, "samples": 3, "sample_count": 3, "first_z": 0.0, "last_z": -2.13, "min_z": -2.13, "max_z": 0.0, "max_altitude_m": 2.13, "threshold_altitude_m": threshold_altitude_m, "threshold_reached": True}
 
 
 def test_px4_sitl_takeoff_smoke_rejects_non_sitl_mode(monkeypatch) -> None:

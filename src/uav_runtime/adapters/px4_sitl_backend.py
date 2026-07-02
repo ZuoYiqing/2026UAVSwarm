@@ -263,10 +263,10 @@ class Px4SitlBackend:
                 result["failure_reason"] = "takeoff_rejected_or_timeout"
                 return self._finish_smoke_result(result)
 
-            observation = self.session.observe_local_position_altitude(timeout_s=observe_timeout_s)
+            observation = self.session.observe_local_position_altitude(timeout_s=observe_timeout_s, threshold_altitude_m=threshold_altitude)
             result["altitude_observation"] = observation
             result["max_altitude_m"] = float(observation.get("max_altitude_m", 0.0) or 0.0)
-            result["threshold_reached"] = result["max_altitude_m"] >= threshold_altitude
+            result["threshold_reached"] = bool(observation.get("threshold_reached")) or result["max_altitude_m"] >= threshold_altitude
             if not result["threshold_reached"]:
                 result["failure_reason"] = "altitude_threshold_not_reached"
 

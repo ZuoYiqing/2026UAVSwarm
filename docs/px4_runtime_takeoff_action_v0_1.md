@@ -75,6 +75,7 @@ Session responsibilities:
 - send ARM / TAKEOFF / LAND command_long messages;
 - wait `COMMAND_ACK`;
 - observe `LOCAL_POSITION_NED` altitude;
+- convert NED positive-down `z` into altitude as `max(0.0, -z)`;
 - clean up the heartbeat thread.
 
 ---
@@ -111,6 +112,19 @@ ACK objects include:
 - `result_name`;
 - `timeout`.
 
+`altitude_observation` includes debug fields for SITL diagnosis:
+
+- `sample_count`;
+- `first_z`;
+- `last_z`;
+- `min_z`;
+- `max_z`;
+- `max_altitude_m`;
+- `threshold_altitude_m`;
+- `threshold_reached`.
+
+PX4 `LOCAL_POSITION_NED.z` is positive-down, so climb is negative `z`; runtime computes altitude as `max(0.0, -float(z))`.
+
 ---
 
 ## 6) Audit / Replay
@@ -144,3 +158,16 @@ Existing replay reads JSONL events generically, so this event can be inspected w
 - No payload/device control expansion.
 - No dangerous payload, release, strike, drop, or deploy action.
 - No policy bypass.
+
+
+---
+
+## 8) Takeoff Command Parameters
+
+Runtime v0.1 matches the temporary pymavlink smoke script for `MAV_CMD_NAV_TAKEOFF` parameters:
+
+```text
+[param1=pitch NaN, param2=0, param3=0, param4=yaw NaN, param5=lat NaN, param6=lon NaN, param7=target_altitude_m]
+```
+
+Yaw / lat / lon intentionally use `NaN`, not `0`, so PX4 does not interpret `0` as an explicit yaw or coordinate intent during SITL smoke.

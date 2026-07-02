@@ -269,3 +269,22 @@ python -m uav_runtime.console.cli smoke-takeoff \
 
 This command is still a minimal SITL action closure, not a full mission planner.
 It keeps the GCS heartbeat active before ARM and records ACK / altitude / threshold evidence in the JSON action result and audit log.
+
+
+## 12) Altitude observation and takeoff parameter notes
+
+PX4 `LOCAL_POSITION_NED` uses NED coordinates where `z` is positive down.
+During takeoff, the vehicle climbs and `z` becomes negative.
+Runtime smoke therefore computes observed altitude as:
+
+```python
+altitude_m = max(0.0, -float(msg.z))
+```
+
+The v0.1 smoke command also sends `MAV_CMD_NAV_TAKEOFF` parameters matching the temporary pymavlink PASS script:
+
+```text
+[NaN, 0, 0, NaN, NaN, NaN, target_altitude_m]
+```
+
+Do not replace yaw / lat / lon `NaN` with `0` for this smoke path.
