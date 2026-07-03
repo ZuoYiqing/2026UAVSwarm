@@ -288,3 +288,40 @@ The v0.1 smoke command also sends `MAV_CMD_NAV_TAKEOFF` parameters matching the 
 ```
 
 Do not replace yaw / lat / lon `NaN` with `0` for this smoke path.
+
+
+## 13) 如何确认无人机真的执行了命令
+
+不要只看 `COMMAND_ACK`。ACK accepted 只表示 PX4 接受命令，不等于动作已经完成。
+
+推荐同时使用三种验证方式：
+
+1. **action_result**
+   - 查看 `arm_ack` / `takeoff_ack` / `land_ack`；
+   - 查看 `max_altitude_m`；
+   - 查看 `threshold_altitude_m` / `threshold_reached`；
+   - 查看最终 `result=pass|fail`。
+
+2. **MAVLink telemetry**
+   - 使用 `scripts/px4_sitl_observe.py` 观察 `LOCAL_POSITION_NED`；
+   - PX4 NED `z` 是 positive-down；
+   - 高度计算为 `max(0.0, -z)`。
+
+3. **Gazebo GUI**
+   - 不使用 `HEADLESS=1`，运行 `make px4_sitl gz_x500`；
+   - 在 Gazebo GUI 中直接观察 `x500` 模型是否离地。
+
+示例 telemetry observation 命令：
+
+```bash
+python scripts/px4_sitl_observe.py \
+  --endpoint udpin:127.0.0.1:14540 \
+  --duration-s 30 \
+  --output-json ~/px4_offline_bundle/uav_runtime/sitl_validation/telemetry_observe_summary.json \
+  --output-csv ~/px4_offline_bundle/uav_runtime/sitl_validation/telemetry_observe_samples.csv
+```
+
+详细说明见：
+
+- `docs/px4_gazebo_visual_observation_runbook.md`；
+- `docs/px4_command_completion_criteria.md`。
