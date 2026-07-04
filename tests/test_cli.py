@@ -286,3 +286,40 @@ def test_main_smoke_takeoff_non_sitl_outputs_policy_and_audit(tmp_path, monkeypa
     assert "px4_sitl_smoke_takeoff" in audit_text
     assert "udpin:127.0.0.1:14540" in audit_text
     assert "MAV_CMD_NAV_TAKEOFF" in audit_text
+
+
+def test_parser_accepts_plan_mission_command() -> None:
+    args = build_parser().parse_args([
+        "plan-mission",
+        "--mission-type",
+        "inspection_snapshot",
+        "--source",
+        "ground_station",
+        "--profile",
+        "standard",
+        "--dry-run",
+        "--pretty",
+    ])
+    assert args.cmd == "plan-mission"
+    assert args.mission_type == "inspection_snapshot"
+    assert args.source == "ground_station"
+    assert args.profile == "standard"
+    assert args.dry_run is True
+    assert args.pretty is True
+
+
+def test_plan_mission_cli_outputs_plan_result_fields(capsys) -> None:  # type: ignore[no-untyped-def]
+    rc = main(["plan-mission", "--mission-type", "status_only", "--source", "ground_station", "--pretty"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"] == "ready"
+    assert out["plan"]["mission_type"] == "status_only"
+    assert [step["action_type"] for step in out["plan"]["steps"]] == [
+        "health_query",
+        "sensor_read",
+        "report_status",
+    ]
+    assert "validation_summary" in out
+    assert "policy_summary" in out
+    assert out["plan"]["steps"][0]["required_capability"]["action_type"] == "health_query"
+    assert out["plan"]["steps"][0]["policy_precheck"]["decision_code"] == "allow"

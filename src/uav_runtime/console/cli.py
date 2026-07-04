@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
 from uav_runtime.policy.action_registry import capability_manifest
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
@@ -115,6 +116,17 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--timeout-ms", type=int, default=3000)
     smoke.add_argument("--retry-count", type=int, default=0)
 
+    plan = sub.add_parser("plan-mission")
+    _add_pretty_arg(plan)
+    # Dry-run / plan-only: this command never calls adapters or sends MAVLink.
+    # It routes an explicit mission_type through deterministic templates so humans
+    # can inspect capability validation and Policy Gate precheck before execution.
+    plan.add_argument("--mission-type", required=True)
+    plan.add_argument("--source", default="ground_station")
+    plan.add_argument("--profile", default="standard")
+    plan.add_argument("--objective", default="")
+    plan.add_argument("--dry-run", action="store_true", default=True)
+
     caps = sub.add_parser("list-capabilities")
     _add_pretty_arg(caps)
     # Capability manifest filters are read-only inventory helpers.  They must not
@@ -194,6 +206,19 @@ def _attach_policy_snapshot(result: dict[str, Any], audit_path: str) -> dict[str
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "plan-mission":
+        intent = MissionIntent(
+            intent_id=f"intent-{datetime.now(tz=timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
+            mission_type=str(args.mission_type),
+            source=str(args.source),
+            objective=str(args.objective or ""),
+            requested_profile=str(args.profile or "standard"),
+            dry_run=True,
+        )
+        planner = TemplateAgentPlanner()
+        _print_output(planner.plan(intent).to_dict(), pretty=bool(getattr(args, "pretty", False)))
+        return 0
+
     if args.cmd == "list-capabilities":
         # Read-only fast path: do not instantiate RuntimeOrchestrator, do not create
         # audit files, and do not connect to PX4/payload hardware.
