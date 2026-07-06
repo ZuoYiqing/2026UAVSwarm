@@ -184,7 +184,7 @@ function overviewPage() {
     </div>
     <div class="main-overview">
       ${panel("三维任务态势预览", scene3d(), "h-fill")}
-      ${panel("事件 / 告警", eventList(), "h-fill scroll")}
+      ${panel("最近动作记录 / 事件流", `<p class="small">点击 Check Backend、Smoke Test、Land、策略预检、故障注入后会写入这里。</p>${eventList()}`, "h-fill scroll")}
     </div>
     ${runtimeChain(true)}
   </div>`;
@@ -343,6 +343,15 @@ function telemetryCard(title, value, color) {
   return `<section class="panel"><div class="small">${esc(title)}</div><h2 style="margin:8px 0;color:${color}">${esc(value)}</h2>${spark(color)}</section>`;
 }
 
+function telemetrySummary() {
+  return `<div class="cols-4">
+    ${telemetryCard("max_altitude_m", state.maxAltitude.toFixed(1), "#36c7f4")}
+    ${telemetryCard("last_z", state.lastZ.toFixed(1), "#42d883")}
+    ${telemetryCard("threshold_reached", String(state.thresholdReached), "#f5b84c")}
+    ${telemetryCard("current status", `AUTO.${state.currentAction}`, "#9a7cff")}
+  </div>`;
+}
+
 function statusTile(title, value, detail, color) {
   return `<section class="panel"><div class="small">${esc(title)}</div><h2 class="${color}" style="margin:8px 0">${esc(value)}</h2><div class="small">${esc(detail)}</div></section>`;
 }
@@ -436,7 +445,8 @@ function backendPage() {
       </div>
       <div class="grid">
         ${panel("Backend 健康与探测", `<table class="table"><tr><th>Backend</th><th>状态</th><th>Probe</th><th>延迟</th></tr><tr><td>Fake Backend</td><td>${badge("RUNNING", "green")}</td><td>OK</td><td>1ms</td></tr><tr><td>px4_sitl_backend</td><td>${badge(state.backendConnected ? "RUNNING" : "FAILED", state.backendConnected ? "green" : "red")}</td><td>${state.backendConnected ? "OK" : "FAILED"}</td><td>6ms</td></tr><tr><td>hardware_backend</td><td>${badge("STANDBY", "amber")}</td><td>N/A</td><td>-</td></tr></table>`)}
-        ${panel("Smoke Test", `<div class="form-grid"><div class="field"><label>目标 Backend</label><select><option>px4_sitl_backend</option></select></div><div class="field"><label>测试集</label><select><option>default_suite</option></select></div><div class="field"><label>超时(s)</label><input value="10"></div></div><button class="button primary" style="margin-top:10px" onclick="runSmokeTakeoff()">运行 Smoke Test</button> <button class="button warn" onclick="runLand()">Land</button> ${badge(state.thresholdReached ? "SUCCESS" : "RUNNING", state.thresholdReached ? "green" : "amber")}`)}
+        ${panel("Action 控制", `<div class="form-grid"><div class="field"><label>目标 Backend</label><select><option>px4_sitl_backend</option></select></div><div class="field"><label>altitude_m</label><input value="${state.altitude.toFixed(1)}"></div><div class="field"><label>超时(s)</label><input value="10"></div></div><button class="button primary" style="margin-top:10px" onclick="runSmokeTakeoff()">Smoke Takeoff</button> <button class="button warn" onclick="runLand()">Land</button> ${badge(state.thresholdReached ? "SUCCESS" : "RUNNING", state.thresholdReached ? "green" : "amber")}`)}
+        ${panel("Telemetry 显示", telemetrySummary())}
         ${panel("Action Result JSON", `<pre class="json">${esc(JSON.stringify({
           backend: "px4_sitl_backend",
           action_type: state.currentAction,
@@ -446,6 +456,7 @@ function backendPage() {
           land_ack: false,
           result: { altitude: state.altitude, max_altitude_m: state.maxAltitude, last_z: state.lastZ, threshold_reached: state.thresholdReached, mode: `AUTO.${state.currentAction}` },
         }, null, 2))}</pre>`, "scroll")}
+        ${panel("最近动作记录", eventList(), "scroll")}
       </div>
     </div>
   </div>`;
