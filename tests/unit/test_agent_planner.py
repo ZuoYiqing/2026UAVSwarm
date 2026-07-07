@@ -7,6 +7,7 @@ from pathlib import Path
 from uav_runtime.agent.planner import (
     IntentRouter,
     MissionIntent,
+    PLAN_AWAITING_CONFIRMATION,
     PLAN_BLOCKED,
     PLAN_NEEDS_CONFIRM,
     PLAN_READY,
@@ -81,8 +82,9 @@ def test_require_confirm_step_is_marked_needs_operator_confirm(tmp_path: Path) -
     result = TemplateAgentPlanner(router=_SpeakerRouter(), audit=AuditLog(str(tmp_path / "audit.jsonl"))).plan(
         MissionIntent(intent_id="intent-8", mission_type="speaker_template")
     )
-    assert result.result == PLAN_READY
+    assert result.result == PLAN_AWAITING_CONFIRMATION
     assert result.plan is not None
+    assert result.plan.status == PLAN_AWAITING_CONFIRMATION
     step = result.plan.steps[0]
     assert step.status == PLAN_NEEDS_CONFIRM
     assert step.policy_precheck["decision_code"] == "require_confirm"

@@ -20,8 +20,17 @@ from uav_runtime.policy.profile import build_policy_profile
 from uav_runtime.protocol.enums import AuthorityScope, CommandSource, DecisionCode, LinkState
 from uav_runtime.runtime.audit_log import AuditLog
 
+PLAN_DRAFT = "draft"
 PLAN_READY = "ready"
+PLAN_VALIDATED = "validated"
+PLAN_AWAITING_CONFIRMATION = "awaiting_confirmation"
+PLAN_APPROVED = "approved"
+PLAN_EXECUTING = "executing"
+PLAN_COMPLETED = "completed"
 PLAN_BLOCKED = "blocked"
+PLAN_FAILED = "failed"
+PLAN_CANCELLED = "cancelled"
+PLAN_EXPIRED = "expired"
 PLAN_UNSUPPORTED = "unsupported"
 PLAN_NEEDS_CONFIRM = "needs_operator_confirm"
 PLAN_DRY_RUN_ONLY = "dry_run_only"
@@ -66,6 +75,9 @@ class MissionPlanStep:
     risk_level: int | None = None
     fallback_allowed: bool = False
     policy_precheck: dict[str, Any] | None = None
+    # Planner precheck is not final authorization.  Runtime must perform a
+    # fresh Policy Gate check immediately before any future real action execution.
+    final_policy_check_required: bool = True
     status: str = PLAN_READY
 
     def to_dict(self) -> dict[str, Any]:
@@ -194,12 +206,15 @@ class TemplateAgentPlanner:
             elif step.status == PLAN_DRY_RUN_ONLY:
                 dry_run_only_steps.append(step.step_id)
 
-        status = PLAN_BLOCKED if blocked_steps else PLAN_READY
-        explanation = (
-            "Plan blocked by capability validation or policy precheck."
-            if blocked_steps
-            else "Plan generated for dry-run validation only; Runtime must re-authorize before execution."
-        )
+        if blocked_steps:
+            status = PLAN_BLOCKED
+            explanation = "Plan blocked by capability validation or policy precheck."
+        elif require_confirm_steps:
+            status = PLAN_AWAITING_CONFIRMATION
+            explanation = "Plan requires operator confirmation before lifecycle approval."
+        else:
+            status = PLAN_READY
+            explanation = "Plan generated for dry-run validation only; Runtime must re-authorize before execution."
         plan = MissionPlan(
             plan_id=f"plan-{uuid4().hex[:12]}",
             intent_id=intent.intent_id,
@@ -239,6 +254,7 @@ class TemplateAgentPlanner:
                 required_capability=None,
                 policy_precheck=None,
                 status=PLAN_UNSUPPORTED,
+                final_policy_check_required=True,
             )
 
         # Capability validation is the earliest safety boundary in planning:
@@ -255,6 +271,7 @@ class TemplateAgentPlanner:
                 fallback_allowed=capability.fallback_allowed,
                 policy_precheck=None,
                 status=PLAN_BLOCKED,
+                final_policy_check_required=True,
             )
 
         policy_precheck = self._policy_precheck(intent, capability, step_id)
@@ -278,6 +295,7 @@ class TemplateAgentPlanner:
             risk_level=capability.risk_level,
             fallback_allowed=capability.fallback_allowed,
             policy_precheck=policy_precheck,
+            final_policy_check_required=True,
             status=status,
         )
 

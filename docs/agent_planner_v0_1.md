@@ -215,3 +215,11 @@ free text
 ```
 
 LLM 不能直接生成可执行 adapter command，不能绕过 Capability Registry，不能绕过 Policy Gate，不能绕过 Runtime，也不能绕过 operator confirmation。
+
+## 13. 与 Agent Plan Lifecycle v0.1 的关系
+
+Agent Planner v0.1 只负责把显式 `mission_type` 转换为 Mission Plan IR，并做 Capability validation 与 Policy Gate precheck。Agent Plan Lifecycle v0.1 是下一层控制面：它负责 `validated` / `awaiting_confirmation` / `approved` / `executing` / `completed` / `cancelled` 等状态推进、Operator Approval、dry-run/fake PlanExecutionController skeleton 和 lifecycle audit events。
+
+关键边界保持不变：planner precheck 与 operator approval 都不能替代 Runtime execution-time Policy Gate。后续真实执行时，approved plan step 必须转换为 Runtime ActionRequest，再由 RuntimeOrchestrator 调用 Policy Gate 与 adapter。
+
+详见：`docs/agent_plan_lifecycle_v0_1.md`。
