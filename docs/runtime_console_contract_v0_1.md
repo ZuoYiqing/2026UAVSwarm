@@ -421,3 +421,39 @@ Conversion function comments should explain field source and safety semantics, n
 - No GUI rewrite in this phase.
 - No frontend changes in this phase.
 - No major runtime core rewrite in this phase.
+
+## 15. Console API Contracts + Read-only Runtime API v0.1 implementation note
+
+The first code implementation now introduces a console-facing DTO layer in
+`src/uav_runtime/http/contracts.py`. These ViewModels are not runtime execution
+objects and do not grant permission to run actions; they are stable JSON shapes
+for the frontend to render while Runtime and Policy Gate remain authoritative.
+
+Implemented read-only routes:
+
+| Route | ViewModel | Source in v0.1 | Derived/default fields |
+| --- | --- | --- | --- |
+| `GET /api/events?n=50` | `EventEnvelope` | `audit/runtime.audit.jsonl` via replay helper | Missing IDs, source, severity, timestamp summary note |
+| `GET /api/actions/recent?n=20` | `ActionResultView` | audit action events such as `http_smoke_takeoff`, `http_land`, `px4_sitl_smoke_takeoff`, `adapter_execution_result` | `action_id`, `node_id`, adapter inference, null duration fields |
+| `GET /api/policy/decisions?n=20` | `PolicyDecisionView` | audit `policy_decision_event` rows | `decision_id`, empty risk/constraints/tags when absent |
+| `GET /api/skills` | `SkillManifest` | real Capability Registry rows | usage metrics default to zero/null until metrics exist |
+
+Compatibility behavior:
+
+- Old audit/replay rows are tolerated. Missing `event_id`, `trace_id`,
+  `mission_id`, `node_id`, and timestamps do not cause HTTP 500 responses.
+- Raw legacy audit rows are preserved in `EventEnvelope.payload` so Audit / Replay
+  can still inspect the original data.
+- `/api/skills` is a console projection of the Capability Registry. It defaults
+  to hiding dangerous actions and requires `include_dangerous=true` to expose
+  forbidden metadata for documentation or audit review.
+- Existing command routes remain unchanged: `/api/backend/check`,
+  `/api/actions/smoke-takeoff`, `/api/actions/land`, and
+  `/api/planner/plan-mission` keep their existing behavior and safety checks.
+
+Still deferred to later phases:
+
+- Full aggregation for `GET /api/snapshot`.
+- Runtime metrics aggregation for `GET /api/runtime/pipeline`.
+- HTTP polling for `GET /api/telemetry/latest` from a shared telemetry session.
+- WebSocket telemetry streaming.
