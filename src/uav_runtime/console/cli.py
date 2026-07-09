@@ -19,6 +19,7 @@ from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
+from uav_runtime.adapters.px4_telemetry import observe_telemetry
 from uav_runtime.runtime.adapter_selection import DEFAULT_ADAPTER_NAME
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
@@ -42,6 +43,18 @@ def _print_output(payload: object, pretty: bool = False) -> None:
     else:
         print(json.dumps(payload, ensure_ascii=False))
 
+
+
+def _bounded_float(name: str, minimum: float, maximum: float):
+    def _parse(value: str) -> float:
+        try:
+            parsed = float(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"{name} must be a number") from exc
+        if not minimum <= parsed <= maximum:
+            raise argparse.ArgumentTypeError(f"{name} must be between {minimum} and {maximum}")
+        return parsed
+    return _parse
 
 def _add_pretty_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pretty", action="store_true", help="pretty-print JSON output for demo readability")
@@ -136,6 +149,21 @@ def build_parser() -> argparse.ArgumentParser:
     caps.add_argument("--fallback-only", action="store_true")
     caps.add_argument("--include-dangerous", action="store_true")
 
+    observe = sub.add_parser("observe-telemetry")
+    _add_pretty_arg(observe)
+    # Telemetry bridge is observation-only: it normalizes MAVLink state but does
+    # not arm, take off, land, or bypass Runtime/Policy execution boundaries.
+    observe.add_argument("--backend", choices=["px4_sitl"], default="px4_sitl")
+    observe.add_argument("--backend-mode", choices=["sitl"], default="sitl")
+    observe.add_argument("--backend-enabled", action="store_true")
+    observe.add_argument("--transport-endpoint", default="udpin:127.0.0.1:14540")
+    observe.add_argument("--duration-s", type=_bounded_float("duration_s", 1.0, 3600.0), default=30.0)
+    observe.add_argument("--rate-hz", type=_bounded_float("rate_hz", 0.2, 50.0), default=5.0)
+    observe.add_argument("--connect-timeout-ms", type=int, default=5000)
+    observe.add_argument("--output-json", default="")
+    observe.add_argument("--output-jsonl", default="")
+    observe.add_argument("--output-csv", default="")
+
     r = sub.add_parser("replay-last")
     _add_pretty_arg(r)
     r.add_argument("--path", default="audit/runtime.audit.jsonl")
@@ -217,6 +245,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         planner = TemplateAgentPlanner()
         _print_output(planner.plan(intent).to_dict(), pretty=bool(getattr(args, "pretty", False)))
+        return 0
+
+
+    if args.cmd == "observe-telemetry":
+        out = observe_telemetry(
+            backend_mode=str(args.backend_mode),
+            backend_enabled=bool(args.backend_enabled),
+            endpoint=str(args.transport_endpoint),
+            duration_s=float(args.duration_s),
+            rate_hz=float(args.rate_hz),
+            connect_timeout_s=float(args.connect_timeout_ms) / 1000.0,
+            output_json=str(args.output_json or "") or None,
+            output_jsonl=str(args.output_jsonl or "") or None,
+            output_csv=str(args.output_csv or "") or None,
+        )
+        _print_output(out, pretty=bool(getattr(args, "pretty", False)))
         return 0
 
     if args.cmd == "list-capabilities":

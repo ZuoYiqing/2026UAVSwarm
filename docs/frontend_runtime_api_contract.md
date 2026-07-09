@@ -88,3 +88,43 @@ GET /api/replay?n=20
 - 不接真实无人机。
 - 不做 websocket telemetry。
 - 不开放 dangerous payload action。
+
+## 8. Read-only console APIs added in v0.1
+
+The backend now exposes a small set of read-only console APIs so the frontend can
+replace mock data for Skills, Policy, Audit/Replay, and Recent Actions without
+triggering PX4 or adapter execution.
+
+| 前端页面 | HTTP API | 数据来源 | 说明 |
+| --- | --- | --- | --- |
+| Audit / Replay / Timeline | `GET /api/events?n=50` | audit/replay JSONL | 返回统一 `EventEnvelope`，旧 audit 字段缺失时用 derived/default 补齐。 |
+| Adapter/Backend 最近动作 | `GET /api/actions/recent?n=20` | audit action events | 返回 `ActionResultView`，用于最近动作列表和 action result 展示。 |
+| Policy Gate | `GET /api/policy/decisions?n=20` | audit `policy_decision_event` | 返回 `PolicyDecisionView`，保留 decision code、reason、profile、scope、audit tags。 |
+| Skills 能力库 | `GET /api/skills` | Capability Registry | 返回 `SkillManifest`，默认隐藏 dangerous action。 |
+
+`GET /api/capabilities` 仍保留为原始 capability inventory / 兼容接口；新
+`GET /api/skills` 是更适合控制台卡片展示的 projection，包含 display name、
+input/output schema、usage 默认值和 safety metadata。
+
+## 9. 字段来源和安全语义
+
+- `/api/events`、`/api/actions/recent`、`/api/policy/decisions` 的真实来源是
+  runtime audit/replay 文件；缺失的 ID、node、duration、risk 等字段可由后端生成
+  fallback 或返回 `null`。
+- `/api/skills` 的真实来源是 Action / Capability Registry；`usage.total_calls`
+  等调用统计在 v0.1 中是 default/derived，后续可接入真实 metrics。
+- ViewModel 只用于前端展示，不等于执行授权。
+- 所有真实 action 仍必须通过 Runtime / Policy Gate。
+- HTTP API 不接受任意 shell command。
+- `smoke-takeoff` 和 `land` 仍是 SITL-only。
+- dangerous action 默认隐藏；即使 `include_dangerous=true` 展示 forbidden
+  metadata，也不代表可执行。
+
+## 10. Later console APIs
+
+以下接口仍属于后续聚合阶段，不在本轮实现完整实时数据：
+
+- `GET /api/snapshot`
+- `GET /api/runtime/pipeline`
+- `GET /api/telemetry/latest`
+- `WS /api/telemetry/stream`

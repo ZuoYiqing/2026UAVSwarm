@@ -323,3 +323,51 @@ def test_plan_mission_cli_outputs_plan_result_fields(capsys) -> None:  # type: i
     assert "policy_summary" in out
     assert out["plan"]["steps"][0]["required_capability"]["action_type"] == "health_query"
     assert out["plan"]["steps"][0]["policy_precheck"]["decision_code"] == "allow"
+
+
+def test_observe_telemetry_cli_parses_primary_endpoint():
+    args = build_parser().parse_args([
+        "observe-telemetry",
+        "--backend", "px4_sitl",
+        "--backend-mode", "sitl",
+        "--backend-enabled",
+        "--transport-endpoint", "udpin:127.0.0.1:14540",
+        "--duration-s", "10",
+        "--rate-hz", "5",
+        "--output-json", "telemetry_summary.json",
+        "--pretty",
+    ])
+
+    assert args.cmd == "observe-telemetry"
+    assert args.transport_endpoint == "udpin:127.0.0.1:14540"
+    assert args.duration_s == 10
+    assert args.rate_hz == 5
+    assert args.output_json == "telemetry_summary.json"
+
+
+def test_observe_telemetry_cli_preserves_parallel_endpoint():
+    args = build_parser().parse_args([
+        "observe-telemetry",
+        "--backend-enabled",
+        "--transport-endpoint", "udpin:127.0.0.1:14030",
+        "--output-jsonl", "samples.jsonl",
+        "--output-csv", "samples.csv",
+    ])
+
+    assert args.transport_endpoint == "udpin:127.0.0.1:14030"
+    assert args.output_jsonl == "samples.jsonl"
+    assert args.output_csv == "samples.csv"
+
+
+def test_observe_telemetry_cli_rejects_duration_out_of_range():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["observe-telemetry", "--duration-s", "0.5"])
+
+
+def test_observe_telemetry_cli_rejects_rate_out_of_range():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["observe-telemetry", "--rate-hz", "100"])
