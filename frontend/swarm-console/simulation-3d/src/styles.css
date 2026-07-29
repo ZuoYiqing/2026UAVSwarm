@@ -1,0 +1,413 @@
+:root {
+  color-scheme: dark;
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  color: #e8f1f2;
+  background: #050a0d;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+.simulation-shell,
+#cesium-container {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+button,
+select {
+  min-height: 34px;
+  border: 1px solid rgba(122, 169, 178, 0.32);
+  border-radius: 5px;
+  color: #e8f1f2;
+  background: rgba(9, 21, 26, 0.94);
+}
+
+button {
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+button:hover,
+button:focus-visible,
+select:hover,
+select:focus-visible {
+  border-color: #36c7f4;
+  outline: none;
+}
+
+button.active {
+  border-color: #42d883;
+  color: #42d883;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.simulation-shell {
+  position: relative;
+  background: #050a0d;
+}
+
+#cesium-container {
+  position: absolute;
+  inset: 0;
+}
+
+.cesium-viewer,
+.cesium-viewer-cesiumWidgetContainer,
+.cesium-widget,
+.cesium-widget canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.scene-header {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(91, 161, 181, 0.25);
+  background: rgba(5, 12, 16, 0.88);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.scene-identity,
+.runtime-state,
+.telemetry-heading {
+  display: flex;
+  align-items: center;
+}
+
+.scene-identity {
+  gap: 11px;
+}
+
+.scene-identity div {
+  display: grid;
+  gap: 2px;
+}
+
+.scene-identity strong {
+  font-size: 15px;
+}
+
+.scene-identity span,
+.runtime-state {
+  color: #8da5aa;
+  font-size: 12px;
+}
+
+.brand-mark {
+  width: 29px;
+  height: 29px;
+  border: 1px solid #36c7f4;
+  clip-path: polygon(50% 0, 100% 100%, 50% 76%, 0 100%);
+  background: #13343c;
+}
+
+.runtime-state {
+  gap: 8px;
+}
+
+.state-divider {
+  width: 1px;
+  height: 14px;
+  background: rgba(122, 169, 178, 0.32);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #42d883;
+  box-shadow: 0 0 10px rgba(66, 216, 131, 0.72);
+}
+
+.layer-panel,
+.telemetry-panel {
+  position: absolute;
+  z-index: 10;
+  top: 76px;
+  border: 1px solid rgba(91, 161, 181, 0.3);
+  border-radius: 6px;
+  background: rgba(6, 15, 19, 0.92);
+  backdrop-filter: blur(10px);
+}
+
+.layer-panel {
+  left: 18px;
+  width: 272px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.layer-panel > label:not(.switch-row) {
+  color: #8da5aa;
+  font-size: 12px;
+}
+
+.layer-panel select {
+  width: 100%;
+  padding: 0 8px;
+}
+
+.source-block {
+  display: grid;
+  gap: 7px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(91, 161, 181, 0.2);
+  border-bottom: 1px solid rgba(91, 161, 181, 0.2);
+}
+
+.source-block > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.source-block span {
+  color: #8da5aa;
+  font-size: 11px;
+}
+
+#source-kind {
+  color: #36c7f4;
+  font-size: 11px;
+}
+
+#source-kind[data-kind="simulation"] {
+  color: #9a7cff;
+}
+
+#source-kind[data-kind="physical"] {
+  color: #f5b84c;
+}
+
+#source-kind[data-kind="hybrid"] {
+  color: #42d883;
+}
+
+.button-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.switch-row {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #b9c8cb;
+  font-size: 13px;
+}
+
+.switch-row input {
+  width: 17px;
+  height: 17px;
+  accent-color: #36c7f4;
+}
+
+.telemetry-panel {
+  right: 18px;
+  width: 324px;
+  padding: 15px;
+}
+
+.telemetry-heading {
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(91, 161, 181, 0.2);
+}
+
+.telemetry-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.eyebrow {
+  color: #8da5aa;
+  font-size: 10px;
+}
+
+.telemetry-heading strong {
+  color: #36c7f4;
+  font-size: 17px;
+}
+
+.vehicle-type {
+  color: #a8b9bd;
+  font-size: 11px;
+}
+
+.flight-mode {
+  max-width: 146px;
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 1px solid rgba(66, 216, 131, 0.4);
+  border-radius: 4px;
+  color: #42d883;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telemetry-panel dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px 18px;
+  margin: 14px 0 0;
+}
+
+.telemetry-panel dl div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.telemetry-panel .agent-row {
+  grid-column: 1 / -1;
+}
+
+.telemetry-panel dt {
+  color: #7f979d;
+  font-size: 11px;
+}
+
+.telemetry-panel dd {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playback-bar {
+  position: absolute;
+  z-index: 10;
+  right: 18px;
+  bottom: 16px;
+  left: 18px;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 70px minmax(120px, 1fr) 154px auto 68px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border: 1px solid rgba(91, 161, 181, 0.3);
+  border-radius: 6px;
+  background: rgba(6, 15, 19, 0.92);
+  backdrop-filter: blur(10px);
+}
+
+.playback-bar label,
+.playback-bar output {
+  color: #9cb0b4;
+  font-size: 12px;
+}
+
+.timeline-track {
+  height: 4px;
+  overflow: hidden;
+  background: #1b3137;
+}
+
+.timeline-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #36c7f4;
+}
+
+.timeline-track span.live {
+  background: #42d883;
+}
+
+.playback-bar select {
+  padding: 0 6px;
+}
+
+.scene-error {
+  position: absolute;
+  z-index: 20;
+  right: 18px;
+  bottom: 78px;
+  max-width: 460px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 94, 94, 0.6);
+  border-radius: 5px;
+  color: #ffd5d5;
+  background: rgba(61, 14, 18, 0.94);
+  font-size: 12px;
+}
+
+.cesium-viewer-bottom {
+  left: 18px;
+  bottom: 72px;
+}
+
+@media (max-width: 820px) {
+  .scene-header {
+    padding: 0 10px;
+  }
+
+  .scene-identity span,
+  .state-divider {
+    display: none;
+  }
+
+  .runtime-state {
+    gap: 5px;
+  }
+
+  .layer-panel {
+    top: 68px;
+    left: 10px;
+    width: min(268px, calc(100vw - 20px));
+  }
+
+  .telemetry-panel {
+    display: none;
+  }
+
+  .playback-bar {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    grid-template-columns: 64px 1fr 108px;
+  }
+
+  .playback-bar label,
+  .playback-bar select {
+    display: none;
+  }
+}
+

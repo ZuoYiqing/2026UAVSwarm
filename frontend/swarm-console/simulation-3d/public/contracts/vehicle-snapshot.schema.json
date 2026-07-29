@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://uavswarm.local/contracts/vehicle-snapshot.schema.json",
+  "title": "UAVSwarm Vehicle Snapshot",
+  "description": "Complete vehicle state consumed by the Cesium 3D simulation frontend.",
+  "type": "object",
+  "required": ["version", "source", "frame", "vehicles"],
+  "properties": {
+    "version": {
+      "const": "1.0"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "timestamp_ms": {
+      "type": "number"
+    },
+    "full_state": {
+      "type": "boolean",
+      "default": true
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "frame": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["ENU", "NED", "WGS84"]
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "enum": ["ENU", "NED", "WGS84"]
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "vehicles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/vehicle"
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": ["timestamp"]
+    },
+    {
+      "required": ["timestamp_ms"]
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "source": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "enum": ["demo", "simulation", "physical", "hybrid", "unknown"]
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "x_m": { "type": "number" },
+        "y_m": { "type": "number" },
+        "z_m": { "type": "number" },
+        "longitude": { "type": "number" },
+        "latitude": { "type": "number" },
+        "altitude": { "type": "number" },
+        "longitude_deg": { "type": "number" },
+        "latitude_deg": { "type": "number" },
+        "altitude_m": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "vehicle": {
+      "type": "object",
+      "required": ["id", "pose"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "callsign": {
+          "type": "string"
+        },
+        "vehicle_type": {
+          "enum": [
+            "multirotor",
+            "fixed_wing",
+            "vtol",
+            "ugv",
+            "usv",
+            "uuv",
+            "unknown"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "connected": {
+          "type": "boolean"
+        },
+        "pose": {
+          "type": "object",
+          "required": ["position_m"],
+          "properties": {
+            "frame": {
+              "enum": ["ENU", "NED", "WGS84"]
+            },
+            "position_m": {
+              "$ref": "#/$defs/position"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "attitude_deg": {
+              "type": "object",
+              "properties": {
+                "roll": { "type": "number" },
+                "pitch": { "type": "number" },
+                "yaw": { "type": "number" },
+                "heading": { "type": "number" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        "velocity_mps": {
+          "type": "object",
+          "properties": {
+            "east": { "type": "number" },
+            "north": { "type": "number" },
+            "up": { "type": "number" },
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "z": { "type": "number" }
+          },
+          "additionalProperties": true
+        },
+        "telemetry": {
+          "type": "object",
+          "properties": {
+            "armed": { "type": "boolean" },
+            "mode": { "type": "string" },
+            "battery_percent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "link_quality_percent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "ground_speed_mps": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": true
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "status": { "type": "string" },
+            "intent": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "color": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

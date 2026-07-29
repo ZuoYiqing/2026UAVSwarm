@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.vite-dev.*
+.offline-stage/
+uavswarm-simulation-3d-offline.zip
+uavswarm-simulation-3d-offline.zip.sha256

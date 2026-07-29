@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="2026UAVSwarm 多源无人平台三维仿真场景"
+    />
+    <title>UAVSwarm 三维仿真</title>
+  </head>
+  <body>
+    <main class="simulation-shell">
+      <div id="cesium-container" aria-label="无人系统园区三维仿真地图"></div>
+
+      <header class="scene-header">
+        <div class="scene-identity">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong>MISSION TWIN</strong>
+            <span>多源无人平台三维仿真</span>
+          </div>
+        </div>
+        <div class="runtime-state">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="scene-status">正在初始化场景</span>
+          <span class="state-divider" aria-hidden="true"></span>
+          <span id="source-status">LOCAL DEMO</span>
+        </div>
+      </header>
+
+      <aside class="layer-panel" aria-label="场景控制">
+        <label for="scene-select">场景数据</label>
+        <select id="scene-select">
+          <option value="campus">无人系统测试园区 · Local</option>
+          <option value="1.1">3D Tiles 1.1 · Metadata</option>
+          <option value="1.0">3D Tiles 1.0 · Discrete LOD</option>
+        </select>
+
+        <div class="source-block">
+          <div>
+            <span>载具数据源</span>
+            <strong id="source-kind" data-kind="demo">LOCAL DEMO</strong>
+          </div>
+          <span id="vehicle-summary">0 个节点</span>
+        </div>
+
+        <label for="vehicle-select">当前载具</label>
+        <select id="vehicle-select" disabled></select>
+
+        <div class="button-row">
+          <button id="home-button" type="button" title="返回任务园区视角">
+            园区
+          </button>
+          <button id="follow-button" type="button" title="跟随当前载具">
+            跟随
+          </button>
+          <button id="demo-button" type="button" title="恢复本地演示数据">
+            演示
+          </button>
+        </div>
+
+        <label class="switch-row">
+          <span>历史航迹</span>
+          <input id="route-toggle" type="checkbox" checked />
+        </label>
+        <label class="switch-row">
+          <span>载具标牌</span>
+          <input id="label-toggle" type="checkbox" checked />
+        </label>
+      </aside>
+
+      <section class="telemetry-panel" aria-label="当前载具遥测">
+        <div class="telemetry-heading">
+          <div>
+            <span class="eyebrow">SELECTED VEHICLE</span>
+            <strong id="selected-vehicle-id">NO VEHICLE</strong>
+            <span id="selected-vehicle-type" class="vehicle-type">--</span>
+          </div>
+          <span id="selected-vehicle-mode" class="flight-mode">OFFLINE</span>
+        </div>
+        <dl>
+          <div>
+            <dt>纬度</dt>
+            <dd id="telemetry-lat">--</dd>
+          </div>
+          <div>
+            <dt>经度</dt>
+            <dd id="telemetry-lon">--</dd>
+          </div>
+          <div>
+            <dt>高度</dt>
+            <dd id="telemetry-alt">--</dd>
+          </div>
+          <div>
+            <dt>地速</dt>
+            <dd id="telemetry-speed">--</dd>
+          </div>
+          <div>
+            <dt>电量</dt>
+            <dd id="telemetry-battery">--</dd>
+          </div>
+          <div>
+            <dt>来源</dt>
+            <dd id="telemetry-source">--</dd>
+          </div>
+          <div class="agent-row">
+            <dt>Agent</dt>
+            <dd id="telemetry-agent">--</dd>
+          </div>
+        </dl>
+      </section>
+
+      <footer class="playback-bar">
+        <button id="play-button" type="button" title="暂停本地演示">暂停</button>
+        <div class="timeline-track" aria-hidden="true">
+          <span id="timeline-progress"></span>
+        </div>
+        <output id="mission-time">00:00 / 02:00</output>
+        <label for="speed-select">速度</label>
+        <select id="speed-select">
+          <option value="1">1x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+      </footer>
+
+      <div id="scene-error" class="scene-error" role="alert" hidden></div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
+

@@ -16,8 +16,9 @@ const navItems = [
 
 const state = {
   page: "overview",
-  backendConnected: true,
+  backendConnected: false,
   currentAction: "TAKEOFF",
+  targetAltitude: 3,
   altitude: 18,
   maxAltitude: 20.4,
   lastZ: -19.8,
@@ -29,7 +30,17 @@ const state = {
   activeTrace: "trc_8f3a2c91",
   selectedUav: "UAV-01",
   replayIndex: 4,
-  simRunning: true,
+  simRunning: false,
+  apiBaseUrl: window.SwarmRuntimeApi?.getConfiguredBaseUrl?.() || "http://127.0.0.1:8765/api",
+  apiStatus: "checking",
+  apiLastError: null,
+  runtimeHealth: null,
+  lastProbeAt: null,
+  runtimeEventsLoaded: false,
+  dataStatus: "demo",
+  lastBackendResult: null,
+  lastActionResult: null,
+  lastPlanResult: null,
   toast: [],
 };
 
@@ -57,6 +68,186 @@ function notify(title, body, color = "cyan") {
     state.toast = state.toast.filter((item) => Date.now() - item.id < 4200);
     render();
   }, 4200);
+}
+
+function currentRuntimeRequest() {
+  return {
+    backend: "px4_sitl",
+    backend_mode: "sitl",
+    backend_enabled: true,
+    transport_endpoint: "udpin:127.0.0.1:14540",
+    altitude_m: Number(state.targetAltitude.toFixed(1)),
+    connect_timeout_ms: 5000,
+    command_timeout_ms: 10000,
+    observe_timeout_ms: 25000,
+    threshold_ratio: 0.7,
+    auto_land: false,
+  };
+}
+
+function applyApiSuccess(source, payload) {
+  state.apiStatus = "live";
+  state.apiLastError = null;
+  state.lastProbeAt = new Date().toISOString();
+  if (source === "health") {
+    state.runtimeHealth = payload;
+  }
+  if (source === "backend") {
+    state.lastBackendResult = payload;
+  } else if (source === "action") {
+    state.lastActionResult = payload;
+    state.dataStatus = "partial";
+    applyActionResult(payload);
+  } else if (source === "plan") {
+    state.lastPlanResult = payload;
+    state.dataStatus = "partial";
+  }
+}
+
+function applyApiFailure(source, error, notifyFailure = true) {
+  // An HTTP error still proves the bridge is reachable; network and timeout
+  // failures mean the browser cannot currently reach the Runtime API.
+  state.apiStatus = error.kind === "http" ? "live" : "offline";
+  state.apiLastError = `${source}: ${error.message}`;
+  if (source === "health" || state.apiStatus === "offline") {
+    state.backendConnected = false;
+  }
+  if (state.apiStatus === "offline" && state.dataStatus === "partial") {
+    state.dataStatus = "stale";
+  }
+  if (notifyFailure) {
+    const title = state.apiStatus === "live" ? "Runtime API 返回错误" : "Runtime API 未连接";
+    notify(title, state.apiLastError, state.apiStatus === "live" ? "red" : "amber");
+  }
+}
+
+function applyActionResult(payload) {
+  // Accept both the planned HTTP shape and the current CLI JSON shape.
+  const result = payload.result && typeof payload.result === "object" ? payload.result : payload;
+  const observation = payload.altitude_observation || result.altitude_observation || {};
+  const maxAltitude = payload.max_altitude_m ?? result.max_altitude_m ?? observation.max_altitude_m;
+  const lastZ = payload.last_z ?? result.last_z ?? observation.last_z;
+  const thresholdReached = payload.threshold_reached ?? result.threshold_reached ?? observation.threshold_reached;
+
+  if (typeof maxAltitude === "number") {
+    state.maxAltitude = maxAltitude;
+  }
+  if (typeof lastZ === "number") {
+    state.lastZ = lastZ;
+    state.altitude = Math.max(0, -lastZ);
+  }
+  if (typeof thresholdReached === "boolean") {
+    state.thresholdReached = thresholdReached;
+  }
+}
+
+async function callRuntime(source, call, fallback, options = {}) {
+  try {
+    const payload = await call();
+    applyApiSuccess(source, payload);
+    return payload;
+  } catch (error) {
+    applyApiFailure(source, error, options.notifyFailure !== false);
+    return fallback(error);
+  }
+}
+
+function runtimeApiStatus() {
+  return {
+    checking: { label: "连接中", color: "cyan" },
+    live: { label: "LIVE", color: "green" },
+    offline: { label: "OFFLINE", color: "amber" },
+  }[state.apiStatus] || { label: "UNKNOWN", color: "amber" };
+}
+
+function dataSourceStatus() {
+  return {
+    demo: { label: "DEMO", color: "amber" },
+    partial: { label: "LIVE PARTIAL", color: "cyan" },
+    stale: { label: "CACHED", color: "amber" },
+  }[state.dataStatus] || { label: "UNKNOWN", color: "amber" };
+}
+
+function backendStatus() {
+  if (state.apiStatus === "checking") {
+    return { label: "探测中", color: "cyan" };
+  }
+  if (state.apiStatus !== "live") {
+    return { label: "未知", color: "amber" };
+  }
+  return state.backendConnected
+    ? { label: "READY", color: "green" }
+    : { label: "NOT READY", color: "red" };
+}
+
+function eventColor(severity, eventType) {
+  if (severity === "error" || severity === "critical") return "red";
+  if (severity === "warning") return "amber";
+  if (String(eventType).includes("policy")) return "violet";
+  if (String(eventType).includes("action")) return "green";
+  return "cyan";
+}
+
+function eventTime(timestamp) {
+  if (!timestamp) return "--:--:--";
+  const parsed = new Date(timestamp);
+  return Number.isNaN(parsed.getTime())
+    ? String(timestamp).slice(11, 19)
+    : parsed.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+async function syncRuntimeEvents(options = {}) {
+  try {
+    const payload = await window.SwarmRuntimeApi.events(options.count || 30);
+    if (!Array.isArray(payload)) {
+      throw new Error("事件接口返回的不是数组");
+    }
+    const normalized = payload
+      .slice()
+      .reverse()
+      .slice(0, 30)
+      .map((event) => [
+        eventTime(event.timestamp),
+        event.event_type || "RUNTIME_EVENT",
+        event.summary || `${event.event_type || "runtime"} event`,
+        eventColor(event.severity, event.event_type),
+      ]);
+    events.splice(0, events.length, ...normalized);
+    state.runtimeEventsLoaded = true;
+    state.dataStatus = "partial";
+    state.apiStatus = "live";
+    state.apiLastError = null;
+  } catch (error) {
+    applyApiFailure("events", error, options.notifyFailure === true);
+  }
+}
+
+async function probeRuntime(options = {}) {
+  state.apiStatus = "checking";
+  state.apiLastError = null;
+  state.backendConnected = false;
+  render();
+
+  if (!window.SwarmRuntimeApi) {
+    const error = new Error("runtime-api.js 未加载");
+    error.kind = "network";
+    applyApiFailure("health", error, options.notifyUser === true);
+    render();
+    return;
+  }
+
+  try {
+    const healthPayload = await window.SwarmRuntimeApi.health();
+    applyApiSuccess("health", healthPayload);
+    await checkBackend({ notifyUser: false, automatic: true });
+    await syncRuntimeEvents({ notifyFailure: false });
+    if (options.notifyUser) {
+      notify("Runtime API 已连接", state.apiBaseUrl, "green");
+    }
+  } catch (error) {
+    applyApiFailure("health", error, options.notifyUser === true);
+  }
+  render();
 }
 
 const vehicles = [
@@ -426,12 +617,48 @@ function decisionColor(code) {
 }
 
 function backendPage() {
+  const api = runtimeApiStatus();
+  const backend = backendStatus();
+  const probeCode = state.lastBackendResult?.connect_probe?.code || "not_checked";
+  const readiness = state.lastBackendResult?.readiness || backend.label;
+  const runtimeService = state.runtimeHealth?.service || "uav_runtime_http_bridge";
+  const actionButtonsDisabled = state.apiStatus !== "live" || !state.backendConnected;
+  const liveAction = state.lastActionResult;
+  const actionResultView = liveAction
+    ? {
+        data_source: "runtime_api",
+        backend: liveAction.backend || "px4_sitl_backend",
+        action_type: liveAction.action || liveAction.action_type || state.currentAction,
+        status: liveAction.status || liveAction.result || "UNKNOWN",
+        policy_decision: liveAction.policy_decision || null,
+        arm_ack: liveAction.arm_ack ?? liveAction.ack?.arm_ack ?? null,
+        takeoff_ack: liveAction.takeoff_ack ?? liveAction.ack?.takeoff_ack ?? null,
+        land_ack: liveAction.land_ack ?? liveAction.ack?.land_ack ?? null,
+        result: liveAction,
+      }
+    : {
+        data_source: "demo",
+        backend: "px4_sitl_backend",
+        action_type: state.currentAction,
+        status: "DEMO",
+        policy_decision: null,
+        arm_ack: null,
+        takeoff_ack: null,
+        land_ack: null,
+        result: {
+          altitude: state.altitude,
+          max_altitude_m: state.maxAltitude,
+          last_z: state.lastZ,
+          threshold_reached: state.thresholdReached,
+          mode: `AUTO.${state.currentAction}`,
+        },
+      };
   return `<div class="page">
     ${pageTitle("Adapter 与 Backend 管理", "PX4 SITL · MAVLink · Fake Adapter · Hardware Backend")}
     <div class="grid" style="grid-template-columns:.92fr 1.18fr auto">
       ${panel("Backend 模式", `<div class="mini-tabs"><span class="chip">FAKE</span><span class="chip active">SITL(PX4)</span><span class="chip">HARDWARE</span></div>`)}
-      ${panel("传输与端点配置", `<div class="form-grid"><div class="field"><label>gRPC Endpoint</label><input value="grpc://10.42.0.12:50051"></div><div class="field"><label>MAVLink Endpoint</label><input value="udpin:127.0.0.1:14540"></div><div class="field"><label>WS / Telemetry</label><input value="ws://10.42.0.12:8765"></div></div>`)}
-      <button class="button primary" onclick="checkBackend()">Check Backend</button>
+      ${panel("Runtime API 与传输端点", `<div class="form-grid"><div class="field"><label>Runtime API Base URL</label><input id="runtime-api-url" value="${esc(state.apiBaseUrl)}" onchange="saveApiBaseUrl(this.value)"></div><div class="field"><label>MAVLink Endpoint</label><input value="udpin:127.0.0.1:14540" readonly></div><div class="field"><label>Telemetry REST（待后端提供）</label><input value="${esc(state.apiBaseUrl)}/telemetry/latest" readonly></div></div><div style="margin-top:8px">${badge(`Runtime API ${api.label}`, api.color)} ${badge(`PX4 ${backend.label}`, backend.color)} ${state.apiLastError ? `<span class="small">${esc(state.apiLastError)}</span>` : ""}</div>`)}
+      <button class="button primary" onclick="probeRuntime({notifyUser:true})">重新探测</button>
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.12fr .88fr">
       <div class="grid">
@@ -444,18 +671,10 @@ function backendPage() {
         </div>
       </div>
       <div class="grid">
-        ${panel("Backend 健康与探测", `<table class="table"><tr><th>Backend</th><th>状态</th><th>Probe</th><th>延迟</th></tr><tr><td>Fake Backend</td><td>${badge("RUNNING", "green")}</td><td>OK</td><td>1ms</td></tr><tr><td>px4_sitl_backend</td><td>${badge(state.backendConnected ? "RUNNING" : "FAILED", state.backendConnected ? "green" : "red")}</td><td>${state.backendConnected ? "OK" : "FAILED"}</td><td>6ms</td></tr><tr><td>hardware_backend</td><td>${badge("STANDBY", "amber")}</td><td>N/A</td><td>-</td></tr></table>`)}
-        ${panel("Action 控制", `<div class="form-grid"><div class="field"><label>目标 Backend</label><select><option>px4_sitl_backend</option></select></div><div class="field"><label>altitude_m</label><input value="${state.altitude.toFixed(1)}"></div><div class="field"><label>超时(s)</label><input value="10"></div></div><button class="button primary" style="margin-top:10px" onclick="runSmokeTakeoff()">Smoke Takeoff</button> <button class="button warn" onclick="runLand()">Land</button> ${badge(state.thresholdReached ? "SUCCESS" : "RUNNING", state.thresholdReached ? "green" : "amber")}`)}
-        ${panel("Telemetry 显示", telemetrySummary())}
-        ${panel("Action Result JSON", `<pre class="json">${esc(JSON.stringify({
-          backend: "px4_sitl_backend",
-          action_type: state.currentAction,
-          status: "SUCCESS",
-          arm_ack: true,
-          takeoff_ack: true,
-          land_ack: false,
-          result: { altitude: state.altitude, max_altitude_m: state.maxAltitude, last_z: state.lastZ, threshold_reached: state.thresholdReached, mode: `AUTO.${state.currentAction}` },
-        }, null, 2))}</pre>`, "scroll")}
+        ${panel("Backend 健康与探测", `<table class="table"><tr><th>组件</th><th>状态</th><th>Probe</th><th>来源</th></tr><tr><td>${esc(runtimeService)}</td><td>${badge(api.label, api.color)}</td><td>${esc(state.runtimeHealth?.status || "not_checked")}</td><td>GET /api/health</td></tr><tr><td>px4_sitl_backend</td><td>${badge(backend.label, backend.color)}</td><td>${esc(probeCode)}</td><td>${esc(readiness)}</td></tr><tr><td>hardware_backend</td><td>${badge("未接入", "amber")}</td><td>N/A</td><td>配置占位</td></tr></table>`)}
+        ${panel("Action 控制", `<div class="form-grid"><div class="field"><label>目标 Backend</label><select><option>px4_sitl_backend</option></select></div><div class="field"><label>altitude_m</label><input type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>超时(s)</label><input value="10" readonly></div></div><button class="button primary" style="margin-top:10px" onclick="runSmokeTakeoff()" ${actionButtonsDisabled ? "disabled" : ""}>Smoke Takeoff</button> <button class="button warn" onclick="runLand()" ${actionButtonsDisabled ? "disabled" : ""}>Land</button> ${badge(actionButtonsDisabled ? "等待 Runtime / PX4" : "允许调用", actionButtonsDisabled ? "amber" : "green")}`)}
+        ${panel(`Telemetry 显示 ${badge(liveAction ? (state.apiStatus === "live" ? "LIVE" : "LAST LIVE") : "DEMO", liveAction ? (state.apiStatus === "live" ? "green" : "amber") : "amber")}`, telemetrySummary())}
+        ${panel("Action Result JSON", `<pre class="json">${esc(JSON.stringify(actionResultView, null, 2))}</pre>`, "scroll")}
         ${panel("最近动作记录", eventList(), "scroll")}
       </div>
     </div>
@@ -463,19 +682,55 @@ function backendPage() {
 }
 
 function adapterTopology() {
-  const adapters = ["Fake Adapter", "MAVLink Adapter", "Payload Adapter", "Perception Adapter", "GPIO/UART Adapter"];
-  return `<div class="cols-4" style="grid-template-columns:repeat(5,1fr)">${adapters.map((a) => `<div class="chain-card"><h3>${a}</h3>${badge("RUNNING", "green")}<br><span class="small">v1.${Math.floor(Math.random()*5)}.0 · CPU 4%</span></div>`).join("")}</div>
+  const adapters = [
+    ["Fake Adapter", "DEFINED", "v1.0.0", "cyan"],
+    ["MAVLink Adapter", state.backendConnected ? "CONNECTED" : "IDLE", "v1.1.0", state.backendConnected ? "green" : "amber"],
+    ["Payload Adapter", "DEFINED", "v1.0.0", "cyan"],
+    ["Perception Adapter", "DEFINED", "v1.0.0", "cyan"],
+    ["GPIO/UART Adapter", "DEFINED", "v1.0.0", "cyan"],
+  ];
+  return `<div class="cols-4" style="grid-template-columns:repeat(5,1fr)">${adapters.map((a) => `<div class="chain-card"><h3>${a[0]}</h3>${badge(a[1], a[3])}<br><span class="small">${a[2]} · 拓扑定义</span></div>`).join("")}</div>
   <div class="runtime-chain" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
-    <div class="chain-card"><h3>fake_backend</h3>${badge("RUNNING", "green")}</div>
-    <div class="chain-card"><h3>px4_sitl_backend</h3>${badge("RUNNING", "green")}</div>
-    <div class="chain-card"><h3>hardware_backend</h3>${badge("STANDBY", "amber")}</div>
+    <div class="chain-card"><h3>fake_backend</h3>${badge("未启用", "amber")}</div>
+    <div class="chain-card"><h3>px4_sitl_backend</h3>${badge(backendStatus().label, backendStatus().color)}</div>
+    <div class="chain-card"><h3>hardware_backend</h3>${badge("未接入", "amber")}</div>
   </div>`;
 }
 
-function checkBackend() {
-  state.backendConnected = true;
-  pushEvent("BACKEND_CHECK", "px4_sitl_backend 探测成功：backend_connected", "green");
-  notify("Backend Connected", "endpoint udpin:127.0.0.1:14540 返回 backend_connected", "green");
+async function checkBackend(options = {}) {
+  const payload = await callRuntime(
+    "backend",
+    () => window.SwarmRuntimeApi.checkBackend(currentRuntimeRequest()),
+    () => ({ readiness: "unavailable", connect_probe: { code: "runtime_unreachable" } }),
+    { notifyFailure: options.notifyUser !== false }
+  );
+  const readiness = payload.readiness || payload.status || "unavailable";
+  const code = payload.connect_probe?.code || payload.code || "not_checked";
+  state.backendConnected = readiness === "ready" || code === "backend_connected";
+  pushEvent("BACKEND_CHECK", `px4_sitl_backend 探测：${code}`, state.backendConnected ? "green" : "red");
+  if (options.notifyUser !== false) {
+    notify("Backend Check", `Runtime API 返回 ${code}`, state.backendConnected ? "green" : "amber");
+  }
+  render();
+  return payload;
+}
+
+function saveApiBaseUrl(value) {
+  state.apiBaseUrl = window.SwarmRuntimeApi.setConfiguredBaseUrl(value);
+  state.apiStatus = "checking";
+  state.runtimeHealth = null;
+  state.lastBackendResult = null;
+  state.backendConnected = false;
+  notify("Runtime API 已更新", state.apiBaseUrl, "cyan");
+  render();
+  probeRuntime();
+}
+
+function setTargetAltitude(value) {
+  const parsed = Number(value);
+  state.targetAltitude = Number.isFinite(parsed)
+    ? Math.min(120, Math.max(1, parsed))
+    : 3;
   render();
 }
 
@@ -548,29 +803,43 @@ function skillsPage() {
 }
 
 function simulationPage() {
+  const px4 = backendStatus();
+  const smokeResult = state.lastActionResult
+    ? {
+        data_source: "runtime_api",
+        max_altitude_m: state.maxAltitude,
+        last_z: state.lastZ,
+        threshold_reached: state.thresholdReached,
+        arm_ack: state.lastActionResult.arm_ack ?? state.lastActionResult.ack?.arm_ack ?? null,
+        takeoff_ack: state.lastActionResult.takeoff_ack ?? state.lastActionResult.ack?.takeoff_ack ?? null,
+        land_ack: state.lastActionResult.land_ack ?? state.lastActionResult.ack?.land_ack ?? null,
+        backend: state.lastActionResult.backend || "px4_sitl_backend",
+      }
+    : {
+        data_source: "demo",
+        max_altitude_m: state.maxAltitude,
+        last_z: state.lastZ,
+        threshold_reached: state.thresholdReached,
+        arm_ack: null,
+        takeoff_ack: null,
+        land_ack: null,
+        backend: "px4_sitl_backend",
+      };
   return `<div class="page">
     ${pageTitle("仿真中心", "PX4 SITL · Gazebo · 高逼真数字孪生 · Smoke Test", `<button class="button primary" onclick="runScenario()">运行场景</button><button class="button" onclick="injectFault()">故障注入</button>`)}
     <div class="split-2 h-fill" style="grid-template-columns:.92fr 1.08fr">
       <div class="grid">
         ${panel("仿真环境", `<div class="cap-grid" style="grid-template-columns:repeat(2,1fr)">
-          ${simCard("Fake Simulation", "轻量级逻辑仿真", "运行中", "green")}
-          ${simCard("PX4 SITL + Gazebo", "飞控闭环验证", "已就绪", "green")}
-          ${simCard("RflySim", "多机稳定仿真", "已就绪", "green")}
-          ${simCard("ProSim / UE", "高保真渲染仿真", "已联调", "cyan")}
+          ${simCard("Fake Simulation", "轻量级逻辑仿真", "本地演示", "cyan")}
+          ${simCard("PX4 SITL + Gazebo", "飞控闭环验证", px4.label, px4.color)}
+          ${simCard("RflySim", "多机稳定仿真", "未接入", "amber")}
+          ${simCard("ProSim / UE", "高保真渲染仿真", "未接入", "amber")}
         </div>`)}
-        ${panel("仿真任务", `<table class="table"><tr><th>任务名</th><th>环境</th><th>状态</th><th>节点</th><th>操作</th></tr><tr><td>Sim_Task_001</td><td>PX4 SITL</td><td>${badge("运行中", "green")}</td><td>8 UAV / 1 GCS</td><td>详情</td></tr><tr><td>Sim_Task_002</td><td>ProSim / UE</td><td>${badge("已完成", "green")}</td><td>4 UAV / 1 GCS</td><td>回放</td></tr><tr><td>Sim_Task_003</td><td>Fake</td><td>${badge("失败", "red")}</td><td>10 UAV</td><td>详情</td></tr></table>`)}
+        ${panel(`仿真任务 ${badge("DEMO", "amber")}`, `<table class="table"><tr><th>任务名</th><th>环境</th><th>状态</th><th>节点</th><th>操作</th></tr><tr><td>Sim_Task_001</td><td>PX4 SITL</td><td>${badge("演示记录", "cyan")}</td><td>8 UAV / 1 GCS</td><td>详情</td></tr><tr><td>Sim_Task_002</td><td>ProSim / UE</td><td>${badge("演示记录", "cyan")}</td><td>4 UAV / 1 GCS</td><td>回放</td></tr><tr><td>Sim_Task_003</td><td>Fake</td><td>${badge("演示记录", "cyan")}</td><td>10 UAV</td><td>详情</td></tr></table>`)}
       </div>
       <div class="grid" style="grid-template-rows:1fr auto">
         ${panel("高逼真仿真预览", scene3d(), "h-fill")}
-        ${panel("Smoke Test 状态", `<div class="split-2"><div><div class="donut"><div class="donut-inner"><b>92%</b><span class="small">通过率</span></div></div></div><pre class="json">${esc(JSON.stringify({
-          max_altitude_m: state.maxAltitude,
-          last_z: state.lastZ,
-          threshold_reached: state.thresholdReached,
-          arm_ack: true,
-          takeoff_ack: true,
-          land_ack: false,
-          backend: "px4_sitl_backend",
-        }, null, 2))}</pre></div>`)}
+        ${panel(`Smoke Test 状态 ${badge(smokeResult.data_source === "runtime_api" ? (state.apiStatus === "live" ? "LIVE" : "LAST LIVE") : "DEMO", smokeResult.data_source === "runtime_api" && state.apiStatus === "live" ? "green" : "amber")}`, `<div class="split-2"><div><div class="donut"><div class="donut-inner"><b>${smokeResult.data_source === "runtime_api" ? (state.thresholdReached ? "PASS" : "WAIT") : "--"}</b><span class="small">最近结果</span></div></div></div><pre class="json">${esc(JSON.stringify(smokeResult, null, 2))}</pre></div>`)}
       </div>
     </div>
   </div>`;
@@ -580,10 +849,22 @@ function simCard(name, detail, status, color) {
   return `<div class="cap-card"><h3>${esc(name)}</h3><div class="small">${esc(detail)}</div><div style="height:76px;margin:10px 0;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(135deg,rgba(54,199,244,.16),rgba(66,216,131,.08)),rgba(5,14,18,.8)"></div>${badge(status, color)} <button class="button" style="float:right">进入</button></div>`;
 }
 
-function generateRequest() {
+async function generateRequest() {
   state.activeTrace = `trc_${Math.random().toString(16).slice(2, 10)}`;
-  pushEvent("MISSION_REQUEST", `生成任务请求 ${state.activeTrace}`, "cyan");
-  notify("已生成 ActionRequest", "任务输入已转换为结构化 mission_request / action_request。", "cyan");
+  const payload = await callRuntime(
+    "plan",
+    () => window.SwarmRuntimeApi.planMission({
+      mission_type: "inspection_snapshot",
+      source: "ground_station",
+      profile: "standard",
+      objective: "园区巡检、拍照取证、返航降落",
+      dry_run: true,
+    }),
+    () => ({ result: "ready", plan: sampleActionRequest() })
+  );
+  pushEvent("MISSION_REQUEST", `生成任务请求 ${state.activeTrace}`, state.apiStatus === "live" ? "green" : "cyan");
+  notify("已生成 ActionRequest", state.apiStatus === "live" ? "已从 Runtime API 获取 plan-mission 结果。" : "任务输入已转换为结构化 mission_request / action_request。", state.apiStatus === "live" ? "green" : "cyan");
+  state.lastPlanResult = payload;
   render();
 }
 
@@ -609,23 +890,46 @@ function dispatchMission() {
   render();
 }
 
-function runSmokeTakeoff() {
+async function runSmokeTakeoff() {
+  if (state.apiStatus !== "live" || !state.backendConnected) {
+    notify("无法执行 Smoke Takeoff", "Runtime API 或 PX4 Backend 当前未就绪。", "amber");
+    return;
+  }
   state.currentAction = "TAKEOFF";
-  state.simRunning = true;
+  state.simRunning = false;
   state.thresholdReached = false;
   state.altitude = 0;
   state.lastZ = 0;
-  pushEvent("ACTION_REQUEST", "smoke-takeoff 请求已创建，等待 Policy Gate 放行", "cyan");
-  notify("Smoke Takeoff", "原型已开始模拟高度爬升；真实版本会调用 smoke-takeoff API。", "cyan");
+  const payload = await callRuntime(
+    "action",
+    () => window.SwarmRuntimeApi.smokeTakeoff(currentRuntimeRequest()),
+    () => ({
+      action: "takeoff",
+      backend: "px4_sitl",
+      result: "unavailable",
+      failure_reason: "runtime_api_unreachable",
+    })
+  );
+  pushEvent("ACTION_REQUEST", `smoke-takeoff 请求已创建（${state.apiStatus}）`, state.apiStatus === "live" ? "green" : "red");
+  notify("Smoke Takeoff", state.apiStatus === "live" ? "已调用 Runtime API /actions/smoke-takeoff。" : "Runtime API 调用失败，未启动本地假动作。", state.apiStatus === "live" ? "green" : "red");
+  state.lastActionResult = payload;
   render();
 }
 
-function runLand() {
+async function runLand() {
+  if (state.apiStatus !== "live" || !state.backendConnected) {
+    notify("无法执行 Land", "Runtime API 或 PX4 Backend 当前未就绪。", "amber");
+    return;
+  }
   state.currentAction = "LAND";
-  state.altitude = Math.max(0, state.altitude - 4);
-  state.lastZ = -state.altitude;
-  pushEvent("ACTION_REQUEST", "LAND 请求已创建，等待 ACK", "amber");
-  notify("Land", "模拟 LAND 指令已发出。真实版本会显示 land_ack。", "amber");
+  const payload = await callRuntime(
+    "action",
+    () => window.SwarmRuntimeApi.land(currentRuntimeRequest()),
+    () => ({ action: "land", result: "unavailable", failure_reason: "runtime_api_unreachable" })
+  );
+  pushEvent("ACTION_REQUEST", `LAND 请求已创建（${state.apiStatus}）`, "amber");
+  notify("Land", state.apiStatus === "live" ? "已调用 Runtime API /actions/land。" : "Runtime API 调用失败，未启动本地假动作。", "amber");
+  state.lastActionResult = payload;
   render();
 }
 
@@ -651,10 +955,11 @@ function replayStep(delta) {
   render();
 }
 
-function replayPlay() {
+async function replayPlay() {
   state.replayIndex = (state.replayIndex + 1) % 11;
+  await callRuntime("replay", () => window.SwarmRuntimeApi.replayLast(20), () => events);
   pushEvent("REPLAY", `回放跳转到事件帧 ${state.replayIndex}`, "cyan");
-  notify("Replay Playing", "审计事件时间轴已推进一帧。", "cyan");
+  notify("Replay Playing", state.apiStatus === "live" ? "已从 Runtime API 获取 replay 记录。" : "审计事件时间轴已推进一帧。", "cyan");
   render();
 }
 
@@ -719,13 +1024,22 @@ function render() {
 }
 
 function topbar() {
+  const api = runtimeApiStatus();
+  const dataSource = dataSourceStatus();
+  const systemState = state.apiStatus === "checking"
+    ? "检查中"
+    : state.apiStatus === "live" && state.backendConnected
+      ? "正常"
+      : "未连接";
   return `<header class="topbar">
     <div class="brand"><div class="mark"></div><div class="brand-title">2026UAVSwarm Console</div></div>
     <div class="top-pill">Ground Profile</div>
-    <div class="top-pill ok">系统运行<strong>${state.backendConnected ? "正常" : "降级"}</strong></div>
+    <div class="top-pill">系统运行<strong class="${state.backendConnected ? "green" : "amber"}">${systemState}</strong></div>
     <div class="top-pill">在线节点<strong>37 / 48</strong></div>
     <div class="top-pill">Backend 模式<strong>MISSION</strong></div>
     <div class="top-pill">当前 Action<strong>${state.currentAction}</strong></div>
+    <div class="top-pill">Runtime API<strong class="${api.color}">${api.label}</strong></div>
+    <div class="top-pill">数据源<strong class="${dataSource.color}">${dataSource.label}</strong></div>
     <div class="top-actions">
       <button class="icon-btn">N</button><button class="icon-btn">?</button><button class="icon-btn">L</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
@@ -765,6 +1079,7 @@ function route() {
 }
 
 render();
+probeRuntime();
 
 setInterval(() => {
   if (!state.simRunning) {
@@ -783,3 +1098,13 @@ setInterval(() => {
     render();
   }
 }, 1600);
+
+setInterval(() => {
+  if (state.apiStatus === "offline") {
+    probeRuntime();
+    return;
+  }
+  if (state.apiStatus === "live") {
+    syncRuntimeEvents({ notifyFailure: false }).then(render);
+  }
+}, 10000);
