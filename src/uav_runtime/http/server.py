@@ -10,11 +10,14 @@ commands supplied by the browser.
 from __future__ import annotations
 
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
 from uav_runtime.http.routes import dispatch
+from uav_runtime.http.routes import RUNTIME_STATE_STORE
+from uav_runtime.adapters.px4_telemetry_collector import Px4TelemetryCollector
 
 ALLOWED_ORIGINS = {
     "http://localhost:5178",
@@ -94,12 +97,22 @@ def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPSer
 
 def main() -> int:
     server = create_server()
+    collector: Px4TelemetryCollector | None = None
+    telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if telemetry_enabled:
+        # 14030 is deliberately separate from the 14540 command/smoke endpoint.
+        # A single UDP listen port must not be consumed by independent receivers.
+        endpoint = os.environ.get("UAV_RUNTIME_TELEMETRY_ENDPOINT", "udpin:127.0.0.1:14030")
+        collector = Px4TelemetryCollector(RUNTIME_STATE_STORE, endpoint=endpoint)
+        collector.start()
     print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if collector is not None:
+            collector.stop()
         server.server_close()
     return 0
 

@@ -124,7 +124,24 @@ input/output schema、usage 默认值和 safety metadata。
 
 以下接口仍属于后续聚合阶段，不在本轮实现完整实时数据：
 
-- `GET /api/snapshot`
 - `GET /api/runtime/pipeline`
-- `GET /api/telemetry/latest`
 - `WS /api/telemetry/stream`
+
+## 11. Read-only realtime state API v0.1
+
+The console may poll these local Runtime endpoints without opening MAVLink,
+Gazebo Transport, or DDS connections in the browser:
+
+| Route | Source | Offline behavior |
+| --- | --- | --- |
+| `GET /api/telemetry/latest` | managed PX4 telemetry cache on the dedicated runtime receive endpoint | `status: unavailable`, `nodes: []` |
+| `GET /api/snapshot` | thread-safe runtime state composition | stable object with null/empty unsupported fields |
+| `GET /api/vehicle-snapshot` | cached telemetry projected to the Cesium vehicle contract | `full_state: true`, `vehicles: []` |
+| `GET /api/agent/status` | directly stored Template Planner/lifecycle state | `latest_plan: null`, no fabricated metrics |
+| `GET /api/simulation/status` | independent Gazebo evidence only | `status: unknown`, `evidence: []` |
+
+PX4 heartbeat proves PX4/MAVLink reachability, not Gazebo health. Until Runtime
+owns a Gazebo clock/world/model probe, simulation status remains unknown. The
+telemetry collector defaults to `udpin:127.0.0.1:14030`; command smoke actions
+retain `udpin:127.0.0.1:14540` to avoid two independent receivers competing for
+one UDP listen port.

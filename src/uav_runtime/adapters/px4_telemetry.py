@@ -29,6 +29,13 @@ TRACKED_MESSAGE_TYPES = (
     "COMMAND_ACK",
 )
 
+MAV_COMMAND_NAMES = {
+    21: "MAV_CMD_NAV_LAND",
+    22: "MAV_CMD_NAV_TAKEOFF",
+    400: "MAV_CMD_COMPONENT_ARM_DISARM",
+    511: "MAV_CMD_SET_MESSAGE_INTERVAL",
+}
+
 
 @dataclass(slots=True)
 class LocalPositionTelemetry:
@@ -228,35 +235,38 @@ def apply_mavlink_message(snapshot: Px4TelemetrySnapshot, msg: Any, *, flight_mo
         snapshot.system_status = int(getattr(msg, "system_status", snapshot.system_status) or 0)
         snapshot.flight_mode = flight_mode or snapshot.flight_mode
     elif msg_type == "LOCAL_POSITION_NED":
-        z_down = _finite_or_zero(getattr(msg, "z", 0.0))
+        z_down = _finite_or_none(getattr(msg, "z", None))
         snapshot.local_position = LocalPositionTelemetry(
-            x_m=_finite_or_none(getattr(msg, "x", 0.0)),
-            y_m=_finite_or_none(getattr(msg, "y", 0.0)),
+            x_m=_finite_or_none(getattr(msg, "x", None)),
+            y_m=_finite_or_none(getattr(msg, "y", None)),
             z_down_m=z_down,
-            altitude_m=altitude_from_ned_z(z_down),
-            vx_m_s=_finite_or_none(getattr(msg, "vx", 0.0)),
-            vy_m_s=_finite_or_none(getattr(msg, "vy", 0.0)),
-            vz_m_s=_finite_or_none(getattr(msg, "vz", 0.0)),
+            altitude_m=None if z_down is None else altitude_from_ned_z(z_down),
+            vx_m_s=_finite_or_none(getattr(msg, "vx", None)),
+            vy_m_s=_finite_or_none(getattr(msg, "vy", None)),
+            vz_m_s=_finite_or_none(getattr(msg, "vz", None)),
         )
     elif msg_type == "ATTITUDE":
-        roll = _finite_or_zero(getattr(msg, "roll", 0.0))
-        pitch = _finite_or_zero(getattr(msg, "pitch", 0.0))
-        yaw = _finite_or_zero(getattr(msg, "yaw", 0.0))
+        roll = _finite_or_none(getattr(msg, "roll", None))
+        pitch = _finite_or_none(getattr(msg, "pitch", None))
+        yaw = _finite_or_none(getattr(msg, "yaw", None))
         snapshot.attitude = AttitudeTelemetry(
             roll_rad=roll,
             pitch_rad=pitch,
             yaw_rad=yaw,
-            roll_deg=math.degrees(roll),
-            pitch_deg=math.degrees(pitch),
-            yaw_deg=math.degrees(yaw),
+            roll_deg=None if roll is None else math.degrees(roll),
+            pitch_deg=None if pitch is None else math.degrees(pitch),
+            yaw_deg=None if yaw is None else math.degrees(yaw),
         )
     elif msg_type == "GLOBAL_POSITION_INT":
         hdg = getattr(msg, "hdg", None)
+        lat = _finite_or_none(getattr(msg, "lat", None))
+        lon = _finite_or_none(getattr(msg, "lon", None))
+        relative_alt = _finite_or_none(getattr(msg, "relative_alt", None))
         snapshot.global_position = GlobalPositionTelemetry(
-            lat_deg=_finite_or_zero(getattr(msg, "lat", 0.0)) / 1e7,
-            lon_deg=_finite_or_zero(getattr(msg, "lon", 0.0)) / 1e7,
-            relative_alt_m=_finite_or_zero(getattr(msg, "relative_alt", 0.0)) / 1000.0,
-            heading_deg=None if hdg in (None, 65535) else _finite_or_zero(hdg) / 100.0,
+            lat_deg=None if lat is None else lat / 1e7,
+            lon_deg=None if lon is None else lon / 1e7,
+            relative_alt_m=None if relative_alt is None else relative_alt / 1000.0,
+            heading_deg=None if hdg in (None, 65535) else (_finite_or_none(hdg) / 100.0 if _finite_or_none(hdg) is not None else None),
         )
     elif msg_type == "SYS_STATUS":
         voltage = getattr(msg, "voltage_battery", None)
@@ -274,14 +284,15 @@ def apply_mavlink_message(snapshot: Px4TelemetrySnapshot, msg: Any, *, flight_mo
         valid = [v for v in voltages if v not in (0, 65535)]
         snapshot.battery.voltage_v = (sum(valid) / 1000.0) if valid else snapshot.battery.voltage_v
         current = getattr(msg, "current_battery", None)
-        snapshot.battery.current_a = None if current in (None, -1) else float(current) / 100.0
+        finite_current = _finite_or_none(current)
+        snapshot.battery.current_a = None if current in (None, -1) or finite_current is None else finite_current / 100.0
         snapshot.battery.battery_remaining = getattr(msg, "battery_remaining", snapshot.battery.battery_remaining)
     elif msg_type == "COMMAND_ACK":
         result = getattr(msg, "result", None)
         command = getattr(msg, "command", None)
         snapshot.last_command_ack = CommandAckTelemetry(
             command=None if command is None else int(command),
-            command_name=str(command) if command is not None else None,
+            command_name=MAV_COMMAND_NAMES.get(int(command), str(command)) if command is not None else None,
             result=None if result is None else int(result),
             result_name=mav_result_name(result),
             timeout=False,

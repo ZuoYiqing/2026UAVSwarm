@@ -73,6 +73,19 @@ def test_positive_down_z_never_becomes_positive_altitude():
     assert altitude_from_ned_z(1.0) == pytest.approx(0.0)
 
 
+def test_non_finite_mavlink_values_become_none():
+    snapshot = new_snapshot(endpoint="udpin:127.0.0.1:14030", connected=True)
+    apply_mavlink_message(snapshot, FakeMsg("LOCAL_POSITION_NED", x=float("nan"), y=float("inf"), z=float("nan"), vx=0, vy=0, vz=0))
+    apply_mavlink_message(snapshot, FakeMsg("ATTITUDE", roll=float("nan"), pitch=0, yaw=float("inf")))
+
+    assert snapshot.local_position.x_m is None
+    assert snapshot.local_position.y_m is None
+    assert snapshot.local_position.z_down_m is None
+    assert snapshot.local_position.altitude_m is None
+    assert snapshot.attitude.roll_deg is None
+    assert snapshot.attitude.yaw_deg is None
+
+
 def test_sys_status_updates_sensor_health_fields():
     snapshot = new_snapshot(endpoint="udpin:127.0.0.1:14540")
     apply_mavlink_message(

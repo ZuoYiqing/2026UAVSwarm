@@ -26,9 +26,11 @@ from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.replay import replay_last
+from uav_runtime.http.state_store import RuntimeStateStore
 
 AUDIT_PATH = "audit/runtime.audit.jsonl"
 BRIDGE_VERSION = "0.1"
+RUNTIME_STATE_STORE = RuntimeStateStore()
 
 
 def _utc_now() -> str:
@@ -60,6 +62,13 @@ def check_backend(payload: dict[str, Any]) -> dict[str, Any]:
     result = backend.readiness_diagnostic()
     result["backend"] = req.backend
     result["transport_endpoint"] = req.transport_endpoint
+    RUNTIME_STATE_STORE.update_backend_status(result)
+    RUNTIME_STATE_STORE.record_event({
+        "type": "backend_probe_result", "timestamp": _utc_now(),
+        "backend": req.backend, "backend_mode": req.backend_mode,
+        "endpoint": req.transport_endpoint, "readiness": result.get("readiness"),
+        "connect_probe": result.get("connect_probe"),
+    })
     return result
 
 
@@ -80,6 +89,7 @@ def _policy_checked_sitl_action(req: BackendRequest, *, action: str, skill_group
         requires_confirmation_hint=False,
     )
     decision_code, policy_event = rt.evaluate_policy_request(action_req)
+    RUNTIME_STATE_STORE.record_policy_decision(policy_event)
     return decision_code, policy_event, rt
 
 
@@ -91,6 +101,7 @@ def smoke_takeoff(payload: dict[str, Any]) -> dict[str, Any]:
     parameter that can invoke arbitrary CLI/shell behavior.
     """
     req = SmokeTakeoffRequest.from_json(payload)
+    action_id = RUNTIME_STATE_STORE.begin_action("takeoff", backend=req.backend, backend_mode=req.backend_mode)
     decision_code, policy_event, rt = _policy_checked_sitl_action(req, action="takeoff")
     cfg = req.to_mavlink_config()
     if decision_code != "allow":
@@ -114,6 +125,8 @@ def smoke_takeoff(payload: dict[str, Any]) -> dict[str, Any]:
         )
         out["policy_decision"] = policy_event
     rt.audit.append(_action_audit_event("http_smoke_takeoff", out, cfg))
+    RUNTIME_STATE_STORE.finish_action(action_id, out)
+    RUNTIME_STATE_STORE.record_event(_action_audit_event("http_smoke_takeoff", out, cfg))
     return out
 
 
@@ -125,6 +138,7 @@ def land(payload: dict[str, Any]) -> dict[str, Any]:
     path can run.
     """
     req = LandRequest.from_json(payload)
+    action_id = RUNTIME_STATE_STORE.begin_action("land", backend=req.backend, backend_mode=req.backend_mode)
     decision_code, policy_event, rt = _policy_checked_sitl_action(req, action="land")
     cfg = req.to_mavlink_config()
     if decision_code != "allow":
@@ -142,6 +156,8 @@ def land(payload: dict[str, Any]) -> dict[str, Any]:
         out = backend.execute_land_action(command_timeout_ms=req.command_timeout_ms)
         out["policy_decision"] = policy_event
     rt.audit.append(_action_audit_event("http_land", out, cfg))
+    RUNTIME_STATE_STORE.finish_action(action_id, out)
+    RUNTIME_STATE_STORE.record_event(_action_audit_event("http_land", out, cfg))
     return out
 
 
@@ -161,7 +177,40 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
         dry_run=req.dry_run,
     )
     planner = TemplateAgentPlanner()
-    return planner.plan(intent).to_dict()
+    result = planner.plan(intent).to_dict()
+    RUNTIME_STATE_STORE.record_plan_result(result)
+    plan = result.get("plan") or {}
+    RUNTIME_STATE_STORE.record_event({
+        "type": "agent_plan_created", "timestamp": _utc_now(),
+        "plan_id": plan.get("plan_id"), "mission_type": req.mission_type,
+        "status": plan.get("status"), "result": result.get("result"),
+    })
+    return result
+
+
+def telemetry_latest() -> dict[str, Any]:
+    """Return a cached telemetry snapshot without opening a MAVLink session."""
+    return RUNTIME_STATE_STORE.telemetry_latest()
+
+
+def runtime_snapshot() -> dict[str, Any]:
+    """Return the non-blocking console snapshot assembled from owned state."""
+    return RUNTIME_STATE_STORE.runtime_snapshot()
+
+
+def vehicle_snapshot() -> dict[str, Any]:
+    """Return the Cesium vehicle feed projection from cached telemetry only."""
+    return RUNTIME_STATE_STORE.vehicle_snapshot()
+
+
+def agent_status() -> dict[str, Any]:
+    """Describe the real deterministic Template Planner and stored plans."""
+    return RUNTIME_STATE_STORE.agent_status()
+
+
+def simulation_status() -> dict[str, Any]:
+    """Report Gazebo as unknown until independent simulator evidence exists."""
+    return RUNTIME_STATE_STORE.simulation_status()
 
 
 def capabilities(query: str = "") -> dict[str, Any]:
@@ -261,6 +310,16 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
         return 200, policy_decisions(query)
     if method == "GET" and normalized == "/api/skills":
         return 200, skills(query)
+    if method == "GET" and normalized == "/api/telemetry/latest":
+        return 200, telemetry_latest()
+    if method == "GET" and normalized == "/api/snapshot":
+        return 200, runtime_snapshot()
+    if method == "GET" and normalized == "/api/vehicle-snapshot":
+        return 200, vehicle_snapshot()
+    if method == "GET" and normalized == "/api/agent/status":
+        return 200, agent_status()
+    if method == "GET" and normalized == "/api/simulation/status":
+        return 200, simulation_status()
     return 404, {"error": "not_found", "path": path, "method": method}
 
 
