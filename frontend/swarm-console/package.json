@@ -1,0 +1,10 @@
+{
+  "name": "swarm-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone frontend prototype for 2026UAVSwarm Console.",
+  "scripts": {
+    "dev": "python -m http.server 5178 --directory .",
+    "check": "node --check runtime-api.js && node --check app.js"
+  }
+}
