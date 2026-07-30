@@ -25,6 +25,10 @@ class PolicyContext:
     # existing fields
     active_profile: str = "default"
     flags: dict[str, bool] = field(default_factory=dict)
+    node_id: str | None = None
+    backend_mode: str | None = None
+    connection_state: str | None = None
+    node_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -24,12 +24,18 @@ class Px4TelemetryCollector:
         self,
         store: RuntimeStateStore,
         *,
+        node_id: str | None = None,
+        expected_system_id: int | None = None,
+        expected_component_id: int | None = None,
         endpoint: str = "udpin:127.0.0.1:14030",
         connect_timeout_s: float = 1.0,
         retry_delay_s: float = 1.0,
         session_factory: Callable[[MavlinkBackendConfig], Any] | None = None,
     ) -> None:
         self.store = store
+        self.node_id = node_id
+        self.expected_system_id = expected_system_id
+        self.expected_component_id = expected_component_id
         self.endpoint = endpoint
         self.connect_timeout_s = connect_timeout_s
         self.retry_delay_s = retry_delay_s
@@ -42,7 +48,10 @@ class Px4TelemetryCollector:
         if self._thread is not None and self._thread.is_alive():
             return False
         self._stop.clear()
-        self.store.mark_collector_started(endpoint=self.endpoint)
+        if self.node_id is None:
+            self.store.mark_collector_started(endpoint=self.endpoint)
+        else:
+            self.store.mark_collector_started(endpoint=self.endpoint, node_id=self.node_id)
         self._thread = threading.Thread(target=self._run, name="px4-telemetry-collector", daemon=True)
         self._thread.start()
         return True
@@ -57,7 +66,10 @@ class Px4TelemetryCollector:
             thread.join(timeout=join_timeout_s)
         self._thread = None
         self._session = None
-        self.store.mark_collector_stopped()
+        if self.node_id is None:
+            self.store.mark_collector_stopped()
+        else:
+            self.store.mark_collector_stopped(node_id=self.node_id)
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -66,6 +78,8 @@ class Px4TelemetryCollector:
         cfg = MavlinkBackendConfig(
             backend_mode="sitl", backend_enabled=True,
             transport_endpoint=self.endpoint,
+            target_system=self.expected_system_id,
+            target_component=self.expected_component_id,
             connect_timeout_ms=max(100, int(self.connect_timeout_s * 1000)),
         )
         while not self._stop.is_set():
@@ -74,18 +88,33 @@ class Px4TelemetryCollector:
             try:
                 conn = session.connect(timeout_s=self.connect_timeout_s)
                 snapshot = new_snapshot(endpoint=self.endpoint, connected=True)
+                snapshot.node_id = self.node_id
+                # connect() has already validated the heartbeat-derived target
+                # against Registry configuration, so identity is known before a
+                # position message is allowed into a node-specific cache.
+                snapshot.system_id = int(getattr(conn, "target_system", 0) or 0) or None
+                snapshot.component_id = int(getattr(conn, "target_component", 0) or 0) or None
                 while not self._stop.is_set():
                     msg = conn.recv_match(type=list(TRACKED_MESSAGE_TYPES), blocking=True, timeout=0.25)
                     if msg is None:
                         continue
+                    msg_type = str(msg.get_type()) if callable(getattr(msg, "get_type", None)) else None
                     apply_mavlink_message(snapshot, msg, flight_mode=getattr(conn, "flightmode", None))
-                    self.store.update_telemetry(snapshot)
+                    if self.node_id is None:
+                        self.store.update_telemetry(snapshot)
+                    else:
+                        self.store.update_telemetry(self.node_id, snapshot, message_type=msg_type)
             except Exception:
                 if not self._stop.is_set():
-                    self.store.mark_collector_stopped("telemetry_connection_failed")
+                    if self.node_id is None:
+                        self.store.mark_collector_stopped("telemetry_connection_failed")
+                    else:
+                        self.store.mark_collector_stopped("telemetry_connection_failed", node_id=self.node_id)
             finally:
                 session.close()
                 self._session = None
             if not self._stop.wait(max(self.retry_delay_s, 0.01)):
-                self.store.mark_collector_started(endpoint=self.endpoint)
-
+                if self.node_id is None:
+                    self.store.mark_collector_started(endpoint=self.endpoint)
+                else:
+                    self.store.mark_collector_started(endpoint=self.endpoint, node_id=self.node_id)

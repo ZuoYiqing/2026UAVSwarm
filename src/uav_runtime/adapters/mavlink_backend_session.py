@@ -58,6 +58,9 @@ class MavlinkBackendSession:
     connection: Any = None
     target_system: int = 1
     target_component: int = 1
+    expected_target_system: int | None = None
+    expected_target_component: int | None = None
+    command_lock: threading.RLock = field(default_factory=threading.RLock)
     _mavutil: Any = None
     _heartbeat_stop: threading.Event = field(default_factory=threading.Event)
     _heartbeat_thread: threading.Thread | None = None
@@ -69,6 +72,8 @@ class MavlinkBackendSession:
             backend_enabled=bool(config.backend_enabled),
             transport_endpoint=config.transport_endpoint,
             connected=False,
+            expected_target_system=config.target_system,
+            expected_target_component=config.target_component,
         )
 
     def status(self) -> str:
@@ -111,6 +116,18 @@ class MavlinkBackendSession:
         self.connected = True
         self.target_system = int(getattr(conn, "target_system", 1) or 1)
         self.target_component = int(getattr(conn, "target_component", 1) or 1)
+        if self.expected_target_system is not None and self.target_system != self.expected_target_system:
+            close = getattr(conn, "close", None)
+            if callable(close):
+                close()
+            self.connected = False
+            raise RuntimeError("target_system_mismatch")
+        if self.expected_target_component is not None and self.target_component != self.expected_target_component:
+            close = getattr(conn, "close", None)
+            if callable(close):
+                close()
+            self.connected = False
+            raise RuntimeError("target_component_mismatch")
         return conn
 
     def start_gcs_heartbeat(self, *, period_s: float = 1.0) -> bool:

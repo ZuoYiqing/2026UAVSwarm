@@ -33,6 +33,7 @@ class AdapterGateway:
             "risk_hint": request.risk_hint,
             "priority_hint": request.priority_hint,
             "params": request.params,
+            "node_id": request.node_id,
         }
 
     def _sanitize_params(self, intent: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +102,8 @@ class AdapterGateway:
             "adapter": raw.get("adapter", ""),
             "evidence_ref": raw.get("evidence_ref"),
             "execution_trace": raw.get("execution_trace"),
+            "node_id": request.node_id,
+            "raw_result": raw.get("raw_result"),
         }
 
     def execute(self, adapter_name: str, request: ActionRequest) -> dict[str, Any]:

@@ -61,6 +61,10 @@ class ActionRequest:
     requires_confirmation_hint: bool = False
     delegation_id: str | None = None
     idempotency_key: str | None = None
+    # Runtime identity is independent of MAVLink system_id and endpoint.
+    node_id: str | None = None
+    backend_mode: str | None = None
+    connection_state: str | None = None
 
     def __post_init__(self) -> None:
         # 轻量规范化方向：优先写入 canonical 字段，legacy 仅回填兼容。

@@ -125,6 +125,10 @@ class RuntimeOrchestrator:
             runtime_limits={"max_queue": 64, "max_concurrency": 1},
             active_profile=self.policy_profile_name or "default_profile",
             flags={"context_skeleton_ready": True},
+            node_id=req.node_id,
+            backend_mode=req.backend_mode,
+            connection_state=req.connection_state,
+            node_state={"connection_status": req.connection_state} if req.connection_state else {},
         )
 
     def _build_profile(self) -> PolicyProfile:
@@ -152,7 +156,7 @@ class RuntimeOrchestrator:
             runtime_constraints={"non_preemptible_phases": ["non_preemptible"]},
         )
 
-    def _blocked_like_result(self, request_id: str, status: str, code: str) -> dict:
+    def _blocked_like_result(self, request_id: str, status: str, code: str, node_id: str | None = None) -> dict:
         # Non-ALLOW decisions still return action_result-shaped payloads so callers
         # and replay tooling can handle DENY/DEFER/REQUIRE_CONFIRM/PREEMPT uniformly.
         return {
@@ -165,6 +169,7 @@ class RuntimeOrchestrator:
             "accepted": False,
             "detail": code,
             "adapter": "",
+            "node_id": node_id,
         }
 
     def _require_primary_reason(self, decision_code: str, primary_reason_code: str | None) -> str:
@@ -320,6 +325,8 @@ class RuntimeOrchestrator:
             "type": "policy_decision_event",
             "request_id": request_id,
             "mission_id": req.mission_id,
+            "node_id": req.node_id,
+            "action_type": req.action_type,
             "decision_code": decision_code,
             "primary_reason_code": decision.primary_reason_code,
             "secondary_reason_codes": decision.secondary_reason_codes,
@@ -346,12 +353,12 @@ class RuntimeOrchestrator:
         if decision_code == DecisionCode.DENY.value:
             # Policy blocked the request.  Do not call adapters.
             reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
-            return self._blocked_like_result(request_id, "blocked", reason)
+            return self._blocked_like_result(request_id, "blocked", reason, req.node_id)
         if decision_code == DECISION_DEFER:
             # Runtime records a pending takeover for later phase_exit re-evaluation.
             reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
             takeover = self._create_pending_takeover(req, reason)
-            result = self._blocked_like_result(request_id, "deferred", reason)
+            result = self._blocked_like_result(request_id, "deferred", reason, req.node_id)
             result["takeover_status"] = takeover.status
             result["takeover_id"] = takeover.takeover_id
             return result
@@ -359,12 +366,12 @@ class RuntimeOrchestrator:
             # Current MVP does not implement an interactive confirmation workflow;
             # it returns a stable waiting_confirmation result for callers/tests.
             reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
-            return self._blocked_like_result(request_id, "waiting_confirmation", reason)
+            return self._blocked_like_result(request_id, "waiting_confirmation", reason, req.node_id)
         if decision_code == DecisionCode.PREEMPT.value:
             # PREEMPT is currently control-plane intent only; no real abort/suspend
             # command is sent to hardware in this project stage.
             reason = self._require_primary_reason(decision_code, policy_decision_event.get("primary_reason_code"))
-            return self._blocked_like_result(request_id, "handover_pending", reason)
+            return self._blocked_like_result(request_id, "handover_pending", reason, req.node_id)
 
         # ALLOW -> execute selected adapter
         result = self.gateway.execute(self.adapter_name, req)
@@ -381,6 +388,7 @@ class RuntimeOrchestrator:
             "accepted": result.get("accepted", False),
             "detail": result.get("detail", ""),
             "adapter": result.get("adapter", ""),
+            "node_id": req.node_id,
         }
         self.audit.append({"type": "action_result", **normalized})
         return normalized

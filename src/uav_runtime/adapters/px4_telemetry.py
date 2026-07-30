@@ -130,6 +130,7 @@ class Px4TelemetrySnapshot:
     """Runtime-level PX4 telemetry view, not a frontend DTO or execution result."""
 
     timestamp: str
+    node_id: str | None = None
     backend: str = "px4_sitl"
     backend_mode: str = "sitl"
     endpoint: str = "udpin:127.0.0.1:14540"

@@ -37,6 +37,8 @@ def _float(value: Any, default: float) -> float:
 
 @dataclass(slots=True)
 class BackendRequest:
+    node_id: str | None = None
+    system_id: int | None = None
     backend: str = "px4_sitl"
     backend_mode: str = "sitl"
     backend_enabled: bool = False
@@ -50,6 +52,8 @@ class BackendRequest:
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> "BackendRequest":
         return cls(
+            node_id=str(payload["node_id"]) if payload.get("node_id") else None,
+            system_id=_int(payload.get("system_id"), 0) or None,
             backend=str(payload.get("backend", "px4_sitl") or "px4_sitl"),
             backend_mode=str(payload.get("backend_mode", "sitl") or "sitl"),
             backend_enabled=_bool(payload.get("backend_enabled"), False),
@@ -68,6 +72,7 @@ class BackendRequest:
             backend_mode=self.backend_mode,
             backend_enabled=self.backend_enabled,
             transport_endpoint=self.transport_endpoint,
+            target_system=self.system_id,
             connect_timeout_ms=self.connect_timeout_ms,
             command_timeout_ms=self.command_timeout_ms,
             observe_timeout_ms=self.observe_timeout_ms,
