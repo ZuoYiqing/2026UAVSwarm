@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "px4_autopilot_dir": "~/PX4-Autopilot",
+  "build_target": "px4_sitl_default",
+  "scene_id": "simple_recon_v0_1",
+  "scene_path": "scenarios/simple_recon_v0_1/scene.json",
+  "world_name": "simple_recon_v0_1",
+  "world_path": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+  "airframe_autostart": 4001,
+  "px4_sim_model": "gz_x500",
+  "origin": {
+    "lat_deg": 47.3979709,
+    "lon_deg": 8.5461639,
+    "alt_m": 0
+  },
+  "vehicles": [
+    {
+      "node_id": "UAV-01",
+      "px4_instance": 0,
+      "system_id": 1,
+      "gazebo_model_name": "x500_0",
+      "command_endpoint": "udpin:127.0.0.1:14540",
+      "telemetry_endpoint": "udpin:127.0.0.1:14540",
+      "px4_mavlink_local_port": 14580,
+      "gcs_local_port": 18570,
+      "spawn_ned": {
+        "x_m": 0,
+        "y_m": 0,
+        "z_m": 0,
+        "yaw_deg": 0
+      },
+      "runtime_dir": ".runtime/px4_gazebo/UAV-01"
+    },
+    {
+      "node_id": "UAV-02",
+      "px4_instance": 1,
+      "system_id": 2,
+      "gazebo_model_name": "x500_1",
+      "command_endpoint": "udpin:127.0.0.1:14541",
+      "telemetry_endpoint": "udpin:127.0.0.1:14541",
+      "px4_mavlink_local_port": 14581,
+      "gcs_local_port": 18571,
+      "spawn_ned": {
+        "x_m": 0,
+        "y_m": 8,
+        "z_m": 0,
+        "yaw_deg": 0
+      },
+      "runtime_dir": ".runtime/px4_gazebo/UAV-02"
+    },
+    {
+      "node_id": "UAV-03",
+      "px4_instance": 2,
+      "system_id": 3,
+      "gazebo_model_name": "x500_2",
+      "command_endpoint": "udpin:127.0.0.1:14542",
+      "telemetry_endpoint": "udpin:127.0.0.1:14542",
+      "px4_mavlink_local_port": 14582,
+      "gcs_local_port": 18572,
+      "spawn_ned": {
+        "x_m": 0,
+        "y_m": -8,
+        "z_m": 0,
+        "yaw_deg": 0
+      },
+      "runtime_dir": ".runtime/px4_gazebo/UAV-03"
+    }
+  ]
+}
