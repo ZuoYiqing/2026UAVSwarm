@@ -1,0 +1,107 @@
+{
+  "scene_id": "simple_recon_v0_1",
+  "name": "Simple Recon Scenario v0.1",
+  "frame": "local_ned",
+  "origin": {
+    "lat_deg": 47.3979709,
+    "lon_deg": 8.5461639,
+    "alt_m": 0
+  },
+  "home": {
+    "x_m": 0,
+    "y_m": 0,
+    "z_m": 0
+  },
+  "vehicles": [
+    {
+      "node_id": "UAV-01",
+      "type": "px4_x500",
+      "initial_pose": {
+        "x_m": 0,
+        "y_m": 0,
+        "z_m": 0,
+        "yaw_deg": 0
+      }
+    },
+    {
+      "node_id": "UAV-02",
+      "type": "px4_x500",
+      "initial_pose": {
+        "x_m": 0,
+        "y_m": 8,
+        "z_m": 0,
+        "yaw_deg": 0
+      }
+    },
+    {
+      "node_id": "UAV-03",
+      "type": "px4_x500",
+      "initial_pose": {
+        "x_m": 0,
+        "y_m": -8,
+        "z_m": 0,
+        "yaw_deg": 0
+      }
+    }
+  ],
+  "targets": [
+    {
+      "target_id": "target-001",
+      "type": "recon_target",
+      "position": {
+        "x_m": 30,
+        "y_m": 15,
+        "z_m": 0
+      },
+      "radius_m": 3,
+      "description": "static recon target"
+    }
+  ],
+  "obstacles": [
+    {
+      "obstacle_id": "building-001",
+      "type": "box",
+      "position": {
+        "x_m": 15,
+        "y_m": 0,
+        "z_m": -5
+      },
+      "size_m": {
+        "x": 6,
+        "y": 6,
+        "z": 10
+      }
+    }
+  ],
+  "no_fly_zones": [
+    {
+      "zone_id": "nfz-001",
+      "shape": "cylinder",
+      "center": {
+        "x_m": 10,
+        "y_m": 10,
+        "z_m": 0
+      },
+      "radius_m": 5,
+      "min_alt_m": 0,
+      "max_alt_m": 20
+    }
+  ],
+  "mission_areas": [
+    {
+      "area_id": "recon-area-001",
+      "shape": "circle",
+      "center": {
+        "x_m": 30,
+        "y_m": 15,
+        "z_m": 0
+      },
+      "radius_m": 8
+    }
+  ],
+  "map_assets": {
+    "gazebo_world": "worlds/simple_recon_v0_1.sdf",
+    "frontend_map_hint": "frontend/simple_recon_v0_1_map.json",
+    "notes": "Gazebo and frontend may use different exported map formats from the same source data."
+  }
+}

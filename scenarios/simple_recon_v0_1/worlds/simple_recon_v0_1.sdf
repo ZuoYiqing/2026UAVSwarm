@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="simple_recon_v0_1">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.25 0.35 0.25 1</ambient><diffuse>0.35 0.45 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="building-001">
+      <static>true</static>
+      <pose>15 0 5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6 6 10</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6 6 10</size></box></geometry>
+          <material><ambient>0.45 0.45 0.48 1</ambient><diffuse>0.55 0.55 0.58 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="target-001-marker">
+      <static>true</static>
+      <pose>30 15 0.05 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>3</radius><length>0.1</length></cylinder></geometry>
+          <material><ambient>0.0 0.8 0.2 1</ambient><diffuse>0.0 0.9 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="nfz-001-marker">
+      <static>true</static>
+      <pose>10 10 10 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>5</radius><length>20</length></cylinder></geometry>
+          <material><ambient>1 0 0 0.25</ambient><diffuse>1 0 0 0.25</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Visual pads only; PX4 launcher spawns x500 models. -->
+    <model name="landing-pad-UAV-01"><static>true</static><pose>0 0 0.02 0 0 0</pose><link name="link"><visual name="visual"><geometry><cylinder><radius>1.5</radius><length>0.04</length></cylinder></geometry></visual></link></model>
+    <model name="landing-pad-UAV-02"><static>true</static><pose>8 0 0.02 0 0 0</pose><link name="link"><visual name="visual"><geometry><cylinder><radius>1.5</radius><length>0.04</length></cylinder></geometry></visual></link></model>
+    <model name="landing-pad-UAV-03"><static>true</static><pose>-8 0 0.02 0 0 0</pose><link name="link"><visual name="visual"><geometry><cylinder><radius>1.5</radius><length>0.04</length></cylinder></geometry></visual></link></model>
+  </world>
+</sdf>
