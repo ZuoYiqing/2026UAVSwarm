@@ -52,7 +52,8 @@ class Px4TelemetryCollector:
             self.store.mark_collector_started(endpoint=self.endpoint)
         else:
             self.store.mark_collector_started(endpoint=self.endpoint, node_id=self.node_id)
-        self._thread = threading.Thread(target=self._run, name="px4-telemetry-collector", daemon=True)
+        suffix = self.node_id or "legacy"
+        self._thread = threading.Thread(target=self._run, name=f"px4-telemetry-{suffix}", daemon=True)
         self._thread.start()
         return True
 

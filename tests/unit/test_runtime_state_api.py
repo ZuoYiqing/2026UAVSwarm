@@ -254,6 +254,8 @@ def test_collector_start_stop_updates_store_and_never_controls_vehicle() -> None
     collector = Px4TelemetryCollector(store, retry_delay_s=10, session_factory=lambda _: session)
 
     assert collector.start() is True
+    assert collector._thread is not None
+    assert collector._thread.name == "px4-telemetry-legacy"
     deadline = time.time() + 1
     while not store.telemetry_latest()["nodes"] and time.time() < deadline:
         time.sleep(0.01)
@@ -263,6 +265,24 @@ def test_collector_start_stop_updates_store_and_never_controls_vehicle() -> None
     assert session.control_calls == []
     assert collector.is_running() is False
     assert store.telemetry_latest()["nodes"][0]["local_position"]["altitude_m"] == pytest.approx(2.5)
+
+
+def test_node_specific_collector_thread_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    class Store:
+        def mark_collector_started(self, **_: Any) -> None: pass
+
+    class Thread:
+        def __init__(self, *, target: Any, name: str, daemon: bool) -> None:
+            captured["name"] = name
+        def is_alive(self) -> bool: return False
+        def start(self) -> None: pass
+
+    monkeypatch.setattr("uav_runtime.adapters.px4_telemetry_collector.threading.Thread", Thread)
+    collector = Px4TelemetryCollector(Store(), node_id="UAV-02")  # type: ignore[arg-type]
+    assert collector.start()
+    assert captured["name"] == "px4-telemetry-UAV-02"
 
 
 def test_collector_cleans_up_after_receive_exception() -> None:

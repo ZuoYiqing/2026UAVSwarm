@@ -145,3 +145,12 @@ owns a Gazebo clock/world/model probe, simulation status remains unknown. The
 telemetry collector defaults to `udpin:127.0.0.1:14030`; command smoke actions
 retain `udpin:127.0.0.1:14540` to avoid two independent receivers competing for
 one UDP listen port.
+
+## 12. Multi-Vehicle Runtime v0.1.1 Hardening
+
+HTTP rejects unsupported backend identity and invalid numeric boundaries before
+PX4 execution. Response and audit identity comes from the resolved vehicle, not
+browser labels. Full snapshots retain stale nodes and use authoritative scenario
+poses for never-observed nodes; only unregister removes a node. Snapshot tests
+load the frontend-owned JSON Schema directly when that main-branch artifact is
+available and never modify or duplicate it.

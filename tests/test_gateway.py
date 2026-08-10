@@ -61,3 +61,20 @@ def test_execute_with_simulated_timeout_returns_timeout_failure() -> None:
     assert out["status"] == "rejected"
     assert out["code"] == "exec_timeout"
     assert out["message"] == "simulated timeout"
+
+
+def test_px4_adapter_exception_is_never_reported_as_success() -> None:
+    class RaisingAdapter:
+        name = "mavlink"
+        def execute(self, command: dict) -> dict:
+            raise RuntimeError("private backend detail")
+
+    gateway = AdapterGateway()
+    gateway.register(RaisingAdapter())
+    out = gateway.execute("mavlink", _req("land"))
+    assert out["accepted"] is False
+    assert out["status"] != "accepted"
+    assert out["code"] == "adapter_execution_exception"
+    assert out["detail"] == "adapter_execution_exception"
+    assert out["error_class"] == "RuntimeError"
+    assert "private backend detail" not in str(out)

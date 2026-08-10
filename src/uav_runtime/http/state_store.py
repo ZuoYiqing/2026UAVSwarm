@@ -275,17 +275,22 @@ class RuntimeStateStore:
         nodes: list[dict[str, Any]] = []
         ages: list[int] = []
         for handle in handles:
-            state = registry.refresh_state(handle)
-            raw = finite_json(snapshot_to_dict(handle.telemetry))
-            if handle.telemetry_received_at is None:
+            registry.refresh_state(handle)
+            with handle.state_lock:
+                raw = finite_json(snapshot_to_dict(handle.telemetry))
+                received = handle.telemetry_received_at is not None
+                connected = handle.runtime_state.connected
+                stale = handle.runtime_state.stale
+                freshness_ms = handle.runtime_state.telemetry_freshness_ms
+            if not received:
                 continue
             node = self._telemetry_node(raw, node_id=handle.config.node_id)
-            node["connected"] = state.connected and not state.stale
-            node["stale"] = state.stale
-            node["age_ms"] = state.telemetry_freshness_ms
+            node["connected"] = connected and not stale
+            node["stale"] = stale
+            node["age_ms"] = freshness_ms
             nodes.append(node)
-            if state.telemetry_freshness_ms is not None:
-                ages.append(state.telemetry_freshness_ms)
+            if freshness_ms is not None:
+                ages.append(freshness_ms)
         fresh = bool(nodes) and all(not node.get("stale") for node in nodes)
         status = "ok" if fresh else "stale" if nodes else "unavailable"
         selected = handles[0] if len(handles) == 1 else None
@@ -315,12 +320,21 @@ class RuntimeStateStore:
 
     def simulation_status(self) -> dict[str, Any]:
         telemetry = self.telemetry_latest()
+        rows = self.vehicle_registry.vehicle_rows() if self.vehicle_registry is not None else telemetry.get("nodes", [])
+        enabled = [row for row in rows if row.get("enabled", True)]
+        connected = [row for row in enabled if row.get("connected") and not row.get("stale")]
+        stale = [row for row in enabled if row.get("stale", True)]
         # PX4 heartbeat is recorded separately.  It is never treated as evidence
         # that Gazebo, its clock, world, or models are healthy.
         return {
             "version": "1.0", "timestamp": utc_now(), "simulator": "gazebo",
             "status": "unknown", "clock_advancing": None, "world": None, "models": [],
-            "px4_sitl_connected": bool(telemetry.get("nodes") and telemetry["nodes"][0].get("connected")),
+            "total_registered_nodes": len(rows), "total_enabled_nodes": len(enabled),
+            "connected_nodes": len(connected), "stale_nodes": len(stale),
+            "offline_nodes": len(enabled) - len(connected),
+            "any_px4_connected": bool(connected),
+            "all_enabled_px4_connected": bool(enabled) and len(connected) == len(enabled),
+            "px4_sitl_connected": bool(connected), "gazebo_probe_status": "unknown",
             "last_seen": None, "evidence": [], "reason": "gazebo_probe_not_implemented",
             "source": "runtime_state_store",
         }
@@ -342,6 +356,7 @@ class RuntimeStateStore:
             velocity = node.get("velocity_mps") or {}
             battery = node.get("battery") or {}
             pose: dict[str, Any] | None = None
+            pose_source: str | None = None
             if all(isinstance(local.get(key), (int, float)) for key in ("x_m", "y_m", "z_down_m")):
                 pose = {
                     "frame": "NED",
@@ -349,6 +364,17 @@ class RuntimeStateStore:
                 }
                 if all(isinstance(attitude.get(key), (int, float)) for key in ("roll", "pitch", "yaw")):
                     pose["attitude_deg"] = attitude
+                pose_source = "last_known_telemetry" if row.get("stale") else "px4_telemetry"
+            elif self.vehicle_registry is not None:
+                initial = self.vehicle_registry.get_vehicle(node_id).config.metadata.get("initial_pose")
+                if not isinstance(initial, dict) or not all(isinstance(initial.get(key), (int, float)) for key in ("x_m", "y_m", "z_m")):
+                    raise ValueError(f"authoritative_initial_pose_required:{node_id}")
+                pose = {
+                    "frame": "NED",
+                    "position_m": {"x": initial["x_m"], "y": initial["y_m"], "z": initial["z_m"]},
+                    "attitude_deg": {"roll": 0.0, "pitch": 0.0, "yaw": float(initial.get("yaw_deg", 0.0))},
+                }
+                pose_source = "scenario_initial"
             vehicles.append(without_none(finite_json({
                 "id": node_id, "display_name": node_id,
                 "vehicle_type": (node.get("vehicle_type") if node.get("vehicle_type") != "unknown" else None)
@@ -358,7 +384,7 @@ class RuntimeStateStore:
                           if self.vehicle_registry is not None else "x500"),
                 "source": {"id": f"px4-sitl-{row.get('system_id') or node_id}", "kind": "simulation", "label": "PX4 SITL"},
                 "connected": bool(row.get("connected")) and not bool(row.get("stale")),
-                "pose": pose,
+                "pose": pose, "pose_source": pose_source,
                 "velocity_mps": {"north": velocity.get("north"), "east": velocity.get("east"),
                                  "up": -velocity["down"] if isinstance(velocity.get("down"), (int, float)) else None},
                 "telemetry": {"armed": node.get("armed"), "mode": node.get("flight_mode"),
