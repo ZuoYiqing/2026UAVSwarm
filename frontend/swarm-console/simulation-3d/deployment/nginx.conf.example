@@ -1,0 +1,18 @@
+server {
+    listen 5179;
+    server_name _;
+
+    # Change this path to the extracted offline package's site directory.
+    root /opt/uavswarm-simulation-3d/site;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~* \.(js|css|wasm|json|glb|b3dm|i3dm|pnts|cmpt|subtree)$ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=3600";
+    }
+}
+
