@@ -1,0 +1,11 @@
+{
+  "version":"1.0","discovery_status":"blocked_missing_local_px4_source",
+  "px4_autopilot_dir":"~/PX4-Autopilot","scene_id":"simple_recon_v0_1",
+  "scene_path":"scenarios/simple_recon_v0_1/scene.json","world":"scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+  "runtime_root":".runtime/px4_gazebo","gazebo":{"gui_argv":[],"headless_argv":[]},
+  "vehicles":[
+    {"node_id":"UAV-01","px4_instance":0,"system_id":1,"gazebo_model_name":"x500_UAV_01","command_endpoint":null,"telemetry_endpoint":null,"spawn_ned":{"x_m":0,"y_m":0,"z_m":0,"yaw_deg":0},"runtime_dir":".runtime/px4_gazebo/UAV-01","launch_argv":[]},
+    {"node_id":"UAV-02","px4_instance":1,"system_id":2,"gazebo_model_name":"x500_UAV_02","command_endpoint":null,"telemetry_endpoint":null,"spawn_ned":{"x_m":0,"y_m":8,"z_m":0,"yaw_deg":0},"runtime_dir":".runtime/px4_gazebo/UAV-02","launch_argv":[]},
+    {"node_id":"UAV-03","px4_instance":2,"system_id":3,"gazebo_model_name":"x500_UAV_03","command_endpoint":null,"telemetry_endpoint":null,"spawn_ned":{"x_m":0,"y_m":-8,"z_m":0,"yaw_deg":0},"runtime_dir":".runtime/px4_gazebo/UAV-03","launch_argv":[]}
+  ]
+}
