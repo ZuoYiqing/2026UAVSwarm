@@ -12,6 +12,7 @@
     "y_m": 0,
     "z_m": 0
   },
+  "minimum_spawn_separation_m": 5,
   "vehicles": [
     {
       "node_id": "UAV-01",
@@ -19,6 +20,26 @@
       "initial_pose": {
         "x_m": 0,
         "y_m": 0,
+        "z_m": 0,
+        "yaw_deg": 0
+      }
+    },
+    {
+      "node_id": "UAV-02",
+      "type": "px4_x500",
+      "initial_pose": {
+        "x_m": 0,
+        "y_m": 8,
+        "z_m": 0,
+        "yaw_deg": 0
+      }
+    },
+    {
+      "node_id": "UAV-03",
+      "type": "px4_x500",
+      "initial_pose": {
+        "x_m": 0,
+        "y_m": -8,
         "z_m": 0,
         "yaw_deg": 0
       }
@@ -44,7 +65,7 @@
       "position": {
         "x_m": 15,
         "y_m": 0,
-        "z_m": 5
+        "z_m": -5
       },
       "size_m": {
         "x": 6,

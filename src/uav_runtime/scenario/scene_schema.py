@@ -47,7 +47,7 @@ def load_scene(path: str | Path) -> dict[str, Any]:
 
 
 def validate_scene(scene: dict[str, Any]) -> SceneSummary:
-    """Validate the minimal single-vehicle scenario contract.
+    """Validate the shared scene contract, including multi-vehicle spawns.
 
     v0.1 intentionally validates metadata shape and safe numeric bounds only.
     It does not generate missions, bypass Policy Gate, or control PX4/Gazebo.
@@ -76,6 +76,10 @@ def validate_scene(scene: dict[str, Any]) -> SceneSummary:
     _validate_origin(scene["origin"])
     _validate_xyz(scene["home"], context="home")
     _validate_map_assets(scene["map_assets"])
+    minimum_spawn_separation_m = _non_negative_number(
+        scene.get("minimum_spawn_separation_m", 0),
+        context="minimum_spawn_separation_m",
+    )
     for vehicle in vehicles:
         _validate_xyz(vehicle.get("initial_pose", {}), context=f"vehicle {vehicle.get('node_id')} initial_pose")
         _finite_number(vehicle.get("initial_pose", {}).get("yaw_deg", 0), context="vehicle yaw_deg")
@@ -97,6 +101,14 @@ def validate_scene(scene: dict[str, Any]) -> SceneSummary:
     for area in mission_areas:
         _validate_xyz(area.get("center", {}), context=f"area {area.get('area_id')} center")
         _non_negative_number(area.get("radius_m"), context=f"area {area.get('area_id')} radius_m")
+
+    _validate_vehicle_spawns(
+        vehicles,
+        obstacles=obstacles,
+        targets=targets,
+        no_fly_zones=no_fly_zones,
+        minimum_separation_m=minimum_spawn_separation_m,
+    )
 
     return SceneSummary(
         scene_id=str(scene["scene_id"]),
@@ -148,6 +160,75 @@ def _validate_xyz(value: Any, *, context: str) -> None:
         raise SceneValidationError(f"{context} must be an object")
     for key in ("x_m", "y_m", "z_m"):
         _finite_number(value.get(key), context=f"{context}.{key}")
+
+
+def _validate_vehicle_spawns(
+    vehicles: list[dict[str, Any]],
+    *,
+    obstacles: list[dict[str, Any]],
+    targets: list[dict[str, Any]],
+    no_fly_zones: list[dict[str, Any]],
+    minimum_separation_m: float,
+) -> None:
+    """Reject unsafe initial overlap without adding transport details to the scene."""
+    for index, vehicle in enumerate(vehicles):
+        node_id = str(vehicle["node_id"])
+        pose = vehicle["initial_pose"]
+        x_m = float(pose["x_m"])
+        y_m = float(pose["y_m"])
+        z_m = float(pose["z_m"])
+
+        for other in vehicles[index + 1 :]:
+            other_pose = other["initial_pose"]
+            distance_m = math.dist(
+                (x_m, y_m, z_m),
+                (
+                    float(other_pose["x_m"]),
+                    float(other_pose["y_m"]),
+                    float(other_pose["z_m"]),
+                ),
+            )
+            if distance_m < minimum_separation_m:
+                raise SceneValidationError(
+                    f"vehicle spawn separation below minimum: {node_id} and "
+                    f"{other['node_id']} are {distance_m:.3f}m apart"
+                )
+
+        for obstacle in obstacles:
+            center = obstacle["position"]
+            size = obstacle["size_m"]
+            inside = all(
+                abs(value - float(center[key])) <= float(size[axis]) / 2.0
+                for value, key, axis in (
+                    (x_m, "x_m", "x"),
+                    (y_m, "y_m", "y"),
+                    (z_m, "z_m", "z"),
+                )
+            )
+            if inside:
+                raise SceneValidationError(
+                    f"vehicle {node_id} initial_pose overlaps obstacle {obstacle['obstacle_id']}"
+                )
+
+        for target in targets:
+            center = target["position"]
+            if math.dist((x_m, y_m), (float(center["x_m"]), float(center["y_m"]))) < float(target["radius_m"]):
+                raise SceneValidationError(
+                    f"vehicle {node_id} initial_pose overlaps target {target['target_id']}"
+                )
+
+        altitude_m = max(0.0, -z_m)
+        for zone in no_fly_zones:
+            center = zone["center"]
+            horizontal_distance_m = math.dist(
+                (x_m, y_m),
+                (float(center["x_m"]), float(center["y_m"])),
+            )
+            inside_altitude = float(zone["min_alt_m"]) <= altitude_m <= float(zone["max_alt_m"])
+            if horizontal_distance_m < float(zone["radius_m"]) and inside_altitude:
+                raise SceneValidationError(
+                    f"vehicle {node_id} initial_pose overlaps no-fly zone {zone['zone_id']}"
+                )
 
 
 def _finite_number(value: Any, *, context: str) -> float:

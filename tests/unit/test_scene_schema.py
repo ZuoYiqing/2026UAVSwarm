@@ -29,7 +29,7 @@ def test_scene_json_can_be_read_and_has_scene_id() -> None:
 def test_scene_has_at_least_one_vehicle() -> None:
     _, summary = load_and_validate_scene(SCENE_PATH)
 
-    assert summary.vehicle_count >= 1
+    assert summary.vehicle_count == 3
     assert summary.validation_result == "pass"
 
 
@@ -39,6 +39,14 @@ def test_node_ids_are_unique() -> None:
     scene["vehicles"].append(duplicate)  # type: ignore[union-attr]
 
     with pytest.raises(SceneValidationError, match="duplicate node_id"):
+        validate_scene(scene)  # type: ignore[arg-type]
+
+
+def test_vehicle_spawns_respect_minimum_separation() -> None:
+    scene = _valid_scene()
+    scene["vehicles"][1]["initial_pose"]["y_m"] = 1  # type: ignore[index]
+
+    with pytest.raises(SceneValidationError, match="spawn separation below minimum"):
         validate_scene(scene)  # type: ignore[arg-type]
 
 
@@ -115,7 +123,7 @@ def test_validate_scene_cli_outputs_summary() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["scene_id"] == "simple_recon_v0_1"
-    assert payload["vehicle_count"] == 1
+    assert payload["vehicle_count"] == 3
     assert payload["target_count"] == 1
     assert payload["obstacle_count"] == 1
     assert payload["no_fly_zone_count"] == 1
