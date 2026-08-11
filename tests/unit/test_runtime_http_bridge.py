@@ -25,6 +25,7 @@ def test_health_returns_ok() -> None:
 
 def test_backend_check_accepts_udpin_endpoint_and_preserves_it(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     _set_audit_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(routes.Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: False))
 
     status, payload = dispatch(
         "POST",
@@ -53,11 +54,8 @@ def test_smoke_takeoff_non_sitl_is_rejected_after_policy_check(monkeypatch, tmp_
         body={"backend_mode": "stub", "backend_enabled": True, "transport_endpoint": "udpin:127.0.0.1:14540"},
     )
 
-    assert status == 200
-    assert payload["action"] == "takeoff"
-    assert payload["result"] == "fail"
-    assert payload["failure_reason"] == "sitl_only_required"
-    assert payload["policy_decision"]["decision_code"] == "allow"
+    assert status == 400
+    assert payload["error"] == "unsupported_backend_mode"
 
 
 def test_land_non_sitl_is_rejected_after_policy_check(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
@@ -69,11 +67,8 @@ def test_land_non_sitl_is_rejected_after_policy_check(monkeypatch, tmp_path: Pat
         body={"backend_mode": "stub", "backend_enabled": True, "transport_endpoint": "udpin:127.0.0.1:14540"},
     )
 
-    assert status == 200
-    assert payload["action"] == "land"
-    assert payload["result"] == "fail"
-    assert payload["failure_reason"] == "sitl_only_required"
-    assert payload["policy_decision"]["decision_code"] == "allow"
+    assert status == 400
+    assert payload["error"] == "unsupported_backend_mode"
 
 
 def test_plan_mission_returns_plan_result_without_execution(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

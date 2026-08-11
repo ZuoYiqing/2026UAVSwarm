@@ -27,14 +27,15 @@ def _utc_now() -> str:
 class VehicleRegistryError(LookupError):
     """Structured registry failure suitable for HTTP/API translation."""
 
-    def __init__(self, code: str, *, node_id: str | None = None, status: int = 400) -> None:
+    def __init__(self, code: str, *, node_id: str | None = None, status: int = 400, details: dict[str, Any] | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.node_id = node_id
         self.status = status
+        self.details = details or {}
 
     def to_dict(self) -> dict[str, Any]:
-        return {"error": self.code, "node_id": self.node_id}
+        return {"error": self.code, "message": self.code, "field": None, "node_id": self.node_id, "details": self.details}
 
 
 @dataclass(slots=True)
@@ -126,13 +127,40 @@ class VehicleRegistry:
 
     @classmethod
     def from_json(cls, path: str | Path, **kwargs: Any) -> "VehicleRegistry":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        config_path = Path(path)
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        scene_id = str(data.get("scene_id") or "")
+        scene_poses: dict[str, dict[str, Any]] = {}
+        if scene_id:
+            scene_path = config_path.resolve().parents[1] / "scenarios" / scene_id / "scene.json"
+            if not scene_path.exists():
+                raise VehicleRegistryError("authoritative_scene_not_found", status=409, details={"scene_id": scene_id, "scene_path": str(scene_path)})
+            scene = json.loads(scene_path.read_text(encoding="utf-8"))
+            scene_rows = list(scene.get("vehicles") or [])
+            scene_ids = [str(row.get("node_id") or "") for row in scene_rows]
+            if len(scene_ids) != len(set(scene_ids)):
+                raise VehicleRegistryError("duplicate_scene_node_id", status=409)
+            missing_pose = [node for node, row in zip(scene_ids, scene_rows) if not isinstance(row.get("initial_pose"), dict)]
+            if missing_pose:
+                raise VehicleRegistryError("scenario_initial_pose_required", status=409, details={"node_ids": missing_pose})
+            scene_poses = {node: dict(row["initial_pose"]) for node, row in zip(scene_ids, scene_rows) if node}
+            config_ids = {str(row.get("node_id")) for row in data.get("vehicles", []) if row.get("node_id")}
+            if config_ids != set(scene_poses):
+                raise VehicleRegistryError("scene_vehicle_mapping_mismatch", status=409, details={
+                    "missing_from_scene": sorted(config_ids - set(scene_poses)),
+                    "missing_from_runtime_config": sorted(set(scene_poses) - config_ids),
+                })
         registry = cls(
-            scene_id=str(data.get("scene_id") or ""),
+            scene_id=scene_id,
             default_node_id=data.get("default_node_id"),
             **kwargs,
         )
         for row in data.get("vehicles", []):
+            row = dict(row)
+            metadata = dict(row.get("metadata") or {})
+            if row.get("node_id") in scene_poses:
+                metadata["initial_pose"] = scene_poses[str(row["node_id"])]
+            row["metadata"] = metadata
             registry.register_vehicle(VehicleConfig(**row))
         return registry
 
@@ -144,12 +172,26 @@ class VehicleRegistry:
                 raise VehicleRegistryError("duplicate_node_id", node_id=config.node_id, status=409)
             if any(handle.config.system_id == config.system_id for handle in self._vehicles.values()):
                 raise VehicleRegistryError("duplicate_system_id", node_id=config.node_id, status=409)
-            if config.endpoint and any(handle.config.endpoint == config.endpoint for handle in self._vehicles.values()):
-                raise VehicleRegistryError("duplicate_endpoint", node_id=config.node_id, status=409)
-            if config.telemetry_endpoint and any(
-                handle.config.telemetry_endpoint == config.telemetry_endpoint for handle in self._vehicles.values()
-            ):
-                raise VehicleRegistryError("duplicate_telemetry_endpoint", node_id=config.node_id, status=409)
+            # Command and telemetry endpoints are both UDP receive listeners in
+            # the current dual-session model, so ownership is unique across roles.
+            owners = {
+                endpoint: (handle.config.node_id, role)
+                for handle in self._vehicles.values()
+                for endpoint, role in ((handle.config.endpoint, "command"), (handle.config.telemetry_endpoint, "telemetry"))
+                if endpoint
+            }
+            requested: dict[str, str] = {}
+            for endpoint, role in ((config.endpoint, "command"), (config.telemetry_endpoint, "telemetry")):
+                if not endpoint:
+                    continue
+                existing = owners.get(endpoint)
+                if existing or endpoint in requested:
+                    conflicting_node, existing_role = existing or (config.node_id, requested[endpoint])
+                    raise VehicleRegistryError("endpoint_role_conflict", node_id=config.node_id, status=409, details={
+                        "endpoint": endpoint, "conflicting_node_id": conflicting_node,
+                        "requested_role": role, "existing_role": existing_role,
+                    })
+                requested[endpoint] = role
             session = self._session_factory(config.to_mavlink_config())
             endpoint = config.telemetry_endpoint or config.endpoint
             handle = VehicleHandle(
@@ -211,7 +253,9 @@ class VehicleRegistry:
         self.refresh_state(handle)
         # A never-started node may be connected on demand by a command route.
         # A node explicitly marked offline must not silently receive commands.
-        if require_online and handle.runtime_state.connection_status == "offline":
+        with handle.state_lock:
+            connection_status = handle.runtime_state.connection_status
+        if require_online and connection_status == "offline":
             raise VehicleRegistryError("node_offline", node_id=resolved, status=503)
         return handle, selection
 
@@ -221,20 +265,26 @@ class VehicleRegistry:
             return
         telemetry_endpoint = handle.config.telemetry_endpoint
         if not telemetry_endpoint:
-            handle.runtime_state.last_error = "telemetry_endpoint_not_configured"
-            return
-        if handle.collector is not None and handle.collector.is_running():
+            with handle.state_lock:
+                handle.runtime_state.last_error = "telemetry_endpoint_not_configured"
             return
         from uav_runtime.adapters.px4_telemetry_collector import Px4TelemetryCollector
 
-        handle.collector = Px4TelemetryCollector(
-            self,
-            node_id=node_id,
-            endpoint=telemetry_endpoint,
-            expected_system_id=handle.config.system_id,
-            expected_component_id=handle.config.component_id,
-        )
-        handle.collector.start()
+        with handle.state_lock:
+            if handle.collector is not None and handle.collector.is_running():
+                return
+            collector = Px4TelemetryCollector(
+                self,
+                node_id=node_id,
+                endpoint=telemetry_endpoint,
+                expected_system_id=handle.config.system_id,
+                expected_component_id=handle.config.component_id,
+            )
+            handle.collector = collector
+            # Construction and start are part of the same per-node transition so
+            # concurrent callers cannot allocate duplicate transport resources.
+            # The RLock still allows same-thread collector callbacks to re-enter.
+            collector.start()
 
     def stop_vehicle(self, node_id: str) -> None:
         self._stop_handle(self.get_vehicle(node_id))
@@ -248,28 +298,43 @@ class VehicleRegistry:
             self._stop_handle(handle)
 
     def _stop_handle(self, handle: VehicleHandle) -> None:
-        if handle.collector is not None:
-            handle.collector.stop()
+        # Never hold the registry membership lock across thread joins or I/O.
+        # Each handle protects its own pointer/state, keeping nodes independent.
+        with handle.state_lock:
+            collector = handle.collector
             handle.collector = None
+        if collector is not None:
+            collector.stop()
         handle.session.close()
-        handle.runtime_state.connected = False
-        handle.runtime_state.stale = True
-        handle.runtime_state.connection_status = "offline"
-        handle.runtime_state.last_error = "vehicle_stopped"
+        with handle.state_lock:
+            handle.runtime_state.connected = False
+            handle.runtime_state.stale = True
+            handle.runtime_state.connection_status = "offline"
+            handle.runtime_state.last_error = "vehicle_stopped"
 
     def mark_collector_started(self, *, endpoint: str, node_id: str | None = None) -> None:
         if node_id is None:
             return
         handle = self.get_vehicle(node_id)
-        handle.runtime_state.collector_running = True
-        handle.runtime_state.connection_status = "connecting"
+        with handle.state_lock:
+            handle.runtime_state.collector_running = True
+            handle.runtime_state.connection_status = "connecting"
 
     def mark_collector_stopped(self, reason: str = "telemetry_collector_stopped", *, node_id: str | None = None) -> None:
         if node_id is None:
             return
-        handle = self.get_vehicle(node_id)
-        handle.runtime_state.collector_running = False
-        self.mark_offline(node_id, reason=reason)
+        try:
+            handle = self.get_vehicle(node_id)
+        except VehicleRegistryError:
+            # unregister removes membership before a collector join; a late
+            # lifecycle callback must not recreate or mutate a removed node.
+            return
+        with handle.state_lock:
+            handle.runtime_state.collector_running = False
+            handle.runtime_state.connected = False
+            handle.runtime_state.stale = True
+            handle.runtime_state.connection_status = "offline"
+            handle.runtime_state.last_error = reason
 
     def update_telemetry(
         self,
@@ -298,64 +363,72 @@ class VehicleRegistry:
                 state.last_heartbeat_at = snapshot.timestamp
 
     def mark_connected(self, node_id: str, *, at: str | None = None) -> None:
-        state = self.get_vehicle(node_id).runtime_state
-        state.connected = True
-        state.stale = False
-        state.connection_status = "connected"
-        state.last_heartbeat_at = at or _utc_now()
+        handle = self.get_vehicle(node_id)
+        with handle.state_lock:
+            state = handle.runtime_state
+            state.connected = True
+            state.stale = False
+            state.connection_status = "connected"
+            state.last_heartbeat_at = at or _utc_now()
 
     def mark_offline(self, node_id: str, *, reason: str) -> None:
-        state = self.get_vehicle(node_id).runtime_state
-        state.connected = False
-        state.stale = True
-        state.connection_status = "offline"
-        state.last_error = reason
+        handle = self.get_vehicle(node_id)
+        with handle.state_lock:
+            state = handle.runtime_state
+            state.connected = False
+            state.stale = True
+            state.connection_status = "offline"
+            state.last_error = reason
 
     def mark_action_started(self, node_id: str, action_type: str, *, at: str | None = None) -> None:
         """Mark only the selected node busy; unrelated handles remain untouched."""
-        state = self.get_vehicle(node_id).runtime_state
-        state.active_action = action_type
-        state.last_action_at = at or _utc_now()
+        handle = self.get_vehicle(node_id)
+        with handle.state_lock:
+            handle.runtime_state.active_action = action_type
+            handle.runtime_state.last_action_at = at or _utc_now()
 
     def mark_action_finished(self, node_id: str, *, error: str | None = None, at: str | None = None) -> None:
         """Clear a node action and retain its completion/error timestamp."""
-        state = self.get_vehicle(node_id).runtime_state
-        state.active_action = None
-        state.last_action_at = at or _utc_now()
-        if error:
-            state.last_error = error
+        handle = self.get_vehicle(node_id)
+        with handle.state_lock:
+            handle.runtime_state.active_action = None
+            handle.runtime_state.last_action_at = at or _utc_now()
+            if error:
+                handle.runtime_state.last_error = error
 
     def refresh_state(self, handle: VehicleHandle) -> VehicleRuntimeState:
-        state = handle.runtime_state
-        if handle.telemetry_received_at is None:
-            state.telemetry_freshness_ms = None
-            state.stale = True
+        with handle.state_lock:
+            state = handle.runtime_state
+            if handle.telemetry_received_at is None:
+                state.telemetry_freshness_ms = None
+                state.stale = True
+                return state
+            age = max(0, int((self._clock() - handle.telemetry_received_at) * 1000))
+            state.telemetry_freshness_ms = age
+            if age > self.stale_after_ms:
+                # Stale nodes remain in full snapshots with last-known pose;
+                # only explicit unregister removes Runtime identity.
+                state.stale = True
+                state.connected = False
+                state.connection_status = "offline"
             return state
-        age = max(0, int((self._clock() - handle.telemetry_received_at) * 1000))
-        state.telemetry_freshness_ms = age
-        if age > self.stale_after_ms:
-            # A timeout is retained as stale/offline so Cesium keeps the last pose;
-            # only explicit unregister removes the node from a full snapshot.
-            state.stale = True
-            state.connected = False
-            state.connection_status = "offline"
-        return state
 
     def vehicle_rows(self) -> list[dict[str, Any]]:
         rows = []
         for handle in self.list_vehicles():
-            state = self.refresh_state(handle)
-            rows.append({
-                "node_id": handle.config.node_id,
-                "backend": handle.config.backend,
-                "backend_mode": handle.config.backend_mode,
-                "endpoint": handle.config.endpoint,
-                "telemetry_endpoint": handle.config.telemetry_endpoint,
-                "system_id": handle.config.system_id,
-                "component_id": handle.config.component_id,
-                "enabled": handle.config.enabled,
-                **asdict(state),
-            })
+            self.refresh_state(handle)
+            with handle.state_lock:
+                rows.append({
+                    "node_id": handle.config.node_id,
+                    "backend": handle.config.backend,
+                    "backend_mode": handle.config.backend_mode,
+                    "endpoint": handle.config.endpoint,
+                    "telemetry_endpoint": handle.config.telemetry_endpoint,
+                    "system_id": handle.config.system_id,
+                    "component_id": handle.config.component_id,
+                    "enabled": handle.config.enabled,
+                    **asdict(handle.runtime_state),
+                })
         return rows
 
     def telemetry_dict(self, node_id: str) -> dict[str, Any]:

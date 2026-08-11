@@ -15,10 +15,12 @@ def test_px4_sitl_backend_conforms_to_mavlink_backend_interface() -> None:
     assert isinstance(backend, MavlinkBackend)
 
 
-def test_px4_sitl_backend_returns_stable_placeholder_semantics() -> None:
+def test_px4_sitl_backend_returns_stable_placeholder_semantics(monkeypatch) -> None:
     cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session = MavlinkBackendSession.from_config(cfg)
     backend = Px4SitlBackend(cfg, session)
+    # Unit tests never probe a developer's live PX4 UDP listener.
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: False))
 
     raw = backend.execute_mapped_action(
         action="takeoff",

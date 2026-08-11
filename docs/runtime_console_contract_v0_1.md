@@ -457,3 +457,10 @@ Still deferred to later phases:
 - Runtime metrics aggregation for `GET /api/runtime/pipeline`.
 - HTTP polling for `GET /api/telemetry/latest` from a shared telemetry session.
 - WebSocket telemetry streaming.
+
+## 16. Multi-Vehicle Runtime v0.1.1 Hardening
+
+Simulation status aggregates registered/enabled/connected/stale/offline nodes.
+`any_px4_connected` and `all_enabled_px4_connected` report PX4 connectivity only;
+Gazebo remains `unknown` with `gazebo_probe_not_implemented` until an independent
+clock/world/model probe exists.

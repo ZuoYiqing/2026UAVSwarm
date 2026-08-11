@@ -164,3 +164,26 @@ not Gazebo evidence, and this foundation does not add a Gazebo probe.
 Unit tests use fake sessions and deterministic telemetry because opening real
 PX4 UDP ports would make tests environment-dependent and could steal command or
 telemetry messages from an active simulator.
+
+## Multi-Vehicle Runtime v0.1.1 Hardening
+
+- Adapter exceptions are explicit `adapter_execution_exception` failures; they
+  are never converted to simulated acceptance, and public output omits raw
+  exception messages and tracebacks.
+- HTTP execution identity comes from resolved `VehicleConfig`. The bridge only
+  accepts `px4_sitl` / `sitl`, and finite altitude, threshold, timeout, retry and
+  system-ID ranges are rejected before backend execution.
+- Command and telemetry receive endpoints have one owner across both roles.
+- Registry membership uses the registry lock; mutable telemetry, collector and
+  action state use independent per-node locks; commands use per-node locks.
+- Scenario data is authoritative for initial pose, while runtime config owns
+  endpoint/system deployment mapping. They join strictly through `node_id`.
+- Snapshot pose priority is fresh telemetry, last-known stale telemetry, then
+  authoritative scenario initial pose. Offline nodes remain; unregister removes.
+- PX4 fleet connectivity is aggregated independently from Gazebo health, which
+  remains `unknown` without a separate Gazebo probe.
+- Unit tests use fake sessions/probes. Real three-PX4 tests remain opt-in and
+  blocked until endpoints are supplied.
+- The authoritative frontend JSON Schema is read directly from
+  `frontend/swarm-console/simulation-3d/public/contracts/vehicle-snapshot.schema.json`;
+  no substitute schema is created or relaxed.

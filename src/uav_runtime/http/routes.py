@@ -16,7 +16,7 @@ from uuid import uuid4
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
 from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
-from uav_runtime.http.schemas import BackendRequest, LandRequest, PlanMissionRequest, SmokeTakeoffRequest
+from uav_runtime.http.schemas import BackendRequest, LandRequest, PlanMissionRequest, RequestValidationError, SmokeTakeoffRequest
 from uav_runtime.http.contracts import (
     capability_to_skill_manifest,
     event_to_action_result_view,
@@ -66,13 +66,14 @@ def check_backend(payload: dict[str, Any]) -> dict[str, Any]:
     cfg = handle.config.to_mavlink_config()
     backend = Px4SitlBackend(cfg, handle.session)
     result = backend.readiness_diagnostic()
-    result["backend"] = req.backend
+    result["backend"] = handle.config.backend
+    result["backend_mode"] = handle.config.backend_mode
     result["transport_endpoint"] = cfg.transport_endpoint
     result.update({"node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id, "node_selection": selection})
     RUNTIME_STATE_STORE.update_backend_status(result, node_id=handle.config.node_id)
     RUNTIME_STATE_STORE.record_event({
         "type": "backend_probe_result", "timestamp": _utc_now(),
-        "backend": req.backend, "backend_mode": req.backend_mode,
+        "backend": handle.config.backend, "backend_mode": handle.config.backend_mode,
         "endpoint": cfg.transport_endpoint, "node_id": handle.config.node_id, "readiness": result.get("readiness"),
         "connect_probe": result.get("connect_probe"),
     })
@@ -111,7 +112,8 @@ def _policy_checked_sitl_action(req: BackendRequest, handle: VehicleHandle, *, a
         "type": "action_request", "timestamp": _utc_now(), "node_id": handle.config.node_id,
         "mission_id": action_req.mission_id, "action_type": action,
         "backend": handle.config.backend, "backend_mode": handle.config.backend_mode,
-        "endpoint": handle.config.endpoint, "source": "runtime_http_bridge",
+        "endpoint": handle.config.endpoint, "system_id": handle.config.system_id,
+        "source": "runtime_http_bridge",
     }
     rt.audit.append(request_event)
     RUNTIME_STATE_STORE.record_event(request_event)
@@ -165,7 +167,13 @@ def smoke_takeoff(payload: dict[str, Any]) -> dict[str, Any]:
                 out = dict(gateway_result.get("raw_result") or {
                     "action": "takeoff", "result": "fail",
                     "failure_reason": gateway_result.get("code") or "adapter_execution_failed",
+                    "accepted": False, "status": "failed",
+                    "code": gateway_result.get("code") or "adapter_execution_failed",
+                    "error_class": gateway_result.get("error_class"),
                 })
+                out.setdefault("accepted", gateway_result.get("accepted", False))
+                out.setdefault("status", "accepted" if gateway_result.get("accepted") else "failed")
+                out.setdefault("code", gateway_result.get("code"))
         except Exception:
             VEHICLE_REGISTRY.mark_action_finished(handle.config.node_id, error="adapter_execution_exception")
             raise
@@ -173,7 +181,10 @@ def smoke_takeoff(payload: dict[str, Any]) -> dict[str, Any]:
         result_event = _adapter_event("adapter_execution_result", handle, "takeoff", result=out)
         rt.audit.append(result_event)
         RUNTIME_STATE_STORE.record_event(result_event)
-    out.update({"node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id, "node_selection": selection})
+    out.update({"node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id,
+                "node_selection": selection, "backend": handle.config.backend,
+                "backend_mode": handle.config.backend_mode, "endpoint": handle.config.endpoint,
+                "system_id": handle.config.system_id})
     rt.audit.append(_action_audit_event("http_smoke_takeoff", out, cfg, handle.config.node_id))
     RUNTIME_STATE_STORE.finish_action(action_id, out)
     RUNTIME_STATE_STORE.record_event(_action_audit_event("http_smoke_takeoff", out, cfg, handle.config.node_id))
@@ -224,7 +235,13 @@ def land(payload: dict[str, Any]) -> dict[str, Any]:
                 out = dict(gateway_result.get("raw_result") or {
                     "action": "land", "result": "fail",
                     "failure_reason": gateway_result.get("code") or "adapter_execution_failed",
+                    "accepted": False, "status": "failed",
+                    "code": gateway_result.get("code") or "adapter_execution_failed",
+                    "error_class": gateway_result.get("error_class"),
                 })
+                out.setdefault("accepted", gateway_result.get("accepted", False))
+                out.setdefault("status", "accepted" if gateway_result.get("accepted") else "failed")
+                out.setdefault("code", gateway_result.get("code"))
         except Exception:
             VEHICLE_REGISTRY.mark_action_finished(handle.config.node_id, error="adapter_execution_exception")
             raise
@@ -232,7 +249,10 @@ def land(payload: dict[str, Any]) -> dict[str, Any]:
         result_event = _adapter_event("adapter_execution_result", handle, "land", result=out)
         rt.audit.append(result_event)
         RUNTIME_STATE_STORE.record_event(result_event)
-    out.update({"node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id, "node_selection": selection})
+    out.update({"node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id,
+                "node_selection": selection, "backend": handle.config.backend,
+                "backend_mode": handle.config.backend_mode, "endpoint": handle.config.endpoint,
+                "system_id": handle.config.system_id})
     rt.audit.append(_action_audit_event("http_land", out, cfg, handle.config.node_id))
     RUNTIME_STATE_STORE.finish_action(action_id, out)
     RUNTIME_STATE_STORE.record_event(_action_audit_event("http_land", out, cfg, handle.config.node_id))
@@ -381,6 +401,8 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
         return _dispatch_known(method, normalized, path=path, payload=payload, query=query)
     except VehicleRegistryError as exc:
         return exc.status, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "vehicle_registry"}
+    except RequestValidationError as exc:
+        return 400, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "runtime_http_bridge"}
 
 
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
@@ -430,6 +452,9 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "backend": out.get("backend", "px4_sitl"),
         "backend_mode": out.get("backend_mode", cfg.backend_mode),
         "endpoint": out.get("endpoint", cfg.transport_endpoint),
+        "system_id": out.get("system_id", cfg.target_system),
+        "resolved_node_id": out.get("resolved_node_id", node_id),
+        "node_selection": out.get("node_selection"),
         "policy_decision": out.get("policy_decision"),
         "ack": {"arm_ack": out.get("arm_ack"), "takeoff_ack": out.get("takeoff_ack"), "land_ack": out.get("land_ack")},
         "altitude_observation": out.get("altitude_observation"),
@@ -437,6 +462,8 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "threshold_reached": out.get("threshold_reached"),
         "result": out.get("result"),
         "failure_reason": out.get("failure_reason"),
+        "accepted": out.get("accepted"), "status": out.get("status"),
+        "code": out.get("code"), "error_class": out.get("error_class"),
     }
 
 
@@ -457,6 +484,11 @@ def _adapter_event(
         "backend": handle.config.backend,
         "backend_mode": handle.config.backend_mode,
         "endpoint": handle.config.endpoint,
+        "system_id": handle.config.system_id,
         "result": result.get("result") if result else None,
         "failure_reason": result.get("failure_reason") if result else None,
+        "accepted": result.get("accepted") if result else None,
+        "status": result.get("status") if result else None,
+        "code": result.get("code") if result else None,
+        "error_class": result.get("error_class") if result else None,
     }

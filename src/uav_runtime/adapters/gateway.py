@@ -75,14 +75,16 @@ class AdapterGateway:
         # v0.1 baseline: adapter.execute(command)（command 由 gateway 统一构造）
         try:
             return adapter.execute(command)
-        except Exception:
-            # fake/stub fallback path. 真实 adapter 接入时应尽量返回结构化错误，
-            # 不应依赖这里吞异常；这个分支主要保护 demo/test skeleton。
+        except Exception as exc:
+            # A real execution exception is evidence of failure.  Turning it
+            # into simulated acceptance would mislead Runtime, audit and UI.
             return {
-                "accepted": True,
-                "detail": "simulated",
+                "accepted": False,
+                "code": "adapter_execution_exception",
+                "message": "adapter execution failed",
+                "detail": "adapter_execution_exception",
                 "adapter": getattr(adapter, "name", "unknown"),
-                "command": command,
+                "error_class": type(exc).__name__,
             }
 
     def _normalize_result(self, raw: dict[str, Any], request: ActionRequest) -> dict[str, Any]:
@@ -102,6 +104,7 @@ class AdapterGateway:
             "adapter": raw.get("adapter", ""),
             "evidence_ref": raw.get("evidence_ref"),
             "execution_trace": raw.get("execution_trace"),
+            "error_class": raw.get("error_class"),
             "node_id": request.node_id,
             "raw_result": raw.get("raw_result"),
         }
