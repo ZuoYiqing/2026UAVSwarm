@@ -17,18 +17,23 @@ coordination, WebSocket/SSE, databases, payload control or real-aircraft use.
 
 ## Configuration and lifecycle
 
-`config/vehicles.sitl.json` is the deployment fact source. UAV-01 retains the
-validated single-node endpoints. UAV-02/03 are deliberately disabled with empty
-endpoints until the PX4 owner supplies real values; the Runtime does not guess
-ports. Each enabled node receives its own `MavlinkBackendSession`, telemetry
-collector, command lock, target IDs, timestamps and fault state. A heartbeat
+`simulation/px4_gazebo/config/three_uav_sitl.json` is the deployment fact
+source. Runtime converts that manifest directly into three enabled handles:
+UAV-01/02/03 use `14540/14541/14542`, respectively. The retained
+`config/vehicles.sitl.json` is generated compatibility data and has a drift
+validator; it is not an independently edited source. Each enabled node receives
+one shared `MavlinkBackendSession`, one RX owner, telemetry subscriber, command
+lock, target IDs, timestamps and fault state. A heartbeat
 timeout marks only that node `stale/offline`; it preserves the last pose. Only
 explicit `unregister_vehicle` removes an ID from a subsequent full snapshot.
 
-Command and telemetry receive sockets must not compete for one UDP listener.
-Configure `endpoint` for commands and `telemetry_endpoint` for the managed
-collector as independent PX4 outputs. Registry start/stop owns collectors; HTTP
-GET handlers only read cached state.
+Command and telemetry share one Registry-owned socket per node. The sole RX
+loop dispatches `COMMAND_ACK` to a command-scoped mailbox, local-position
+samples to an observation condition/cache, and tracked messages to the
+telemetry subscriber. The collector never creates or closes a connection.
+Same-node command/telemetry endpoint equality is required and legal;
+cross-node endpoint reuse is rejected. Registry start/stop owns the complete
+session lifecycle; HTTP GET handlers only read cached state.
 
 Legacy requests without `node_id` use a node only when `default_node_id` is
 explicitly configured. Responses identify `node_selection=default`. Without a
@@ -144,11 +149,11 @@ selection policy without changing the Runtime/Policy execution boundary.
 
 ## PX4/Gazebo owner handoff
 
-After receiving three endpoint/system mappings:
+For the fixed manifest mapping:
 
-1. Fill each `endpoint`, `telemetry_endpoint`, `system_id`, and set `enabled` in
-   `config/vehicles.sitl.json`; do not edit Python business logic.
-2. Start the HTTP Runtime and confirm three independent collectors/sessions.
+1. Validate `simulation/px4_gazebo/config/three_uav_sitl.json`; do not hand-edit
+   a second endpoint mapping.
+2. Start the HTTP Runtime and confirm three independent sessions/RX owners.
 3. Query `/api/vehicles` and each
    `/api/telemetry/latest?node_id=UAV-0N`.
 4. Validate `/api/vehicle-snapshot` against the frontend Vehicle Snapshot 1.0
@@ -173,17 +178,19 @@ telemetry messages from an active simulator.
 - HTTP execution identity comes from resolved `VehicleConfig`. The bridge only
   accepts `px4_sitl` / `sitl`, and finite altitude, threshold, timeout, retry and
   system-ID ranges are rejected before backend execution.
-- Command and telemetry receive endpoints have one owner across both roles.
+- Command and telemetry have one shared receive owner per node. Same-node
+  endpoint equality is allowed; cross-node collision is fail-closed.
 - Registry membership uses the registry lock; mutable telemetry, collector and
   action state use independent per-node locks; commands use per-node locks.
-- Scenario data is authoritative for initial pose, while runtime config owns
-  endpoint/system deployment mapping. They join strictly through `node_id`.
+- Scenario data is authoritative for initial pose, while the simulation
+  manifest owns endpoint/system deployment mapping. Runtime consumes both
+  through strict `node_id` binding.
 - Snapshot pose priority is fresh telemetry, last-known stale telemetry, then
   authoritative scenario initial pose. Offline nodes remain; unregister removes.
 - PX4 fleet connectivity is aggregated independently from Gazebo health, which
   remains `unknown` without a separate Gazebo probe.
-- Unit tests use fake sessions/probes. Real three-PX4 tests remain opt-in and
-  blocked until endpoints are supplied.
+- Unit tests use fake sessions/probes. Real three-PX4 Runtime tests remain
+  opt-in through `UAV_RUNTIME_PX4_MULTI_CONFIG`.
 - The authoritative frontend JSON Schema is read directly from
   `frontend/swarm-console/simulation-3d/public/contracts/vehicle-snapshot.schema.json`;
   no substitute schema is created or relaxed.

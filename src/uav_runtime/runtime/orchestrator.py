@@ -79,7 +79,7 @@ class RuntimeOrchestrator:
 
     def __init__(
         self,
-        audit_path: str = "audit/runtime.audit.jsonl",
+        audit_path: str | None = None,
         adapter_name: str = DEFAULT_ADAPTER_NAME,
         mavlink_backend_config: MavlinkBackendConfig | None = None,
         policy_profile_name: str | None = None,

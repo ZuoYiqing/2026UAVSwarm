@@ -10,8 +10,10 @@ from uav_runtime.http.routes import dispatch
 from uav_runtime.http.server import ALLOWED_ORIGINS
 
 
-def _set_audit_path(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(routes, "AUDIT_PATH", str(tmp_path / "missing_or_test.audit.jsonl"))
+def _set_audit_path(monkeypatch, tmp_path: Path) -> Path:  # type: ignore[no-untyped-def]
+    path = tmp_path / "missing_or_test.audit.jsonl"
+    monkeypatch.setattr(routes, "AUDIT_PATH", str(path))
+    return path
 
 
 def test_health_returns_ok() -> None:
@@ -24,7 +26,7 @@ def test_health_returns_ok() -> None:
 
 
 def test_backend_check_accepts_udpin_endpoint_and_preserves_it(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    _set_audit_path(monkeypatch, tmp_path)
+    audit_path = _set_audit_path(monkeypatch, tmp_path)
     monkeypatch.setattr(routes.Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: False))
 
     status, payload = dispatch(
@@ -43,6 +45,22 @@ def test_backend_check_accepts_udpin_endpoint_and_preserves_it(monkeypatch, tmp_
     assert payload["backend"] == "px4_sitl"
     assert payload["transport_endpoint"] == "udpin:127.0.0.1:14540"
     assert payload["backend_mode"] == "sitl"
+    assert payload["node_id"] == payload["resolved_node_id"] == "UAV-01"
+    assert payload["system_id"] == 1
+    assert payload["component_id"] == 1
+    probe_event = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert probe_event == {
+        "type": "backend_probe_result",
+        "timestamp": probe_event["timestamp"],
+        "backend": "px4_sitl",
+        "backend_mode": "sitl",
+        "endpoint": "udpin:127.0.0.1:14540",
+        "node_id": "UAV-01",
+        "system_id": 1,
+        "component_id": 1,
+        "readiness": "not_ready",
+        "connect_probe": probe_event["connect_probe"],
+    }
 
 
 def test_smoke_takeoff_non_sitl_is_rejected_after_policy_check(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

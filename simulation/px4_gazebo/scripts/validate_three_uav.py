@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,6 +35,8 @@ def _session(vehicle: dict[str, Any]) -> MavlinkBackendSession:
             backend_mode="sitl",
             backend_enabled=True,
             transport_endpoint=str(vehicle["command_endpoint"]),
+            target_system=int(vehicle["system_id"]),
+            target_component=int(vehicle.get("component_id", 1)),
             connect_timeout_ms=5000,
             command_timeout_ms=10000,
             observe_timeout_ms=25000,
@@ -54,6 +57,25 @@ def _observe_passive_state(
     armed: bool | None = None
     max_altitude_m = 0.0
     samples = 0
+    condition = threading.Condition()
+
+    def observe(message: Any) -> None:
+        nonlocal armed, max_altitude_m, samples
+        message_type = message.get_type()
+        with condition:
+            if message_type == "HEARTBEAT":
+                armed = bool(
+                    int(getattr(message, "base_mode", 0)) & armed_flag
+                )
+            elif message_type == "LOCAL_POSITION_NED":
+                samples += 1
+                max_altitude_m = max(
+                    max_altitude_m,
+                    max(0.0, -float(getattr(message, "z", 0.0))),
+                )
+            condition.notify_all()
+
+    token: int | None = None
     try:
         session.connect(timeout_s=min(timeout_s, 5.0))
         if session.target_system != int(vehicle["system_id"]):
@@ -62,29 +84,16 @@ def _observe_passive_state(
                 f"does not match expected {vehicle['system_id']}"
             )
         session.start_gcs_heartbeat()
+        armed_flag = session._mavlink_const("MAV_MODE_FLAG_SAFETY_ARMED", 128)
+        token = session.subscribe(observe)
         stream_ack = session.request_local_position_stream(
             rate_hz=10.0,
             timeout_s=2.0,
         )
         deadline = time.monotonic() + timeout_s
-        armed_flag = session._mavlink_const("MAV_MODE_FLAG_SAFETY_ARMED", 128)
-        while time.monotonic() < deadline:
-            message = session.connection.recv_match(
-                type=["HEARTBEAT", "LOCAL_POSITION_NED"],
-                blocking=True,
-                timeout=0.5,
-            )
-            if message is None:
-                continue
-            message_type = message.get_type()
-            if message_type == "HEARTBEAT":
-                armed = bool(int(getattr(message, "base_mode", 0)) & armed_flag)
-            elif message_type == "LOCAL_POSITION_NED":
-                samples += 1
-                max_altitude_m = max(
-                    max_altitude_m,
-                    max(0.0, -float(getattr(message, "z", 0.0))),
-                )
+        with condition:
+            while time.monotonic() < deadline:
+                condition.wait(timeout=min(0.5, deadline - time.monotonic()))
         return {
             "node_id": vehicle["node_id"],
             "system_id": session.target_system,
@@ -100,6 +109,8 @@ def _observe_passive_state(
             ),
         }
     finally:
+        if token is not None:
+            session.unsubscribe(token)
         session.close()
 
 
@@ -112,22 +123,25 @@ def _wait_for_landing(
     final_altitude_m: float | None = None
     low_samples = 0
     samples = 0
-    while time.monotonic() < deadline:
-        message = session.connection.recv_match(
-            type="LOCAL_POSITION_NED",
-            blocking=True,
-            timeout=0.5,
-        )
-        if message is None:
-            continue
-        samples += 1
-        final_altitude_m = max(0.0, -float(getattr(message, "z", 0.0)))
-        if final_altitude_m <= 0.3:
-            low_samples += 1
-            if low_samples >= 3:
-                break
-        else:
-            low_samples = 0
+    condition = threading.Condition()
+
+    def observe(message: Any) -> None:
+        nonlocal final_altitude_m, low_samples, samples
+        if message.get_type() != "LOCAL_POSITION_NED":
+            return
+        with condition:
+            samples += 1
+            final_altitude_m = max(0.0, -float(getattr(message, "z", 0.0)))
+            low_samples = low_samples + 1 if final_altitude_m <= 0.3 else 0
+            condition.notify_all()
+
+    token = session.subscribe(observe)
+    try:
+        with condition:
+            while time.monotonic() < deadline and low_samples < 3:
+                condition.wait(timeout=min(0.5, deadline - time.monotonic()))
+    finally:
+        session.unsubscribe(token)
     return {
         "observed": samples > 0,
         "sample_count": samples,
@@ -147,11 +161,13 @@ def _validate_active_vehicle(
     observe_timeout_s: float,
 ) -> dict[str, Any]:
     session = _session(active)
-    land_sent = False
     result: dict[str, Any] = {
         "node_id": active["node_id"],
         "expected_system_id": active["system_id"],
         "started_at": utc_now(),
+        "takeoff_observed": False,
+        "land_command_accepted": False,
+        "landed_observed": False,
     }
     try:
         session.connect(timeout_s=5.0)
@@ -183,6 +199,7 @@ def _validate_active_vehicle(
             raise HarnessError(
                 f"{active['node_id']} did not reach the altitude threshold"
             )
+        result["takeoff_observed"] = True
 
         with ThreadPoolExecutor(max_workers=len(passive)) as executor:
             futures = [
@@ -200,24 +217,33 @@ def _validate_active_vehicle(
             )
 
         result["land_ack"] = session.land(timeout_s=command_timeout_s)
-        land_sent = True
         if not _accepted(result["land_ack"]):
             raise HarnessError(f"{active['node_id']} LAND was not accepted")
+        result["land_command_accepted"] = True
         result["landing_observation"] = _wait_for_landing(
             session,
             timeout_s=observe_timeout_s,
         )
         if not result["landing_observation"]["landed"]:
             raise HarnessError(f"{active['node_id']} landing was not observed")
+        result["landed_observed"] = True
         result["status"] = "PASS"
         return result
     except Exception as exc:
         result["status"] = "FAIL"
         result["error"] = f"{type(exc).__name__}: {exc}"
-        if session.connected and not land_sent:
+        takeoff_accepted = _accepted(result.get("takeoff_ack", {}))
+        if session.connected and (result["takeoff_observed"] or takeoff_accepted) and not result["landed_observed"]:
             try:
                 result["recovery_land_ack"] = session.land(
                     timeout_s=command_timeout_s
+                )
+                result["recovery_landing_observation"] = _wait_for_landing(
+                    session,
+                    timeout_s=observe_timeout_s,
+                )
+                result["landed_observed"] = bool(
+                    result["recovery_landing_observation"]["landed"]
                 )
             except Exception as recovery_exc:
                 result["recovery_error"] = (

@@ -1,4 +1,5 @@
 {
+  "generated_from": "simulation/px4_gazebo/config/three_uav_sitl.json",
   "scene_id": "simple_recon_v0_1",
   "default_node_id": "UAV-01",
   "vehicles": [
@@ -7,36 +8,36 @@
       "backend": "px4_sitl",
       "backend_mode": "sitl",
       "endpoint": "udpin:127.0.0.1:14540",
-      "telemetry_endpoint": "udpin:127.0.0.1:14030",
+      "telemetry_endpoint": "udpin:127.0.0.1:14540",
       "system_id": 1,
       "component_id": 1,
       "enabled": true,
       "scene_id": "simple_recon_v0_1",
-      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "validated_single_vehicle"}
+      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "generated_from_simulation_manifest"}
     },
     {
       "node_id": "UAV-02",
       "backend": "px4_sitl",
       "backend_mode": "sitl",
-      "endpoint": "",
-      "telemetry_endpoint": "",
+      "endpoint": "udpin:127.0.0.1:14541",
+      "telemetry_endpoint": "udpin:127.0.0.1:14541",
       "system_id": 2,
       "component_id": 1,
-      "enabled": false,
+      "enabled": true,
       "scene_id": "simple_recon_v0_1",
-      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "waiting_for_px4_endpoint"}
+      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "generated_from_simulation_manifest"}
     },
     {
       "node_id": "UAV-03",
       "backend": "px4_sitl",
       "backend_mode": "sitl",
-      "endpoint": "",
-      "telemetry_endpoint": "",
+      "endpoint": "udpin:127.0.0.1:14542",
+      "telemetry_endpoint": "udpin:127.0.0.1:14542",
       "system_id": 3,
       "component_id": 1,
-      "enabled": false,
+      "enabled": true,
       "scene_id": "simple_recon_v0_1",
-      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "waiting_for_px4_endpoint"}
+      "metadata": {"model": "x500", "vehicle_type": "multirotor", "configuration_status": "generated_from_simulation_manifest"}
     }
   ]
 }

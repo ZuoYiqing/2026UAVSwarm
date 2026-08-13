@@ -61,7 +61,7 @@ def _int(value: Any, default: int, *, field: str, minimum: int, maximum: int) ->
         raise RequestValidationError("invalid_parameter", field, f"{field} must be an integer", value=value)
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise RequestValidationError("invalid_parameter", field, f"{field} must be an integer", value=value)
     if not minimum <= parsed <= maximum:
         raise RequestValidationError("invalid_parameter", field, f"{field} must be within [{minimum}, {maximum}]", value=value)
@@ -86,6 +86,7 @@ def _float(value: Any, default: float, *, field: str, minimum_exclusive: float, 
 class BackendRequest:
     node_id: str | None = None
     system_id: int | None = None
+    component_id: int | None = None
     backend: str = "px4_sitl"
     backend_mode: str = "sitl"
     backend_enabled: bool = False
@@ -111,6 +112,11 @@ class BackendRequest:
                 if payload.get("system_id") is None
                 else _int(payload.get("system_id"), 1, field="system_id", minimum=1, maximum=255)
             ),
+            component_id=(
+                None
+                if payload.get("component_id") is None
+                else _int(payload.get("component_id"), 1, field="component_id", minimum=1, maximum=255)
+            ),
             backend=backend,
             backend_mode=backend_mode,
             backend_enabled=_bool(payload.get("backend_enabled"), False, field="backend_enabled"),
@@ -130,6 +136,7 @@ class BackendRequest:
             backend_enabled=self.backend_enabled,
             transport_endpoint=self.transport_endpoint,
             target_system=self.system_id,
+            target_component=self.component_id,
             connect_timeout_ms=self.connect_timeout_ms,
             command_timeout_ms=self.command_timeout_ms,
             observe_timeout_ms=self.observe_timeout_ms,

@@ -18,6 +18,7 @@ from typing import Any, Callable
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.px4_telemetry import Px4TelemetrySnapshot, new_snapshot, snapshot_to_dict
+from uav_runtime.scenario.scene_schema import SceneValidationError, load_and_validate_scene
 
 
 def _utc_now() -> str:
@@ -99,6 +100,7 @@ class VehicleHandle:
     state_lock: threading.RLock = field(default_factory=threading.RLock)
     collector: Any = None
     telemetry_received_at: float | None = None
+    start_in_progress: bool = False
 
 
 class VehicleRegistry:
@@ -129,13 +131,56 @@ class VehicleRegistry:
     def from_json(cls, path: str | Path, **kwargs: Any) -> "VehicleRegistry":
         config_path = Path(path)
         data = json.loads(config_path.read_text(encoding="utf-8"))
+        if any("command_endpoint" in row for row in data.get("vehicles", [])):
+            # The simulation manifest is the deployment source of truth.  Convert
+            # its transport binding in memory instead of maintaining a second
+            # hand-authored Runtime mapping.
+            data = {
+                "scene_id": data.get("scene_id"),
+                "scene_path": data.get("scene_path"),
+                "default_node_id": data.get("default_node_id", "UAV-01"),
+                "vehicles": [
+                    {
+                        "node_id": row["node_id"],
+                        "backend": "px4_sitl",
+                        "backend_mode": "sitl",
+                        "endpoint": row["command_endpoint"],
+                        "telemetry_endpoint": row["telemetry_endpoint"],
+                        "system_id": int(row["system_id"]),
+                        "component_id": int(row.get("component_id", 1)),
+                        "enabled": bool(row.get("enabled", True)),
+                        "scene_id": data.get("scene_id", ""),
+                        "metadata": {
+                            "px4_instance": int(row["px4_instance"]),
+                            "gazebo_model_name": row["gazebo_model_name"],
+                            "runtime_dir": row["runtime_dir"],
+                            "deployment_source": str(config_path),
+                        },
+                    }
+                    for row in data.get("vehicles", [])
+                ],
+            }
         scene_id = str(data.get("scene_id") or "")
         scene_poses: dict[str, dict[str, Any]] = {}
         if scene_id:
-            scene_path = config_path.resolve().parents[1] / "scenarios" / scene_id / "scene.json"
+            if data.get("scene_path"):
+                repo_root = next(
+                    (parent for parent in config_path.resolve().parents if (parent / "pyproject.toml").exists()),
+                    config_path.resolve().parent,
+                )
+                scene_path = repo_root / str(data["scene_path"])
+            else:
+                scene_path = config_path.resolve().parents[1] / "scenarios" / scene_id / "scene.json"
             if not scene_path.exists():
                 raise VehicleRegistryError("authoritative_scene_not_found", status=409, details={"scene_id": scene_id, "scene_path": str(scene_path)})
-            scene = json.loads(scene_path.read_text(encoding="utf-8"))
+            try:
+                scene, _ = load_and_validate_scene(scene_path)
+            except SceneValidationError as exc:
+                raise VehicleRegistryError(
+                    "authoritative_scene_invalid",
+                    status=409,
+                    details={"scene_id": scene_id, "reason": str(exc)},
+                ) from exc
             scene_rows = list(scene.get("vehicles") or [])
             scene_ids = [str(row.get("node_id") or "") for row in scene_rows]
             if len(scene_ids) != len(set(scene_ids)):
@@ -167,13 +212,25 @@ class VehicleRegistry:
     def register_vehicle(self, config: VehicleConfig) -> VehicleHandle:
         if not config.node_id:
             raise VehicleRegistryError("node_id_required")
+        self._validate_mavlink_id(config.system_id, field="system_id", node_id=config.node_id)
+        self._validate_mavlink_id(config.component_id, field="component_id", node_id=config.node_id, allow_none=True)
+        if config.telemetry_endpoint and config.telemetry_endpoint != config.endpoint:
+            raise VehicleRegistryError(
+                "shared_transport_endpoint_mismatch",
+                node_id=config.node_id,
+                status=409,
+                details={
+                    "command_endpoint": config.endpoint,
+                    "telemetry_endpoint": config.telemetry_endpoint,
+                },
+            )
         with self._lock:
             if config.node_id in self._vehicles:
                 raise VehicleRegistryError("duplicate_node_id", node_id=config.node_id, status=409)
             if any(handle.config.system_id == config.system_id for handle in self._vehicles.values()):
                 raise VehicleRegistryError("duplicate_system_id", node_id=config.node_id, status=409)
-            # Command and telemetry endpoints are both UDP receive listeners in
-            # the current dual-session model, so ownership is unique across roles.
+            # One node may name the same endpoint for both roles because its
+            # shared session owns one socket.  No endpoint may belong to two nodes.
             owners = {
                 endpoint: (handle.config.node_id, role)
                 for handle in self._vehicles.values()
@@ -185,13 +242,13 @@ class VehicleRegistry:
                 if not endpoint:
                     continue
                 existing = owners.get(endpoint)
-                if existing or endpoint in requested:
-                    conflicting_node, existing_role = existing or (config.node_id, requested[endpoint])
+                if existing:
+                    conflicting_node, existing_role = existing
                     raise VehicleRegistryError("endpoint_role_conflict", node_id=config.node_id, status=409, details={
                         "endpoint": endpoint, "conflicting_node_id": conflicting_node,
                         "requested_role": role, "existing_role": existing_role,
                     })
-                requested[endpoint] = role
+                requested.setdefault(endpoint, role)
             session = self._session_factory(config.to_mavlink_config())
             endpoint = config.telemetry_endpoint or config.endpoint
             handle = VehicleHandle(
@@ -232,6 +289,7 @@ class VehicleRegistry:
         *,
         requested_endpoint: str | None = None,
         requested_system_id: int | None = None,
+        requested_component_id: int | None = None,
         require_online: bool = False,
     ) -> tuple[VehicleHandle, str]:
         selection = "explicit"
@@ -246,6 +304,8 @@ class VehicleRegistry:
             raise VehicleRegistryError("node_endpoint_conflict", node_id=resolved, status=409)
         if requested_system_id is not None and requested_system_id != handle.config.system_id:
             raise VehicleRegistryError("node_system_id_conflict", node_id=resolved, status=409)
+        if requested_component_id is not None and requested_component_id != handle.config.component_id:
+            raise VehicleRegistryError("node_component_id_conflict", node_id=resolved, status=409)
         if not handle.config.enabled:
             raise VehicleRegistryError("node_disabled", node_id=resolved, status=409)
         if handle.config.backend != "px4_sitl":
@@ -263,28 +323,50 @@ class VehicleRegistry:
         handle = self.get_vehicle(node_id)
         if not handle.config.enabled:
             return
-        telemetry_endpoint = handle.config.telemetry_endpoint
-        if not telemetry_endpoint:
-            with handle.state_lock:
-                handle.runtime_state.last_error = "telemetry_endpoint_not_configured"
+        endpoint = handle.config.endpoint
+        if not endpoint:
+            self.mark_offline(node_id, reason="transport_endpoint_not_configured")
             return
         from uav_runtime.adapters.px4_telemetry_collector import Px4TelemetryCollector
 
         with handle.state_lock:
-            if handle.collector is not None and handle.collector.is_running():
+            if handle.start_in_progress or handle.collector is not None:
                 return
-            collector = Px4TelemetryCollector(
-                self,
-                node_id=node_id,
-                endpoint=telemetry_endpoint,
-                expected_system_id=handle.config.system_id,
-                expected_component_id=handle.config.component_id,
-            )
-            handle.collector = collector
-            # Construction and start are part of the same per-node transition so
-            # concurrent callers cannot allocate duplicate transport resources.
-            # The RLock still allows same-thread collector callbacks to re-enter.
-            collector.start()
+            handle.start_in_progress = True
+            handle.runtime_state.connection_status = "connecting"
+            handle.runtime_state.last_error = None
+            try:
+                with handle.command_lock:
+                    handle.session.connect(
+                        timeout_s=max(handle.config.connect_timeout_ms / 1000.0, 0.1)
+                    )
+                collector = Px4TelemetryCollector(
+                    self,
+                    session=handle.session,
+                    node_id=node_id,
+                    endpoint=endpoint,
+                )
+                handle.collector = collector
+                collector.start()
+                heartbeat_at = _utc_now()
+                handle.telemetry.connected = True
+                handle.telemetry.system_id = handle.session.target_system
+                handle.telemetry.component_id = handle.session.target_component
+                handle.telemetry.timestamp = heartbeat_at
+                handle.telemetry_received_at = self._clock()
+                handle.runtime_state.connected = True
+                handle.runtime_state.stale = False
+                handle.runtime_state.connection_status = "connected"
+                handle.runtime_state.last_heartbeat_at = heartbeat_at
+            except Exception as exc:
+                handle.collector = None
+                handle.session.close()
+                handle.runtime_state.connected = False
+                handle.runtime_state.stale = True
+                handle.runtime_state.connection_status = "offline"
+                handle.runtime_state.last_error = f"vehicle_start_failed:{type(exc).__name__}:{exc}"
+            finally:
+                handle.start_in_progress = False
 
     def stop_vehicle(self, node_id: str) -> None:
         self._stop_handle(self.get_vehicle(node_id))
@@ -305,7 +387,11 @@ class VehicleRegistry:
             handle.collector = None
         if collector is not None:
             collector.stop()
-        handle.session.close()
+        # Closing the command transport is part of the selected node's command
+        # sequence. It must not race an ACK wait, but it also must not block any
+        # unrelated vehicle because each handle owns an independent lock.
+        with handle.command_lock:
+            handle.session.close()
         with handle.state_lock:
             handle.runtime_state.connected = False
             handle.runtime_state.stale = True
@@ -434,4 +520,23 @@ class VehicleRegistry:
     def telemetry_dict(self, node_id: str) -> dict[str, Any]:
         handle = self.get_vehicle(node_id)
         self.refresh_state(handle)
-        return snapshot_to_dict(handle.telemetry)
+        with handle.state_lock:
+            return snapshot_to_dict(handle.telemetry)
+
+    @staticmethod
+    def _validate_mavlink_id(
+        value: int | None,
+        *,
+        field: str,
+        node_id: str,
+        allow_none: bool = False,
+    ) -> None:
+        """Reject broadcast/out-of-range values for a concrete Registry node."""
+        if allow_none and value is None:
+            return
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 255:
+            raise VehicleRegistryError(
+                f"invalid_{field}",
+                node_id=node_id,
+                details={"field": field, "minimum": 1, "maximum": 255},
+            )

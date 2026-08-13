@@ -1,5 +1,21 @@
 # PX4 / Gazebo 三机验证记录
 
+## 2026-08-11 Runtime transport hardening note
+
+The PASS evidence below is the historical PX4/Gazebo harness run. It does not
+claim that the new shared-session Runtime transport was run against live PX4.
+
+- shared-session, ACK dispatcher, telemetry, identity, endpoint, PID reuse,
+  scene-frame, landing-cleanup, and audit-isolation paths: unit tested;
+- authoritative manifest/config validation: passed without opening UDP;
+- current machine WSL/PX4/Gazebo harness: unavailable (no installed WSL distro);
+- real three-PX4 Runtime connection/action/snapshot run: pending.
+
+Future live evidence must separately record harness health, Runtime connection
+state for all three nodes, UAV-02 action isolation, observed landing, safe stop,
+and exact PX4/Gazebo versions. A cleanup LAND exception is evidence but must not
+replace the original validation failure.
+
 ## 1. 结论
 
 状态：**PASS（SITL_ONLY）**

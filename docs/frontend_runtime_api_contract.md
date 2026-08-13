@@ -38,11 +38,11 @@ GET http://127.0.0.1:8765/api/health
 | 前端能力 | HTTP API |
 | --- | --- |
 | Runtime API Base URL | `http://127.0.0.1:8765/api` |
-| LIVE API / MOCK FALLBACK | 前端根据 `/api/health` 是否成功决定 |
+| Runtime API availability | `GET /api/health`; a failed health check is reported as Runtime unavailable |
 | Check Backend | `POST /api/backend/check` |
 | Smoke Takeoff | `POST /api/actions/smoke-takeoff` |
 | Land | `POST /api/actions/land` |
-| Telemetry 显示 | v0.1 暂不提供 websocket telemetry，可显示 action_result / replay |
+| Telemetry 显示 | `GET /api/telemetry/latest` and `GET /api/vehicle-snapshot` are implemented polling APIs |
 | Action Result JSON | action route response |
 | 最近动作记录 | `GET /api/replay?n=20` |
 | Capability 列表 | `GET /api/capabilities` |
@@ -92,7 +92,7 @@ GET /api/replay?n=20
 ## 8. Read-only console APIs added in v0.1
 
 The backend now exposes a small set of read-only console APIs so the frontend can
-replace mock data for Skills, Policy, Audit/Replay, and Recent Actions without
+consume Runtime-owned Skills, Policy, Audit/Replay, and Recent Actions without
 triggering PX4 or adapter execution.
 
 | 前端页面 | HTTP API | 数据来源 | 说明 |
@@ -134,17 +134,17 @@ Gazebo Transport, or DDS connections in the browser:
 
 | Route | Source | Offline behavior |
 | --- | --- | --- |
-| `GET /api/telemetry/latest` | managed PX4 telemetry cache on the dedicated runtime receive endpoint | `status: unavailable`, `nodes: []` |
+| `GET /api/telemetry/latest` | per-node telemetry cache owned by the Runtime vehicle registry | registered nodes remain present and are marked stale/unavailable |
 | `GET /api/snapshot` | thread-safe runtime state composition | stable object with null/empty unsupported fields |
-| `GET /api/vehicle-snapshot` | cached telemetry projected to the Cesium vehicle contract | `full_state: true`, `vehicles: []` |
+| `GET /api/vehicle-snapshot` | cached telemetry projected to the Cesium vehicle contract | `full_state: true`; registered stale vehicles remain until explicitly unregistered |
 | `GET /api/agent/status` | directly stored Template Planner/lifecycle state | `latest_plan: null`, no fabricated metrics |
 | `GET /api/simulation/status` | independent Gazebo evidence only | `status: unknown`, `evidence: []` |
 
 PX4 heartbeat proves PX4/MAVLink reachability, not Gazebo health. Until Runtime
 owns a Gazebo clock/world/model probe, simulation status remains unknown. The
-telemetry collector defaults to `udpin:127.0.0.1:14030`; command smoke actions
-retain `udpin:127.0.0.1:14540` to avoid two independent receivers competing for
-one UDP listen port.
+Registry defaults to the manifest endpoints `14540/14541/14542`. Each node has
+one shared MAVLink session/RX owner; command ACK and telemetry are dispatched
+inside Runtime instead of using competing receivers.
 
 ## 12. Multi-Vehicle Runtime v0.1.1 Hardening
 

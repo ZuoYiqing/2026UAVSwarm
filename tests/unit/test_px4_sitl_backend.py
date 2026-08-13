@@ -1,6 +1,9 @@
 """PX4 SITL backend placeholder tests (no real PX4/MAVLink dependency)."""
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from uav_runtime.adapters.mavlink_backend import MavlinkBackend
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
@@ -155,6 +158,45 @@ def test_px4_sitl_backend_probe_success_returns_backend_connected(monkeypatch) -
     assert diag["connect_probe"]["code"] == "backend_connected"
     assert diag["readiness"] == "ready"
 
+
+def test_temporary_probe_validates_identity_and_always_closes(monkeypatch) -> None:
+    class Heartbeat:
+        def get_srcSystem(self) -> int: return 2
+        def get_srcComponent(self) -> int: return 1
+
+    class Connection:
+        target_system = 2
+        target_component = 1
+        closed = False
+        def wait_heartbeat(self, *, timeout: float): return Heartbeat()
+        def close(self) -> None: self.closed = True
+
+    connection = Connection()
+    fake_mavutil = SimpleNamespace(
+        mavlink_connection=lambda *args, **kwargs: connection
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pymavlink",
+        SimpleNamespace(mavutil=fake_mavutil),
+    )
+    cfg = MavlinkBackendConfig(
+        backend_mode="sitl",
+        backend_enabled=True,
+        transport_endpoint="udpin:127.0.0.1:14540",
+        target_system=1,
+        target_component=1,
+    )
+    backend = Px4SitlBackend(cfg, MavlinkBackendSession.from_config(cfg))
+
+    ok, reason, details = backend._probe_via_pymavlink()
+
+    assert ok is False
+    assert reason == "target_system_mismatch"
+    assert details["expected_system_id"] == 1
+    assert details["observed_system_id"] == 2
+    assert connection.closed is True
+
 class _FakePx4ActionSession:
     def __init__(self) -> None:
         self.stopped = False
@@ -178,12 +220,13 @@ class _FakePx4ActionSession:
         return {"command": 400, "command_name": "MAV_CMD_COMPONENT_ARM_DISARM", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
 
     def takeoff(self, *, altitude_m: float, timeout_s: float) -> dict:
-        return {"command": 22, "command_name": "MAV_CMD_NAV_TAKEOFF", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+        return {"command": 22, "command_name": "MAV_CMD_NAV_TAKEOFF", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False, "local_position_cursor": 17}
 
     def land(self, *, timeout_s: float) -> dict:
         return {"command": 21, "command_name": "MAV_CMD_NAV_LAND", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
 
-    def observe_local_position_altitude(self, *, timeout_s: float, threshold_altitude_m: float | None = None) -> dict:
+    def observe_local_position_altitude(self, *, timeout_s: float, threshold_altitude_m: float | None = None, after_sequence: int | None = None) -> dict:
+        assert after_sequence == 17
         return {"observed": True, "samples": 3, "sample_count": 3, "first_z": 0.0, "last_z": -2.13, "min_z": -2.13, "max_z": 0.0, "max_altitude_m": 2.13, "threshold_altitude_m": threshold_altitude_m, "threshold_reached": True}
 
 

@@ -33,6 +33,14 @@ def test_scene_has_at_least_one_vehicle() -> None:
     assert summary.validation_result == "pass"
 
 
+def test_local_enu_scene_is_rejected_fail_closed() -> None:
+    scene = _valid_scene()
+    scene["frame"] = "local_enu"
+
+    with pytest.raises(SceneValidationError, match="frame must be local_ned"):
+        validate_scene(scene)  # type: ignore[arg-type]
+
+
 def test_node_ids_are_unique() -> None:
     scene = _valid_scene()
     duplicate = copy.deepcopy(scene["vehicles"][0])  # type: ignore[index]

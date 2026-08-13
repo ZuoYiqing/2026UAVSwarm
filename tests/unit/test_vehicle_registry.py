@@ -14,9 +14,18 @@ class FakeSession:
     def __init__(self, config: object) -> None:
         self.config = config
         self.closed = 0
+        self.connected = False
+        self.target_system = config.target_system
+        self.target_component = config.target_component
+
+    def connect(self, *, timeout_s: float) -> object:
+        del timeout_s
+        self.connected = True
+        return object()
 
     def close(self) -> None:
         self.closed += 1
+        self.connected = False
 
 
 class FakeMessage:
@@ -61,23 +70,65 @@ def test_duplicate_system_id_is_rejected() -> None:
         reg.register_vehicle(VehicleConfig(node_id="UAV-02", endpoint="udp:2", system_id=1))
 
 
-@pytest.mark.parametrize(("first", "second"), [
-    (("udp:1", "udp:101"), ("udp:1", "udp:102")),
-    (("udp:1", "udp:101"), ("udp:2", "udp:101")),
-    (("udp:1", "udp:101"), ("udp:2", "udp:1")),
-])
-def test_receive_endpoint_ownership_is_cross_role_unique(first: tuple[str, str], second: tuple[str, str]) -> None:
-    reg = registry()
-    reg.register_vehicle(VehicleConfig(node_id="UAV-01", endpoint=first[0], telemetry_endpoint=first[1], system_id=1))
+@pytest.mark.parametrize("system_id", [0, 256, None, True, 1.0])
+def test_concrete_vehicle_system_id_must_be_integer_1_through_255(system_id: object) -> None:
     with pytest.raises(VehicleRegistryError) as caught:
-        reg.register_vehicle(VehicleConfig(node_id="UAV-02", endpoint=second[0], telemetry_endpoint=second[1], system_id=2))
+        registry().register_vehicle(VehicleConfig(node_id="UAV-01", endpoint="udp:1", system_id=system_id))  # type: ignore[arg-type]
+    assert caught.value.code == "invalid_system_id"
+
+
+@pytest.mark.parametrize("system_id", [1, 255])
+def test_concrete_vehicle_system_id_boundaries_are_valid(system_id: int) -> None:
+    handle = registry().register_vehicle(VehicleConfig(node_id="UAV-01", endpoint="udp:1", system_id=system_id))
+    assert handle.session.config.target_system == system_id
+
+
+@pytest.mark.parametrize("component_id", [0, 256, True, 1.0])
+def test_explicit_component_id_must_be_integer_1_through_255(component_id: object) -> None:
+    with pytest.raises(VehicleRegistryError) as caught:
+        registry().register_vehicle(VehicleConfig(
+            node_id="UAV-01", endpoint="udp:1", system_id=1, component_id=component_id,  # type: ignore[arg-type]
+        ))
+    assert caught.value.code == "invalid_component_id"
+
+
+@pytest.mark.parametrize("component_id", [None, 1, 255])
+def test_component_id_none_and_boundaries_preserve_mapping(component_id: int | None) -> None:
+    handle = registry().register_vehicle(VehicleConfig(
+        node_id="UAV-01", endpoint="udp:1", system_id=1, component_id=component_id,
+    ))
+    assert handle.session.config.target_component == component_id
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    ("udp:1", "udp:1"),
+    ("udp:101", "udp:101"),
+])
+def test_receive_endpoint_ownership_is_cross_node_unique(first: str, second: str) -> None:
+    reg = registry()
+    reg.register_vehicle(VehicleConfig(node_id="UAV-01", endpoint=first, telemetry_endpoint=first, system_id=1))
+    with pytest.raises(VehicleRegistryError) as caught:
+        reg.register_vehicle(VehicleConfig(node_id="UAV-02", endpoint=second, telemetry_endpoint=second, system_id=2))
     assert caught.value.code == "endpoint_role_conflict"
     assert {"endpoint", "conflicting_node_id", "requested_role", "existing_role"} <= caught.value.details.keys()
 
 
-def test_same_node_command_and_telemetry_endpoint_conflict() -> None:
-    with pytest.raises(VehicleRegistryError, match="endpoint_role_conflict"):
-        registry().register_vehicle(VehicleConfig(node_id="UAV-01", endpoint="udp:1", telemetry_endpoint="udp:1", system_id=1))
+def test_same_node_command_and_telemetry_endpoint_share_one_session() -> None:
+    handle = registry().register_vehicle(
+        VehicleConfig(
+            node_id="UAV-01", endpoint="udp:1", telemetry_endpoint="udp:1", system_id=1
+        )
+    )
+    assert handle.config.endpoint == handle.config.telemetry_endpoint
+
+
+def test_unverified_dual_endpoint_configuration_is_rejected() -> None:
+    with pytest.raises(VehicleRegistryError, match="shared_transport_endpoint_mismatch"):
+        registry().register_vehicle(
+            VehicleConfig(
+                node_id="UAV-01", endpoint="udp:1", telemetry_endpoint="udp:101", system_id=1
+            )
+        )
 
 
 def test_per_node_locks_are_independent() -> None:
@@ -125,8 +176,50 @@ def test_shipped_config_registers_three_identity_mappings_without_guessed_ports(
     assert [(h.config.node_id, h.config.system_id) for h in reg.list_vehicles()] == [
         ("UAV-01", 1), ("UAV-02", 2), ("UAV-03", 3)
     ]
-    assert reg.get_vehicle("UAV-02").config.enabled is False
+    assert [h.config.endpoint for h in reg.list_vehicles()] == [
+        "udpin:127.0.0.1:14540",
+        "udpin:127.0.0.1:14541",
+        "udpin:127.0.0.1:14542",
+    ]
+    assert reg.get_vehicle("UAV-02").config.enabled is True
     assert reg.get_vehicle("UAV-02").config.metadata["initial_pose"]["y_m"] == 8
+
+
+def test_registry_reads_authoritative_simulation_manifest_directly() -> None:
+    reg = VehicleRegistry.from_json(
+        Path("simulation/px4_gazebo/config/three_uav_sitl.json"),
+        session_factory=FakeSession,
+    )
+
+    assert reg.default_node_id == "UAV-01"
+    assert [handle.config.endpoint for handle in reg.list_vehicles()] == [
+        "udpin:127.0.0.1:14540",
+        "udpin:127.0.0.1:14541",
+        "udpin:127.0.0.1:14542",
+    ]
+    assert all(
+        handle.config.endpoint == handle.config.telemetry_endpoint
+        for handle in reg.list_vehicles()
+    )
+
+
+def test_registry_rejects_invalid_authoritative_scene_before_registration(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    config_dir = root / "config"
+    scene_dir = root / "scenarios" / "simple_recon_v0_1"
+    config_dir.mkdir(parents=True)
+    scene_dir.mkdir(parents=True)
+    config = json.loads(Path("config/vehicles.sitl.json").read_text(encoding="utf-8"))
+    scene = json.loads(Path("scenarios/simple_recon_v0_1/scene.json").read_text(encoding="utf-8"))
+    scene["vehicles"][0]["initial_pose"]["x_m"] = float("nan")
+    config_path = config_dir / "vehicles.sitl.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    (scene_dir / "scene.json").write_text(json.dumps(scene), encoding="utf-8")
+
+    with pytest.raises(VehicleRegistryError) as caught:
+        VehicleRegistry.from_json(config_path, session_factory=FakeSession)
+    assert caught.value.code == "authoritative_scene_invalid"
+    assert "must be finite" in caught.value.details["reason"]
 
 
 def test_registry_binds_collector_to_expected_mavlink_identity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,13 +235,13 @@ def test_registry_binds_collector_to_expected_mavlink_identity(monkeypatch: pyte
     monkeypatch.setattr("uav_runtime.adapters.px4_telemetry_collector.Px4TelemetryCollector", FakeCollector)
     reg = registry()
     reg.register_vehicle(VehicleConfig(
-        node_id="UAV-02", endpoint="udp:2", telemetry_endpoint="udp:102",
+        node_id="UAV-02", endpoint="udp:2", telemetry_endpoint="udp:2",
         system_id=2, component_id=7,
     ))
     reg.start_vehicle("UAV-02")
     assert captured == {
-        "node_id": "UAV-02", "endpoint": "udp:102",
-        "expected_system_id": 2, "expected_component_id": 7,
+        "node_id": "UAV-02", "endpoint": "udp:2",
+        "session": reg.get_vehicle("UAV-02").session,
     }
 
 
@@ -188,7 +281,7 @@ def test_concurrent_start_creates_only_one_running_collector(
         VehicleConfig(
             node_id="UAV-01",
             endpoint="udp:1",
-            telemetry_endpoint="udp:101",
+            telemetry_endpoint="udp:1",
             system_id=1,
         )
     )
@@ -209,3 +302,25 @@ def test_concurrent_start_creates_only_one_running_collector(
     assert len(instances) == 1
     assert len(starts) == 1
     assert reg.get_vehicle("UAV-01").collector is starts[0]
+
+
+def test_stop_waits_only_for_selected_node_command_lock() -> None:
+    reg = registry()
+    first, second = [reg.register_vehicle(config) for config in configs()[:2]]
+    second.command_lock.acquire()
+    blocked = threading.Thread(target=reg.stop_vehicle, args=("UAV-02",))
+    unrelated = threading.Thread(target=reg.stop_vehicle, args=("UAV-01",))
+    try:
+        blocked.start()
+        unrelated.start()
+        unrelated.join(timeout=1)
+        assert not unrelated.is_alive()
+        assert blocked.is_alive()
+        assert first.session.closed == 1
+        assert second.session.closed == 0
+    finally:
+        second.command_lock.release()
+        blocked.join(timeout=1)
+        unrelated.join(timeout=1)
+    assert not blocked.is_alive()
+    assert second.session.closed == 1

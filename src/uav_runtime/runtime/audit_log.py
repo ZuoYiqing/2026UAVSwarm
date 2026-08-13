@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 
 class AuditLog:
-    def __init__(self, path: str = "audit/runtime.audit.jsonl") -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        resolved = path or os.environ.get(
+            "UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl"
+        )
+        self.path = Path(resolved)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, event: dict[str, Any]) -> None:

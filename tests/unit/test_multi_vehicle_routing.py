@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 import uav_runtime.http.routes as routes
 from uav_runtime.http.schemas import BackendRequest, SmokeTakeoffRequest
 from uav_runtime.http.state_store import RuntimeStateStore
@@ -131,6 +133,76 @@ def test_px4_adapter_exception_cleans_only_selected_node(monkeypatch: Any, tmp_p
     assert "private backend detail" not in audit
 
 
+def _install_exploding_gateway(monkeypatch: Any) -> None:
+    original = routes._policy_checked_sitl_action
+
+    class ExplodingGateway:
+        def register(self, adapter: object) -> None:
+            del adapter
+
+        def execute(self, adapter_name: str, action_request: object) -> dict[str, Any]:
+            del adapter_name, action_request
+            raise RuntimeError("gateway exploded")
+
+    def policy_with_exploding_gateway(*args: Any, **kwargs: Any):
+        decision_code, policy_event, runtime, action_request = original(*args, **kwargs)
+        runtime.gateway = ExplodingGateway()  # type: ignore[assignment]
+        return decision_code, policy_event, runtime, action_request
+
+    monkeypatch.setattr(routes, "_policy_checked_sitl_action", policy_with_exploding_gateway)
+
+
+def _assert_failed_action_keeps_identity(store: RuntimeStateStore, *, action: str) -> None:
+    assert store.runtime_snapshot()["active_actions"] == []
+    failed = store._actions[-1]
+    assert failed["action_id"].startswith("act_")
+    assert failed["action"] == action
+    assert failed["status"] == "failed"
+    assert failed["result"] == "fail"
+    assert failed["accepted"] is False
+    assert failed["failure_reason"] == "adapter_execution_exception"
+    assert failed["code"] == "adapter_execution_exception"
+    assert failed["node_id"] == failed["resolved_node_id"] == "UAV-02"
+    assert failed["system_id"] == 2
+    assert failed["component_id"] == 1
+
+
+def test_takeoff_gateway_exception_finishes_runtime_action_and_reraises(monkeypatch: Any, tmp_path: Any) -> None:
+    reg = install_registry(monkeypatch)
+    store = routes.RUNTIME_STATE_STORE
+    monkeypatch.setattr(routes, "AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    _install_exploding_gateway(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="gateway exploded"):
+        routes.smoke_takeoff({
+            "node_id": "UAV-02",
+            "backend_enabled": True,
+            "transport_endpoint": "udp:2",
+        })
+
+    _assert_failed_action_keeps_identity(store, action="takeoff")
+    assert reg.get_vehicle("UAV-02").runtime_state.active_action is None
+    assert reg.get_vehicle("UAV-02").runtime_state.last_error == "adapter_execution_exception"
+
+
+def test_land_gateway_exception_finishes_runtime_action_and_reraises(monkeypatch: Any, tmp_path: Any) -> None:
+    reg = install_registry(monkeypatch)
+    store = routes.RUNTIME_STATE_STORE
+    monkeypatch.setattr(routes, "AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    _install_exploding_gateway(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="gateway exploded"):
+        routes.land({
+            "node_id": "UAV-02",
+            "backend_enabled": True,
+            "transport_endpoint": "udp:2",
+        })
+
+    _assert_failed_action_keeps_identity(store, action="land")
+    assert reg.get_vehicle("UAV-02").runtime_state.active_action is None
+    assert reg.get_vehicle("UAV-02").runtime_state.last_error == "adapter_execution_exception"
+
+
 def test_http_rejects_backend_spoofing_and_invalid_parameters(monkeypatch: Any) -> None:
     install_registry(monkeypatch, default="UAV-01")
     cases = [
@@ -148,9 +220,16 @@ def test_http_rejects_backend_spoofing_and_invalid_parameters(monkeypatch: Any) 
         ({"threshold_ratio": float("nan")}, "invalid_parameter"),
         ({"system_id": 0}, "invalid_parameter"),
         ({"system_id": 256}, "invalid_parameter"),
+        ({"component_id": 0}, "invalid_parameter"),
+        ({"component_id": 256}, "invalid_parameter"),
         ({"backend_enabled": "sometimes"}, "invalid_parameter"),
         ({"auto_land": "sometimes"}, "invalid_parameter"),
         ({"timeout_ms": 0}, "invalid_parameter"),
+        ({"timeout_ms": float("nan")}, "invalid_parameter"),
+        ({"timeout_ms": float("inf")}, "invalid_parameter"),
+        ({"timeout_ms": float("-inf")}, "invalid_parameter"),
+        ({"timeout_ms": True}, "invalid_parameter"),
+        ({"retry_count": 1.5}, "invalid_parameter"),
         ({"observe_timeout_ms": 120001}, "invalid_parameter"),
         ({"retry_count": 11}, "invalid_parameter"),
     ]
@@ -175,4 +254,15 @@ def test_http_valid_boundaries_and_backend_identity() -> None:
     assert (high.altitude_m, high.threshold_ratio) == (120.0, 1.0)
     assert BackendRequest.from_json({}).backend == "px4_sitl"
     assert BackendRequest.from_json({"system_id": 255}).system_id == 255
+    assert BackendRequest.from_json({"component_id": None}).component_id is None
+    assert BackendRequest.from_json({"component_id": 1}).component_id == 1
+    assert BackendRequest.from_json({"component_id": 255}).component_id == 255
+    assert BackendRequest.from_json({"component_id": None}).to_mavlink_config().target_component is None
     assert SmokeTakeoffRequest.from_json({"auto_land": "false"}).auto_land is False
+
+
+def test_component_id_is_a_registry_consistency_check(monkeypatch: Any) -> None:
+    install_registry(monkeypatch, default="UAV-01")
+    status, result = routes.dispatch("POST", "/api/backend/check", body={"component_id": 2})
+    assert status == 409
+    assert result["error"] == "node_component_id_conflict"

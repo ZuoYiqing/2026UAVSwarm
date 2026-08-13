@@ -151,26 +151,23 @@ Do not force two independent processes to listen on the same UDP endpoint. The r
 udpin:127.0.0.1:14540
 ```
 
-If telemetry observation runs at the same time, use PX4's other observed onboard stream:
+Standalone telemetry observation uses the authoritative offboard endpoint only
+when Runtime and other listeners are stopped:
 
 ```bash
 python -m uav_runtime.console.cli observe-telemetry \
   --backend px4_sitl \
   --backend-mode sitl \
   --backend-enabled \
-  --transport-endpoint udpin:127.0.0.1:14030 \
+  --transport-endpoint udpin:127.0.0.1:14540 \
   --duration-s 30 \
   --rate-hz 5 \
   --pretty
 ```
 
-This maps to the previously observed PX4 MAVLink status line:
-
-```text
-Onboard local port 14280 remote port 14030
-```
-
-The `14030` stream may be lower-rate than `14540`, but it avoids two consumers competing for the same local UDP listen port. Long term, runtime should share one MAVLink backend session across telemetry collector, action executor, HTTP API, and frontend state instead of letting multiple processes race on the same port.
+Inside Runtime, telemetry is now a subscriber to the Registry-owned shared
+session. Do not run this standalone command concurrently with Runtime on the
+same `udpin` endpoint.
 
 ## How to verify telemetry correctness
 

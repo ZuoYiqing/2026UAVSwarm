@@ -227,12 +227,37 @@ class FakeSession:
         self.connection = connection
         self.closed = False
         self.control_calls: list[str] = []
+        self.target_system = 1
+        self.target_component = 1
+        self.running = False
+        self.callbacks: dict[int, Any] = {}
+        self.thread_name: str | None = None
 
     def connect(self, *, timeout_s: float) -> FakeConnection:
         return self.connection
 
     def close(self) -> None:
         self.closed = True
+
+    def subscribe(self, callback: Any) -> int:
+        token = len(self.callbacks) + 1
+        self.callbacks[token] = callback
+        return token
+
+    def unsubscribe(self, token: int) -> None:
+        self.callbacks.pop(token, None)
+
+    def start_receive_loop(self, *, thread_name: str) -> bool:
+        self.thread_name = thread_name
+        self.running = True
+        while self.connection.messages:
+            message = self.connection.recv_match()
+            for callback in list(self.callbacks.values()):
+                callback(message)
+        return True
+
+    def receive_thread_alive(self) -> bool:
+        return self.running
 
     def arm(self, **_: Any) -> None:
         self.control_calls.append("arm")
@@ -251,55 +276,58 @@ def test_collector_start_stop_updates_store_and_never_controls_vehicle() -> None
     ]
     session = FakeSession(FakeConnection(messages))
     store = RuntimeStateStore()
-    collector = Px4TelemetryCollector(store, retry_delay_s=10, session_factory=lambda _: session)
+    collector = Px4TelemetryCollector(
+        store,
+        session=session,  # type: ignore[arg-type]
+        endpoint="udpin:127.0.0.1:14540",
+    )
 
     assert collector.start() is True
-    assert collector._thread is not None
-    assert collector._thread.name == "px4-telemetry-legacy"
-    deadline = time.time() + 1
-    while not store.telemetry_latest()["nodes"] and time.time() < deadline:
-        time.sleep(0.01)
     collector.stop()
 
-    assert session.closed is True
+    assert session.closed is False
     assert session.control_calls == []
     assert collector.is_running() is False
     assert store.telemetry_latest()["nodes"][0]["local_position"]["altitude_m"] == pytest.approx(2.5)
 
 
-def test_node_specific_collector_thread_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, str] = {}
-
+def test_node_specific_collector_names_shared_receive_owner() -> None:
+    session = FakeSession(FakeConnection([]))
     class Store:
         def mark_collector_started(self, **_: Any) -> None: pass
+        def mark_collector_stopped(self, *args: Any, **kwargs: Any) -> None: pass
+        def update_telemetry(self, *args: Any, **kwargs: Any) -> None: pass
 
-    class Thread:
-        def __init__(self, *, target: Any, name: str, daemon: bool) -> None:
-            captured["name"] = name
-        def is_alive(self) -> bool: return False
-        def start(self) -> None: pass
-
-    monkeypatch.setattr("uav_runtime.adapters.px4_telemetry_collector.threading.Thread", Thread)
-    collector = Px4TelemetryCollector(Store(), node_id="UAV-02")  # type: ignore[arg-type]
+    store = Store()
+    collector = Px4TelemetryCollector(
+        store,  # type: ignore[arg-type]
+        session=session,  # type: ignore[arg-type]
+        node_id="UAV-02",
+        endpoint="udp:2",
+    )
     assert collector.start()
-    assert captured["name"] == "px4-telemetry-UAV-02"
+    assert session.thread_name == "mavlink-rx-UAV-02"
 
 
 def test_collector_cleans_up_after_receive_exception() -> None:
-    class FailingConnection(FakeConnection):
-        def recv_match(self, **_: Any) -> Any:
+    class FailingSession(FakeSession):
+        def start_receive_loop(self, *, thread_name: str) -> bool:
+            del thread_name
             raise OSError("closed")
 
-    session = FakeSession(FailingConnection([]))
+    session = FailingSession(FakeConnection([]))
     store = RuntimeStateStore()
-    collector = Px4TelemetryCollector(store, retry_delay_s=10, session_factory=lambda _: session)
-    collector.start()
-    deadline = time.time() + 1
-    while not session.closed and time.time() < deadline:
-        time.sleep(0.01)
+    collector = Px4TelemetryCollector(
+        store,
+        session=session,  # type: ignore[arg-type]
+        endpoint="udp:1",
+    )
+    with pytest.raises(OSError, match="closed"):
+        collector.start()
     collector.stop()
 
-    assert session.closed is True
+    assert session.closed is False
+    assert session.callbacks == {}
     assert collector.is_running() is False
 
 

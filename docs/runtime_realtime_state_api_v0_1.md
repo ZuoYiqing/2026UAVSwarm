@@ -19,22 +19,21 @@ message-interval commands.
 HTTP GET handlers only copy and serialize this state. They do not connect to PX4
 or scan audit logs to infer active plan state.
 
-`Px4TelemetryCollector` owns one background receive loop. Its default endpoint is
-`udpin:127.0.0.1:14030`, deliberately separate from the existing smoke-takeoff
-and land command endpoint `udpin:127.0.0.1:14540`. Independent processes must not
-bind and consume the same UDP listen port. The collector is passive: it does not
-request message intervals or send vehicle commands. Set these environment
-variables when launching the server:
+Each Registry `VehicleHandle` owns one background receive loop and the
+manifest-selected endpoint (`14540/14541/14542`). `Px4TelemetryCollector` is a
+passive subscriber to that loop; ACK waits and altitude observation consume the
+same dispatcher's mailbox/cache. Independent processes must not bind and consume
+the same UDP listen port. Set this environment variable when launching the
+server:
 
 ```bash
 UAV_RUNTIME_TELEMETRY_ENABLED=true
-UAV_RUNTIME_TELEMETRY_ENDPOINT=udpin:127.0.0.1:14030
 python -m uav_runtime.http.server
 ```
 
-This is the v0.1 conflict-avoidance choice. A later in-process shared MAVLink
-session may unify command and telemetry receive paths, but only after command ACK
-routing and receive ownership are coordinated safely.
+Runtime loads the endpoint mapping from
+`simulation/px4_gazebo/config/three_uav_sitl.json`; there is no separate
+telemetry endpoint override in the shared-session contract.
 
 ## Read-only routes
 

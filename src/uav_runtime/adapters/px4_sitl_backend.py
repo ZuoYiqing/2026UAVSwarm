@@ -12,7 +12,7 @@ v1 target (future):
 from __future__ import annotations
 
 import importlib.util
-from typing import Any, Tuple
+from typing import Any
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
@@ -60,32 +60,59 @@ class Px4SitlBackend:
             "planned_transport": "single_endpoint",
         }
 
-    def _probe_via_pymavlink(self) -> Tuple[bool, str]:
+    def _probe_via_pymavlink(self) -> tuple[bool, str, dict[str, Any]]:
         """Best-effort connect probe (no control command).
 
         Returns:
             (ok, reason)
         """
+        connection = None
+        details = {
+            "expected_system_id": self.config.target_system,
+            "expected_component_id": self.config.target_component,
+            "observed_system_id": None,
+            "observed_component_id": None,
+        }
         try:
             # Import inside the probe so importing the package never requires pymavlink.
             from pymavlink import mavutil  # type: ignore
 
             # This is intentionally a heartbeat-only probe.  Do not add arm/set_mode/
             # command_long/takeoff here; those belong to later SITL smoke stages.
-            conn = mavutil.mavlink_connection(
+            connection = mavutil.mavlink_connection(
                 self.config.transport_endpoint,
                 timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1),
             )
-            hb = conn.wait_heartbeat(timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
+            hb = connection.wait_heartbeat(timeout=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
             if hb is None:
-                return False, "heartbeat_timeout"
-            return True, "backend_connected"
+                return False, "heartbeat_timeout", details
+            system_getter = getattr(hb, "get_srcSystem", None)
+            component_getter = getattr(hb, "get_srcComponent", None)
+            observed_system = (
+                system_getter() if callable(system_getter)
+                else getattr(connection, "target_system", None)
+            )
+            observed_component = (
+                component_getter() if callable(component_getter)
+                else getattr(connection, "target_component", None)
+            )
+            details["observed_system_id"] = None if observed_system is None else int(observed_system)
+            details["observed_component_id"] = None if observed_component is None else int(observed_component)
+            if self.config.target_system is not None and details["observed_system_id"] != self.config.target_system:
+                return False, "target_system_mismatch", details
+            if self.config.target_component is not None and details["observed_component_id"] != self.config.target_component:
+                return False, "target_component_mismatch", details
+            return True, "backend_connected", details
         except TimeoutError:
-            return False, "heartbeat_timeout"
+            return False, "heartbeat_timeout", details
         except OSError:
-            return False, "connection_failed"
+            return False, "connection_failed", details
         except Exception:
-            return False, "probe_exception"
+            return False, "probe_exception", details
+        finally:
+            close = getattr(connection, "close", None)
+            if callable(close):
+                close()
 
     def readiness_diagnostic(self) -> dict[str, Any]:
         # readiness is derived only from connect_probe.code.  The frozen rule is:
@@ -106,7 +133,7 @@ class Px4SitlBackend:
             "transport_endpoint": endpoint,
             "transport_endpoint_configured": endpoint_configured,
             "connect_timeout_ms": self.config.connect_timeout_ms,
-            "connect_probe": {"code": code, "reason": reason, "status": status},
+            "connect_probe": dict(probe),
             "readiness": "ready" if ready else "not_ready",
         }
 
@@ -139,25 +166,36 @@ class Px4SitlBackend:
                 "status": status,
             }
         if status == "not_connected":
-            ok, reason = self._probe_via_pymavlink()
+            probe_result = self._probe_via_pymavlink()
+            if len(probe_result) == 2:  # Backward-compatible test/fake hook.
+                ok, reason = probe_result
+                identity: dict[str, Any] = {}
+            else:
+                ok, reason, identity = probe_result
             if ok:
                 return {
                     "ok": True,
                     "code": "backend_connected",
                     "reason": "backend_connected",
                     "status": "connected",
+                    **identity,
                 }
             return {
                 "ok": False,
                 "code": "backend_probe_failed",
                 "reason": reason,
                 "status": status,
+                **identity,
             }
         return {
             "ok": True,
             "code": "backend_connected",
             "reason": "backend_connected",
             "status": status,
+            "expected_system_id": self.config.target_system,
+            "expected_component_id": self.config.target_component,
+            "observed_system_id": self.session.target_system,
+            "observed_component_id": self.session.target_component,
         }
 
     def _base_action_result(self, action: str) -> dict[str, Any]:
@@ -263,7 +301,11 @@ class Px4SitlBackend:
                 result["failure_reason"] = "takeoff_rejected_or_timeout"
                 return self._finish_smoke_result(result)
 
-            observation = self.session.observe_local_position_altitude(timeout_s=observe_timeout_s, threshold_altitude_m=threshold_altitude)
+            observation = self.session.observe_local_position_altitude(
+                timeout_s=observe_timeout_s,
+                threshold_altitude_m=threshold_altitude,
+                after_sequence=int(takeoff_ack["local_position_cursor"]),
+            )
             result["altitude_observation"] = observation
             result["max_altitude_m"] = float(observation.get("max_altitude_m", 0.0) or 0.0)
             result["threshold_reached"] = bool(observation.get("threshold_reached")) or result["max_altitude_m"] >= threshold_altitude

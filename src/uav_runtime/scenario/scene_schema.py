@@ -56,8 +56,10 @@ def validate_scene(scene: dict[str, Any]) -> SceneSummary:
         if key not in scene:
             raise SceneValidationError(f"missing required field: {key}")
 
-    if scene["frame"] not in {"local_ned", "local_enu"}:
-        raise SceneValidationError("frame must be local_ned or local_enu")
+    # v0.1 downstream spawn, altitude, and safety geometry are defined in NED.
+    # Reject ENU metadata until every consumer has an explicit frame conversion.
+    if scene["frame"] != "local_ned":
+        raise SceneValidationError("frame must be local_ned in v0.1")
 
     vehicles = _expect_list(scene, "vehicles")
     targets = _expect_list(scene, "targets")

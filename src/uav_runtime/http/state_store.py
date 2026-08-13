@@ -77,7 +77,7 @@ class RuntimeStateStore:
         stale_after_ms: int = 2000,
         backend: str = "px4_sitl",
         backend_mode: str = "sitl",
-        telemetry_endpoint: str = "udpin:127.0.0.1:14030",
+        telemetry_endpoint: str = "udpin:127.0.0.1:14540",
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         vehicle_registry: VehicleRegistry | None = None,
