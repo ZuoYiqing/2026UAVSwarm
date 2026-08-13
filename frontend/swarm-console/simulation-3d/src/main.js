@@ -21,9 +21,13 @@ import { createCampusScene } from "./campus-scene.js";
 import { DemoVehicleFeed } from "./demo-vehicle-feed.js";
 import {
   VEHICLE_CONTRACT_VERSION,
-  normalizeVehicleSnapshot,
 } from "./vehicle-contract.js";
 import { VehicleLayer } from "./vehicle-layer.js";
+import {
+  RuntimeVehicleSnapshotPoller,
+  VehicleSnapshotState,
+  createRuntimeSnapshotFetcher,
+} from "./vehicle-snapshot-state.js";
 
 const SCENE_ANCHOR = Object.freeze({
   longitude: 116.3913,
@@ -58,6 +62,7 @@ const sceneDefinitions = Object.freeze({
 
 const elements = {
   status: document.querySelector("#scene-status"),
+  statusDot: document.querySelector("#status-dot"),
   sourceStatus: document.querySelector("#source-status"),
   error: document.querySelector("#scene-error"),
   playButton: document.querySelector("#play-button"),
@@ -65,6 +70,8 @@ const elements = {
   progress: document.querySelector("#timeline-progress"),
   missionTime: document.querySelector("#mission-time"),
   sourceKind: document.querySelector("#source-kind"),
+  sourceConnection: document.querySelector("#source-connection"),
+  sourceUpdated: document.querySelector("#source-updated"),
   vehicleSummary: document.querySelector("#vehicle-summary"),
   vehicleSelect: document.querySelector("#vehicle-select"),
   selectedId: document.querySelector("#selected-vehicle-id"),
@@ -77,6 +84,9 @@ const elements = {
   telemetryBattery: document.querySelector("#telemetry-battery"),
   telemetrySource: document.querySelector("#telemetry-source"),
   telemetryAgent: document.querySelector("#telemetry-agent"),
+  telemetryPanel: document.querySelector(".telemetry-panel"),
+  liveButton: document.querySelector("#live-button"),
+  demoButton: document.querySelector("#demo-button"),
 };
 
 const viewer = new Viewer("cesium-container", {
@@ -141,6 +151,13 @@ const campusScene = createCampusScene(viewer, (position) =>
 );
 const vehicleLayer = new VehicleLayer(viewer, positionToWorld);
 const demoFeed = new DemoVehicleFeed();
+const embedded = window.parent !== window;
+const queryParameters = new URLSearchParams(window.location.search);
+const runtimeApiBaseUrl =
+  queryParameters.get("runtimeApiBaseUrl") ||
+  import.meta.env.VITE_RUNTIME_API_BASE_URL ||
+  "/api";
+const snapshotState = new VehicleSnapshotState();
 
 const startTime = JulianDate.now();
 const stopTime = JulianDate.addSeconds(
@@ -153,14 +170,14 @@ viewer.clock.stopTime = stopTime.clone();
 viewer.clock.currentTime = startTime.clone();
 viewer.clock.clockRange = ClockRange.LOOP_STOP;
 viewer.clock.multiplier = 1;
-viewer.clock.shouldAnimate = true;
+viewer.clock.shouldAnimate = false;
 
 let activeTileset;
 let activeSceneId = "campus";
-let dataMode = "demo";
 let followEnabled = false;
 let lastDemoUpdateSeconds = -1;
 let latestSnapshot;
+let lastRenderedStale = null;
 
 function formatMissionTime(seconds) {
   const safeSeconds = Math.max(0, Math.min(demoFeed.durationSeconds, seconds));
@@ -204,7 +221,12 @@ function refreshVehicleControls() {
 
   const typeCount = new Set(records.map((record) => record.vehicle.vehicleType))
     .size;
-  elements.vehicleSummary.textContent = `${records.length} 个节点 · ${typeCount} 种平台`;
+  const staleCount = records.filter((record) =>
+    vehicleLayer.isRecordStale(record),
+  ).length;
+  elements.vehicleSummary.textContent = staleCount
+    ? `${records.length} 个节点 · ${typeCount} 种平台 · ${staleCount} STALE`
+    : `${records.length} 个节点 · ${typeCount} 种平台`;
 }
 
 function refreshSelectedTelemetry() {
@@ -224,14 +246,19 @@ function refreshSelectedTelemetry() {
     ]) {
       element.textContent = "--";
     }
+    elements.telemetryPanel.dataset.state = "offline";
     return;
   }
 
   const { vehicle, worldPosition } = record;
+  const stale = vehicleLayer.isRecordStale(record);
   const cartographic = Cartographic.fromCartesian(worldPosition);
   elements.selectedId.textContent = vehicle.displayName;
   elements.selectedType.textContent = typeLabel(vehicle.vehicleType);
-  elements.selectedMode.textContent = vehicle.telemetry.mode;
+  elements.selectedMode.textContent = stale
+    ? `${vehicle.telemetry.mode} · STALE`
+    : vehicle.telemetry.mode;
+  elements.telemetryPanel.dataset.state = stale ? "stale" : "fresh";
   elements.telemetryLat.textContent =
     `${CesiumMath.toDegrees(cartographic.latitude).toFixed(6)}°`;
   elements.telemetryLon.textContent =
@@ -259,56 +286,161 @@ function setSelectedVehicle(vehicleId) {
   }
 }
 
+function connectionLabel(status) {
+  return (
+    {
+      demo: "本地演示",
+      connecting: "正在连接 Runtime",
+      waiting: "等待主控制台",
+      connected: "数据已连接",
+      reconnecting: "连接波动，正在重试",
+      stale: "数据已过期，位置已冻结",
+      disconnected: "数据源断开",
+    }[status.connection] || status.connection
+  );
+}
+
+function formatLastUpdate(status) {
+  if (status.lastAcceptedAtMs === null) {
+    return "最后更新：--";
+  }
+  const time = new Date(status.lastAcceptedAtMs).toLocaleTimeString("zh-CN", {
+    hour12: false,
+  });
+  const ageSeconds = Math.max(0, (status.ageMs || 0) / 1000);
+  return `最后更新：${time} · ${ageSeconds.toFixed(1)}s 前`;
+}
+
 function updateSourceUi(snapshot) {
   const kind = sourceClass(snapshot.source.kind);
   elements.sourceKind.textContent = snapshot.source.label;
   elements.sourceKind.dataset.kind = kind;
-  elements.sourceStatus.textContent =
-    kind === "demo" ? "LOCAL DEMO" : `${kind.toUpperCase()} LIVE`;
 }
 
-function applyNormalizedSnapshot(snapshot, mode) {
+function refreshSourceStatus(nowMs = Date.now()) {
+  const status = snapshotState.statusAt(nowMs);
+  const sourceLabel = latestSnapshot?.source.label ||
+    (status.transport === "runtime" ? "RUNTIME API" : "MAIN CONSOLE");
+
+  if (!latestSnapshot && status.mode === "live") {
+    elements.sourceKind.textContent = sourceLabel;
+    elements.sourceKind.dataset.kind = "unknown";
+  }
+  elements.sourceConnection.textContent = connectionLabel(status);
+  elements.sourceConnection.dataset.state = status.connection;
+  elements.sourceUpdated.textContent = formatLastUpdate(status);
+  elements.statusDot.dataset.state = status.connection;
+  elements.sourceStatus.textContent =
+    status.mode === "demo"
+      ? "LOCAL DEMO"
+      : status.stale
+        ? "LIVE · STALE"
+        : status.connection === "connected"
+          ? "LIVE"
+          : status.connection.toUpperCase();
+
+  elements.liveButton.classList.toggle("active", status.mode === "live");
+  elements.demoButton.classList.toggle("active", status.mode === "demo");
+  elements.playButton.disabled = status.mode === "live";
+  elements.playButton.textContent =
+    status.mode === "live"
+      ? "实时"
+      : viewer.clock.shouldAnimate
+        ? "暂停"
+        : "播放";
+  elements.progress.classList.toggle("live", status.mode === "live" && !status.stale);
+  elements.progress.classList.toggle("stale", status.stale);
+
+  if (status.mode === "live") {
+    elements.progress.style.width = status.lastAcceptedAtMs === null ? "0%" : "100%";
+    elements.missionTime.value = status.stale
+      ? `STALE · ${(status.ageMs / 1000).toFixed(1)}s`
+      : status.connection === "connected"
+        ? `${new Date(latestSnapshot.timestampMs).toLocaleTimeString("zh-CN", { hour12: false })} / LIVE`
+        : "-- / LIVE";
+  }
+
+  if (lastRenderedStale !== status.stale) {
+    lastRenderedStale = status.stale;
+    vehicleLayer.setDataStale(status.stale);
+    refreshVehicleControls();
+    refreshSelectedTelemetry();
+  }
+}
+
+function applyAcceptedSnapshot(snapshot) {
   latestSnapshot = snapshot;
-  dataMode = mode;
   vehicleLayer.applySnapshot(snapshot);
   updateSourceUi(snapshot);
   refreshVehicleControls();
   refreshSelectedTelemetry();
-
-  const live = mode === "external";
-  elements.playButton.disabled = live;
-  elements.playButton.textContent = live
-    ? "实时"
-    : viewer.clock.shouldAnimate
-      ? "暂停"
-      : "播放";
-  elements.progress.classList.toggle("live", live);
-  if (live) {
-    elements.progress.style.width = "100%";
-    elements.missionTime.value = `${new Date(snapshot.timestampMs).toLocaleTimeString()} / LIVE`;
-  }
 }
 
-function applyExternalSnapshot(rawSnapshot) {
-  const snapshot = normalizeVehicleSnapshot(rawSnapshot);
-  viewer.clock.shouldAnimate = false;
-  applyNormalizedSnapshot(snapshot, "external");
+function handleRawSnapshot(rawSnapshot, transport) {
+  let result;
+  try {
+    result = snapshotState.ingest(rawSnapshot, { transport });
+  } catch (error) {
+    snapshotState.markTransportError(error, { transport });
+    refreshSourceStatus();
+    throw error;
+  }
+
+  if (transport === "parent" || transport === "bridge") {
+    runtimePoller.stop();
+  }
+  if (result.accepted) {
+    viewer.clock.shouldAnimate = snapshotState.mode === "demo";
+    applyAcceptedSnapshot(result.snapshot);
+  }
+  refreshSourceStatus();
+  return result;
+}
+
+function applyExternalSnapshot(rawSnapshot, transport = "bridge") {
+  const result = handleRawSnapshot(rawSnapshot, transport);
   return {
-    accepted: snapshot.vehicles.length,
-    timestampMs: snapshot.timestampMs,
+    accepted: result.accepted,
+    reason: result.reason,
+    vehicleCount: result.snapshot.vehicles.length,
+    timestampMs: result.snapshot.timestampMs,
   };
 }
 
+function clearDisplayedFleet(label) {
+  latestSnapshot = undefined;
+  vehicleLayer.applySnapshot(snapshotState.emptySnapshot(label));
+  refreshVehicleControls();
+  refreshSelectedTelemetry();
+}
+
+function useLive() {
+  runtimePoller.stop();
+  const transport = embedded ? "parent" : "runtime";
+  snapshotState.activateLive(transport);
+  viewer.clock.shouldAnimate = false;
+  lastDemoUpdateSeconds = -1;
+  lastRenderedStale = null;
+  clearDisplayedFleet(embedded ? "MAIN CONSOLE" : "RUNTIME API");
+  if (!embedded) {
+    runtimePoller.start();
+  }
+  refreshSourceStatus();
+}
+
 function useDemo() {
-  dataMode = "demo";
+  runtimePoller.stop();
+  snapshotState.activateDemo();
   viewer.clock.currentTime = startTime.clone();
   viewer.clock.shouldAnimate = true;
   lastDemoUpdateSeconds = -1;
+  lastRenderedStale = null;
+  clearDisplayedFleet("LOCAL DEMO");
   updateDemo(viewer.clock);
 }
 
 function updateDemo(clock) {
-  if (dataMode !== "demo") {
+  if (snapshotState.mode !== "demo") {
     return;
   }
   const elapsed = JulianDate.secondsDifference(clock.currentTime, startTime);
@@ -319,8 +451,10 @@ function updateDemo(clock) {
     return;
   }
   lastDemoUpdateSeconds = elapsed;
-  const snapshot = normalizeVehicleSnapshot(demoFeed.snapshotAt(elapsed));
-  applyNormalizedSnapshot(snapshot, "demo");
+  const result = handleRawSnapshot(demoFeed.snapshotAt(elapsed), "demo");
+  if (!result.accepted) {
+    return;
+  }
   const progress = Math.max(
     0,
     Math.min(1, elapsed / demoFeed.durationSeconds),
@@ -329,6 +463,17 @@ function updateDemo(clock) {
   elements.missionTime.value =
     `${formatMissionTime(elapsed)} / ${formatMissionTime(demoFeed.durationSeconds)}`;
 }
+
+const runtimePoller = new RuntimeVehicleSnapshotPoller({
+  fetchSnapshot: createRuntimeSnapshotFetcher({ apiBaseUrl: runtimeApiBaseUrl }),
+  onSnapshot: async (rawSnapshot) => {
+    handleRawSnapshot(rawSnapshot, "runtime");
+  },
+  onError: async (error) => {
+    snapshotState.markTransportError(error, { transport: "runtime" });
+    refreshSourceStatus();
+  },
+});
 
 async function loadScene(sceneId) {
   const definition = sceneDefinitions[sceneId];
@@ -412,7 +557,8 @@ elements.followButton.addEventListener("click", () => {
     : undefined;
 });
 
-document.querySelector("#demo-button").addEventListener("click", useDemo);
+elements.liveButton.addEventListener("click", useLive);
+elements.demoButton.addEventListener("click", useDemo);
 
 document.querySelector("#route-toggle").addEventListener("change", (event) => {
   vehicleLayer.setRoutesVisible(event.target.checked);
@@ -427,7 +573,7 @@ elements.vehicleSelect.addEventListener("change", (event) => {
 });
 
 elements.playButton.addEventListener("click", () => {
-  if (dataMode !== "demo") {
+  if (snapshotState.mode !== "demo") {
     return;
   }
   viewer.clock.shouldAnimate = !viewer.clock.shouldAnimate;
@@ -458,13 +604,16 @@ viewer.clock.onTick.addEventListener((clock) => {
 const bridge = Object.freeze({
   contractVersion: VEHICLE_CONTRACT_VERSION,
   applyVehicleSnapshot: applyExternalSnapshot,
+  useLive,
   useDemo,
   selectVehicle: setSelectedVehicle,
   focusScene,
   getState() {
     return {
       sceneId: activeSceneId,
-      dataMode,
+      dataMode: snapshotState.mode,
+      transport: snapshotState.transport,
+      connection: snapshotState.statusAt().connection,
       source: latestSnapshot?.source || null,
       vehicleCount: vehicleLayer.getRecords().length,
       selectedVehicleId: vehicleLayer.selectedVehicleId,
@@ -485,10 +634,18 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (event.data?.type === "uav-swarm/vehicle-snapshot") {
-    applyExternalSnapshot(event.data.payload);
+    try {
+      applyExternalSnapshot(event.data.payload, "parent");
+    } catch (error) {
+      elements.error.textContent = `载具快照无效：${error.message}`;
+      elements.error.hidden = false;
+    }
   }
   if (event.data?.type === "uav-swarm/use-demo") {
     useDemo();
+  }
+  if (event.data?.type === "uav-swarm/use-live") {
+    useLive();
   }
 });
 
@@ -501,12 +658,19 @@ if (window.parent !== window) {
       type: "uav-swarm/simulation-ready",
       payload: {
         contractVersion: VEHICLE_CONTRACT_VERSION,
+        integration: "parent-snapshot",
       },
     },
     parentOrigin,
   );
 }
 
-updateDemo(viewer.clock);
 loadScene(activeSceneId);
+window.setInterval(() => refreshSourceStatus(), 250);
+window.addEventListener("beforeunload", () => runtimePoller.stop());
 
+if (queryParameters.get("mode") === "demo") {
+  useDemo();
+} else {
+  useLive();
+}

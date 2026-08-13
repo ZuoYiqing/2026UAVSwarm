@@ -10,12 +10,13 @@
 - 默认任务园区，以及 3D Tiles 1.1/1.0 兼容性样例；
 - 多旋翼、固定翼、垂直起降固定翼、无人车等混合平台；
 - 根据完整状态快照动态增删载具、更新姿态、位置、遥测和 Agent 状态；
-- 本地两分钟演示数据源，可暂停、倍速播放和恢复；
+- 默认 LIVE，独立打开时轮询 Runtime `GET /api/vehicle-snapshot`；
+- 本地两分钟演示只在点击 `DEMO` 或使用 `?mode=demo` 时启用；
 - iframe `postMessage` 和同窗口 JavaScript Bridge 两种集成方式。
 
 页面中的 `02:00` 不是视频，也不是 Gazebo/PX4 飞行脚本。它只是浏览器内生成的本地测试
-数据，用于在后端尚未接入时验证渲染、轨迹、选择和跟随。收到外部快照后，页面会切换为
-`LIVE`，载具数量和类型以外部数据为准。
+数据，用于显式 DEMO 模式下验证渲染、轨迹、选择和跟随。LIVE 数据超时后会保留并冻结
+最后位置，同时标记 `STALE`，不会继续生成假运动。
 
 ## 开发运行
 
@@ -29,6 +30,15 @@ npm run dev
 
 ```text
 http://127.0.0.1:5179/
+```
+
+开发服务器会把同源 `/api/*` 代理到 `http://127.0.0.1:8765/api/*`。因此独立 LIVE 模式
+需要另一个终端启动 Runtime；Runtime 未启动时页面会明确显示断线，不会自动降级为 DEMO。
+
+显式打开本地演示：
+
+```text
+http://127.0.0.1:5179/?mode=demo
 ```
 
 前台运行时按 `Ctrl+C` 停止。后台脚本必须在本目录执行：
@@ -48,6 +58,17 @@ npm run build
 ```
 
 ## 数据接入
+
+集成优先级只有一条：嵌入主控制台时由主控制台统一获取快照并通过 `postMessage` 发送；仅在
+三维页面顶层独立打开时轮询 Runtime。父页面或 Bridge 快照一旦取得权威，Runtime 轮询会停止。
+
+默认 Runtime API Base 是 `/api`，独立调试其他地址时可使用：
+
+```text
+?runtimeApiBaseUrl=http://127.0.0.1:8765/api
+```
+
+跨源地址要求 Runtime 明确允许当前页面 Origin；推荐仍使用 Vite/Nginx 同源代理。
 
 - 人类可读契约：[docs/VEHICLE_FEED_CONTRACT_ZH-CN.md](docs/VEHICLE_FEED_CONTRACT_ZH-CN.md)
 - JSON Schema：[public/contracts/vehicle-snapshot.schema.json](public/contracts/vehicle-snapshot.schema.json)

@@ -16,6 +16,9 @@ public/contracts/vehicle-snapshot.schema.json
 - `id` 是生命周期内稳定且全局唯一的字符串；
 - 完整快照中消失的 `id` 会从场景删除；
 - 同一快照不允许出现重复 `id`；
+- 相同时间戳的快照只应用一次，早于当前状态的乱序快照会被拒绝；
+- 三维端超过 3 秒没有接受到更新时冻结最后位置并标记 `STALE`；
+- `telemetry.stale=true` 或 `connected=false` 会单独把对应平台标记为 `STALE`；
 - 位置、姿态和遥测属于平台状态，Agent 意图是独立的可选扩展；
 - 前端不通过该接口直接向飞控发命令。
 
@@ -145,11 +148,13 @@ unknown
 ```js
 window.SwarmSimulationBridge.applyVehicleSnapshot(snapshot);
 window.SwarmSimulationBridge.selectVehicle("physical-mr-01");
+window.SwarmSimulationBridge.useLive();
 window.SwarmSimulationBridge.useDemo();
 window.SwarmSimulationBridge.getState();
 ```
 
-首次接入真实数据时直接调用 `applyVehicleSnapshot`，页面会停止两分钟演示并进入 `LIVE`。
+页面默认处于 `LIVE`。若用户显式进入 DEMO，调用 `applyVehicleSnapshot` 会停止演示并恢复
+`LIVE`。同窗口 Bridge 成为权威来源后，页面会停止自身 Runtime 轮询。
 
 ## 6. iframe 集成
 
@@ -171,15 +176,30 @@ simulationFrame.contentWindow.postMessage(
 {
   type: "uav-swarm/simulation-ready",
   payload: {
-    contractVersion: "1.0"
+    contractVersion: "1.0",
+    integration: "parent-snapshot"
   }
 }
 ```
 
+嵌入 iframe 时三维页面不会直接轮询 Runtime，而是等待父页面发送快照。父页面应在收到
+`uav-swarm/simulation-ready` 后立即发送最新完整快照，之后维持单一获取循环。
+
 生产环境推荐把控制台与三维页面部署在同一域名下。若必须跨域，应把允许的精确来源做成
 部署配置，不要使用任意来源 `*`。
 
-## 7. 后续 WebSocket 建议
+## 7. 独立页面 Runtime 接入
+
+三维页面顶层独立打开时请求：
+
+```text
+GET /api/vehicle-snapshot
+```
+
+开发环境由 Vite 代理到 `http://127.0.0.1:8765`，Nginx 示例也包含同源 `/api/` 反向代理。
+轮询器串行调度，不会发出重叠请求；相同或乱序快照不会重复应用。
+
+## 8. 后续 WebSocket 建议
 
 浏览器不要直接连接 MAVLink、DDS 或 Gazebo Transport。推荐链路：
 
@@ -192,4 +212,4 @@ simulationFrame.contentWindow.postMessage(
         -> Cesium 三维显示
 ```
 
-断线重连、超时、数据节流和控制权限属于主前端/运行时后端职责；三维子应用保持纯显示层。
+控制权限属于主前端/运行时后端职责；三维子应用只处理显示、去重、乱序拒绝和 stale 冻结。

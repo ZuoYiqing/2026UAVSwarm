@@ -452,5 +452,10 @@ docs/VEHICLE_FEED_CONTRACT_ZH-CN.md
 public/contracts/vehicle-snapshot.schema.json
 ```
 
-收到第一份外部快照后，页面会停止本地两分钟演示并进入 `LIVE`。平台数量、ID、类型、
-位置和 Agent 状态全部以外部快照为准。点击“本地演示”按钮才会主动切回测试数据。
+页面默认进入 `LIVE`，不会自动播放本地路径。平台数量、ID、类型、位置和 Agent 状态全部
+以外部快照为准。只有点击 `DEMO` 或使用 `?mode=demo` 才会启用两分钟测试数据。
+
+嵌入主控制台时，由主控制台统一获取快照并通过 `postMessage` 发送，三维页不会重复轮询。
+独立运行时请求同源 `/api/vehicle-snapshot`：开发环境由 Vite 代理，长期部署使用离线包中的
+`nginx.conf.example` 代理到 `127.0.0.1:8765`。仅用 Python 静态服务器时没有反向代理能力，
+适合 DEMO 或由父页面传入快照，不适合作为独立 LIVE 的正式部署方案。

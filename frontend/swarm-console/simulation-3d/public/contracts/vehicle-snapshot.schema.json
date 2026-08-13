@@ -191,6 +191,13 @@
             "ground_speed_mps": {
               "type": "number",
               "minimum": 0
+            },
+            "stale": {
+              "type": "boolean"
+            },
+            "age_ms": {
+              "type": "number",
+              "minimum": 0
             }
           },
           "additionalProperties": true

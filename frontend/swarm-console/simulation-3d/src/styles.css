@@ -146,6 +146,24 @@ button:disabled {
   box-shadow: 0 0 10px rgba(66, 216, 131, 0.72);
 }
 
+.status-dot[data-state="stale"],
+.status-dot[data-state="reconnecting"] {
+  background: #f5b84c;
+  box-shadow: 0 0 10px rgba(245, 184, 76, 0.65);
+}
+
+.status-dot[data-state="disconnected"],
+.status-dot[data-state="connecting"],
+.status-dot[data-state="waiting"] {
+  background: #ff6b6b;
+  box-shadow: 0 0 10px rgba(255, 107, 107, 0.5);
+}
+
+.status-dot[data-state="demo"] {
+  background: #36c7f4;
+  box-shadow: 0 0 10px rgba(54, 199, 244, 0.65);
+}
+
 .layer-panel,
 .telemetry-panel {
   position: absolute;
@@ -212,9 +230,57 @@ button:disabled {
   color: #42d883;
 }
 
+#source-kind[data-kind="demo"] {
+  color: #36c7f4;
+}
+
+#source-connection,
+#source-updated {
+  display: block;
+  color: #7f979d;
+  font-size: 11px;
+}
+
+#source-connection[data-state="connected"] {
+  color: #42d883;
+}
+
+#source-connection[data-state="stale"],
+#source-connection[data-state="reconnecting"] {
+  color: #f5b84c;
+}
+
+#source-connection[data-state="disconnected"] {
+  color: #ff7b7b;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(122, 169, 178, 0.25);
+  border-radius: 5px;
+  background: rgba(4, 10, 13, 0.72);
+}
+
+.mode-switch button {
+  min-height: 30px;
+  border-color: transparent;
+  color: #8da5aa;
+  background: transparent;
+  font-size: 11px;
+}
+
+.mode-switch button.active {
+  border-color: rgba(54, 199, 244, 0.5);
+  color: #e8f1f2;
+  background: rgba(54, 199, 244, 0.12);
+}
+
 .button-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 7px;
 }
 
@@ -276,6 +342,11 @@ button:disabled {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.telemetry-panel[data-state="stale"] .flight-mode {
+  border-color: rgba(245, 184, 76, 0.5);
+  color: #f5b84c;
 }
 
 .telemetry-panel dl {
@@ -351,6 +422,10 @@ button:disabled {
   background: #42d883;
 }
 
+.timeline-track span.stale {
+  background: #f5b84c;
+}
+
 .playback-bar select {
   padding: 0 6px;
 }
@@ -410,4 +485,3 @@ button:disabled {
     display: none;
   }
 }
-

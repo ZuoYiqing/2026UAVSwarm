@@ -22,7 +22,7 @@
           </div>
         </div>
         <div class="runtime-state">
-          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-dot" class="status-dot" data-state="connecting" aria-hidden="true"></span>
           <span id="scene-status">正在初始化场景</span>
           <span class="state-divider" aria-hidden="true"></span>
           <span id="source-status">LOCAL DEMO</span>
@@ -43,6 +43,17 @@
             <strong id="source-kind" data-kind="demo">LOCAL DEMO</strong>
           </div>
           <span id="vehicle-summary">0 个节点</span>
+          <span id="source-connection" data-state="connecting">正在连接 Runtime</span>
+          <span id="source-updated">最后更新：--</span>
+        </div>
+
+        <div class="mode-switch" role="group" aria-label="载具数据模式">
+          <button id="live-button" class="active" type="button" title="使用 Runtime 或主控制台实时快照">
+            LIVE
+          </button>
+          <button id="demo-button" type="button" title="使用浏览器本地演示数据">
+            DEMO
+          </button>
         </div>
 
         <label for="vehicle-select">当前载具</label>
@@ -54,9 +65,6 @@
           </button>
           <button id="follow-button" type="button" title="跟随当前载具">
             跟随
-          </button>
-          <button id="demo-button" type="button" title="恢复本地演示数据">
-            演示
           </button>
         </div>
 
@@ -130,4 +138,3 @@
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
-
