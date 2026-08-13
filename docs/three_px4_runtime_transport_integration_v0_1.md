@@ -2,9 +2,11 @@
 
 ## Status
 
-Software contract implemented and unit-tested. Real three-PX4 Runtime
-integration is pending because this Windows environment has no installed WSL
-distribution and therefore cannot start the Linux PX4/Gazebo harness.
+Software contract implemented and unit-tested. A real three-PX4 Runtime run
+proved independent sysid 1/2/3 bindings, telemetry, snapshots, and an isolated
+UAV-02 TAKEOFF. That run also exposed the action-scoped heartbeat defect below.
+Post-fix persistent-hover and explicit-LAND revalidation remains pending in this
+worktree environment.
 
 ## Current transport findings
 
@@ -44,12 +46,47 @@ serializes commands per node and does not allow overlapping same-command waits.
 
 - Register creates one session and immutable expected sysid/component binding.
 - Start connects, waits for heartbeat, validates identity, subscribes telemetry,
-  starts the sole RX owner, and marks only that node connected.
+  starts the sole RX owner and persistent GCS heartbeat, and marks only that
+  node connected.
 - Actions reuse the same session and consume dispatcher state; they never open a
-  parallel command socket.
+  parallel command socket or start/stop the GCS heartbeat.
 - Stop unsubscribes telemetry, stops RX/TX heartbeat threads, closes only the
   selected node's connection, and marks that node offline.
 - A telemetry subscriber exception cannot terminate the RX owner.
+
+## GCS Heartbeat Ownership
+
+GCS heartbeat ownership follows the persistent Vehicle Session Lifecycle, not
+the TAKEOFF/LAND Action Lifecycle:
+
+```text
+VehicleRegistry.start_vehicle
+  -> connect persistent session
+  -> start the sole RX owner
+  -> start persistent per-node GCS heartbeat
+
+TAKEOFF / LAND
+  -> reuse the connected session, RX owner, and heartbeat
+  -> execute commands, wait for ACK, and collect observations only
+
+VehicleRegistry.stop_vehicle / stop_all
+  -> stop GCS heartbeat
+  -> stop RX owner
+  -> close the selected session
+```
+
+Repeated starts are idempotent and each node has a separately named heartbeat
+thread. Heartbeat and `COMMAND_LONG` writes share a per-session TX lock, so one
+node's heartbeat cannot interleave bytes with its own command or block another
+node's independent session.
+
+The real UAV-02 integration run that exposed this issue successfully received
+ARM and TAKEOFF ACKs, reached about 1.8 m, and left UAV-01/UAV-03 grounded. After
+the HTTP action returned, however, action-scoped cleanup stopped the GCS
+heartbeat and UAV-02 landed and disarmed before an explicit LAND request. This
+finding remains integration history and motivates the persistent ownership
+contract above. The post-fix 45-60 second hover followed by explicit LAND must
+still be revalidated in the real three-PX4 environment.
 
 ## Endpoint and identity invariants
 
@@ -108,3 +145,26 @@ names `UAV-01` as the explicit default. The retained
 The historical July harness validation remains useful evidence for PX4/Gazebo
 itself, but it is not substituted for a post-change real Runtime integration
 run.
+
+## Post-fix real three-PX4 validation
+
+Use the existing mapping without introducing a second MAVLink connection:
+
+```text
+UAV-01 -> udpin:127.0.0.1:14540 -> sysid 1
+UAV-02 -> udpin:127.0.0.1:14541 -> sysid 2
+UAV-03 -> udpin:127.0.0.1:14542 -> sysid 3
+```
+
+After Runtime starts all three VehicleHandles, verify their RX and GCS
+heartbeat threads remain alive. Send a Runtime TAKEOFF to UAV-02 with target
+altitude 2.0 m and `auto_land=false`. Confirm UAV-02 is armed and reaches at
+least 1.4 m while UAV-01/UAV-03 remain disarmed near the ground.
+
+After the TAKEOFF HTTP action returns, do not run the link-loss gate. Poll
+`/api/telemetry/latest?node_id=UAV-02` and retain snapshots at T+0, T+10, T+30,
+and T+60 seconds. UAV-02 must remain armed and airborne for at least 45-60
+seconds. Only then send an explicit Runtime LAND to UAV-02 and verify an
+accepted LAND ACK followed by altitude returning to ground and `armed=false`.
+Throughout the sequence UAV-01/UAV-03 must remain connected, disarmed, and near
+ground.

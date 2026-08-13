@@ -252,6 +252,24 @@ class Px4SitlBackend:
             return self._preflight_rejection(action, "dependency_missing")
         return None
 
+    def _ensure_persistent_session_ready(self, action: str) -> dict[str, Any] | None:
+        if self.session.status() != "connected":
+            return self._preflight_rejection(
+                action,
+                "persistent_vehicle_session_not_connected",
+            )
+        if not self.session.receive_thread_alive():
+            return self._preflight_rejection(
+                action,
+                "persistent_vehicle_rx_not_running",
+            )
+        if not self.session.heartbeat_thread_alive():
+            return self._preflight_rejection(
+                action,
+                "persistent_gcs_heartbeat_not_running",
+            )
+        return None
+
     def execute_takeoff_smoke(
         self,
         *,
@@ -262,6 +280,9 @@ class Px4SitlBackend:
         threshold_ratio: float = 0.70,
     ) -> dict[str, Any]:
         rejected = self._ensure_sitl_action_allowed("takeoff")
+        if rejected is not None:
+            return rejected
+        rejected = self._ensure_persistent_session_ready("takeoff")
         if rejected is not None:
             return rejected
 
@@ -280,9 +301,7 @@ class Px4SitlBackend:
         )
 
         try:
-            self.session.connect(timeout_s=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
             result["heartbeat_connected"] = True
-            self.session.start_gcs_heartbeat()
             result["gcs_heartbeat_started"] = True
 
             interval_ack = self.session.request_local_position_stream(rate_hz=10.0, timeout_s=command_timeout_s)
@@ -327,19 +346,18 @@ class Px4SitlBackend:
         except Exception as exc:
             result["failure_reason"] = f"px4_action_exception:{type(exc).__name__}"
             return self._finish_smoke_result(result)
-        finally:
-            self.session.stop_gcs_heartbeat()
 
     def execute_land_action(self, *, command_timeout_ms: int | None = None) -> dict[str, Any]:
         rejected = self._ensure_sitl_action_allowed("land")
         if rejected is not None:
             return rejected
+        rejected = self._ensure_persistent_session_ready("land")
+        if rejected is not None:
+            return rejected
         command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
         result = self._base_action_result("land")
         try:
-            self.session.connect(timeout_s=max(float(self.config.connect_timeout_ms) / 1000.0, 0.1))
             result["heartbeat_connected"] = True
-            self.session.start_gcs_heartbeat()
             result["gcs_heartbeat_started"] = True
             result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
             if not bool(result["land_ack"].get("timeout")) and int(result["land_ack"].get("result") if result["land_ack"].get("result") is not None else -1) == 0:
@@ -350,8 +368,6 @@ class Px4SitlBackend:
         except Exception as exc:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
             return self._finish_smoke_result(result)
-        finally:
-            self.session.stop_gcs_heartbeat()
 
     def _finish_smoke_result(self, result: dict[str, Any]) -> dict[str, Any]:
         result.update(

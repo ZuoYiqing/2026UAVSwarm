@@ -80,8 +80,10 @@ class MavlinkBackendSession:
     expected_target_system: int | None = None
     expected_target_component: int | None = None
     command_lock: threading.RLock = field(default_factory=threading.RLock)
+    tx_lock: threading.RLock = field(default_factory=threading.RLock)
     _connect_lock: threading.RLock = field(default_factory=threading.RLock)
     _mavutil: Any = None
+    _heartbeat_lock: threading.RLock = field(default_factory=threading.RLock)
     _heartbeat_stop: threading.Event = field(default_factory=threading.Event)
     _heartbeat_thread: threading.Thread | None = None
     _rx_stop: threading.Event = field(default_factory=threading.Event)
@@ -97,6 +99,7 @@ class MavlinkBackendSession:
     _active_ack_waiters: dict[int, int] = field(default_factory=dict)
     _ack_mailbox: dict[int, tuple[int, int]] = field(default_factory=dict)
     last_receive_error: str | None = None
+    last_send_error: str | None = None
     identity_error: dict[str, Any] | None = None
 
     @classmethod
@@ -161,6 +164,7 @@ class MavlinkBackendSession:
                 self.connected = True
                 self.identity_error = None
                 self.last_receive_error = None
+                self.last_send_error = None
                 return conn
             except Exception:
                 close = getattr(conn, "close", None)
@@ -292,46 +296,84 @@ class MavlinkBackendSession:
                 # A telemetry consumer cannot terminate the transport owner.
                 continue
 
-    def start_gcs_heartbeat(self, *, period_s: float = 1.0) -> bool:
-        if self.connection is None:
-            raise RuntimeError("connection_required")
-        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+    def _send_gcs_heartbeat(self) -> None:
+        mavlink = getattr(self._mavutil, "mavlink", None)
+        mav_type = getattr(mavlink, "MAV_TYPE_GCS", 6)
+        autopilot = getattr(mavlink, "MAV_AUTOPILOT_INVALID", 8)
+        mode_flag = getattr(mavlink, "MAV_MODE_FLAG_CUSTOM_MODE_ENABLED", 1)
+        state = getattr(mavlink, "MAV_STATE_ACTIVE", 4)
+        with self.tx_lock:
+            connection = self.connection
+            if connection is None or not self.connected:
+                raise RuntimeError("connection_required")
+            connection.mav.heartbeat_send(
+                mav_type,
+                autopilot,
+                0,
+                0,
+                state,
+                mode_flag,
+            )
+
+    def start_gcs_heartbeat(
+        self,
+        *,
+        period_s: float = 1.0,
+        thread_name: str | None = None,
+    ) -> bool:
+        """Start the persistent per-session heartbeat owner idempotently."""
+        with self._heartbeat_lock:
+            if self.connection is None or not self.connected:
+                raise RuntimeError("connection_required")
+            if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+                return False
+            self._heartbeat_stop.clear()
+            self.last_send_error = None
+            # Prove that the transport can send before reporting the vehicle
+            # online. A startup send failure is therefore fail-closed.
+            self._send_gcs_heartbeat()
+
+            def _loop() -> None:
+                while not self._heartbeat_stop.wait(max(period_s, 0.05)):
+                    try:
+                        self._send_gcs_heartbeat()
+                    except Exception as exc:
+                        self.last_send_error = f"{type(exc).__name__}: {exc}"
+                        self.connected = False
+                        break
+
+            thread = threading.Thread(
+                target=_loop,
+                name=thread_name or f"px4-gcs-heartbeat-sysid-{self.target_system}",
+                daemon=True,
+            )
+            thread.start()
+            self._heartbeat_thread = thread
             return True
-        self._heartbeat_stop.clear()
-
-        def _loop() -> None:
-            mavlink = getattr(self._mavutil, "mavlink", None)
-            mav_type = getattr(mavlink, "MAV_TYPE_GCS", 6)
-            autopilot = getattr(mavlink, "MAV_AUTOPILOT_INVALID", 8)
-            mode_flag = getattr(mavlink, "MAV_MODE_FLAG_CUSTOM_MODE_ENABLED", 1)
-            state = getattr(mavlink, "MAV_STATE_ACTIVE", 4)
-            while not self._heartbeat_stop.is_set():
-                self.connection.mav.heartbeat_send(mav_type, autopilot, 0, 0, state, mode_flag)
-                self._heartbeat_stop.wait(max(period_s, 0.05))
-
-        self._heartbeat_thread = threading.Thread(target=_loop, name="px4-gcs-heartbeat", daemon=True)
-        self._heartbeat_thread.start()
-        return True
 
     def stop_gcs_heartbeat(self, *, join_timeout_s: float = 2.0) -> None:
-        self._heartbeat_stop.set()
-        thread = self._heartbeat_thread
-        if thread is not None:
-            thread.join(timeout=join_timeout_s)
-        self._heartbeat_thread = None
+        with self._heartbeat_lock:
+            self._heartbeat_stop.set()
+            thread = self._heartbeat_thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=join_timeout_s)
+            self._heartbeat_thread = None
 
     def heartbeat_thread_alive(self) -> bool:
-        return self._heartbeat_thread is not None and self._heartbeat_thread.is_alive()
+        with self._heartbeat_lock:
+            return self._heartbeat_thread is not None and self._heartbeat_thread.is_alive()
 
     def close(self) -> None:
         self.stop_gcs_heartbeat()
         self.stop_receive_loop()
-        close = getattr(self.connection, "close", None)
-        if callable(close):
-            close()
-        with self._rx_condition:
+        with self.tx_lock:
+            connection = self.connection
+            close = getattr(connection, "close", None)
+            if callable(close):
+                close()
             self.connected = False
             self.connection = None
+        with self._rx_condition:
             self._active_ack_waiters.clear()
             self._ack_mailbox.clear()
             self._subscribers.clear()
@@ -346,13 +388,17 @@ class MavlinkBackendSession:
             raise RuntimeError("connection_required")
         p = list(params or [])[:7]
         p.extend([0.0] * (7 - len(p)))
-        self.connection.mav.command_long_send(
-            self.target_system,
-            self.target_component,
-            int(command),
-            0,
-            p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-        )
+        with self.tx_lock:
+            connection = self.connection
+            if connection is None or not self.connected:
+                raise RuntimeError("connection_required")
+            connection.mav.command_long_send(
+                self.target_system,
+                self.target_component,
+                int(command),
+                0,
+                p[0], p[1], p[2], p[3], p[4], p[5], p[6],
+            )
 
     def _begin_ack_wait(self, command: int) -> int:
         with self._rx_condition:

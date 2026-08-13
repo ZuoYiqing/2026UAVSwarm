@@ -200,9 +200,18 @@ def test_temporary_probe_validates_identity_and_always_closes(monkeypatch) -> No
 class _FakePx4ActionSession:
     def __init__(self) -> None:
         self.stopped = False
+        self.connected = True
+        self.rx_alive = True
+        self.heartbeat_alive = True
 
     def status(self) -> str:
-        return "not_connected"
+        return "connected" if self.connected else "not_connected"
+
+    def receive_thread_alive(self) -> bool:
+        return self.rx_alive
+
+    def heartbeat_thread_alive(self) -> bool:
+        return self.heartbeat_alive
 
     def connect(self, *, timeout_s: float):
         return object()
@@ -258,4 +267,21 @@ def test_px4_sitl_takeoff_smoke_result_contains_ack_and_threshold_fields(monkeyp
     assert result["threshold_altitude_m"] == 2.1
     assert result["threshold_reached"] is True
     assert result["result"] == "pass"
-    assert session.stopped is True
+    assert session.stopped is False
+    assert session.heartbeat_thread_alive() is True
+
+
+def test_takeoff_and_land_actions_never_stop_persistent_heartbeat(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14541")
+    session = _FakePx4ActionSession()
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    takeoff = backend.execute_takeoff_smoke(altitude_m=2.0, auto_land=False)
+    landed = backend.execute_land_action()
+
+    assert takeoff["result"] == landed["result"] == "pass"
+    assert session.stopped is False
+    assert session.connected is True
+    assert session.receive_thread_alive() is True
+    assert session.heartbeat_thread_alive() is True

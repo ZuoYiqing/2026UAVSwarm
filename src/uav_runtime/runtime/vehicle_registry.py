@@ -330,11 +330,26 @@ class VehicleRegistry:
         from uav_runtime.adapters.px4_telemetry_collector import Px4TelemetryCollector
 
         with handle.state_lock:
-            if handle.start_in_progress or handle.collector is not None:
+            if handle.start_in_progress:
                 return
+            if handle.collector is not None:
+                if (
+                    handle.session.connected
+                    and handle.session.receive_thread_alive()
+                    and handle.session.heartbeat_thread_alive()
+                ):
+                    return
+                stale_collector = handle.collector
+                handle.collector = None
+                try:
+                    stale_collector.stop()
+                finally:
+                    with handle.command_lock:
+                        handle.session.close()
             handle.start_in_progress = True
             handle.runtime_state.connection_status = "connecting"
             handle.runtime_state.last_error = None
+            collector = None
             try:
                 with handle.command_lock:
                     handle.session.connect(
@@ -348,6 +363,11 @@ class VehicleRegistry:
                 )
                 handle.collector = collector
                 collector.start()
+                handle.session.start_gcs_heartbeat(
+                    thread_name=f"px4-gcs-heartbeat-{node_id}"
+                )
+                if not handle.session.heartbeat_thread_alive():
+                    raise RuntimeError("gcs_heartbeat_not_running")
                 heartbeat_at = _utc_now()
                 handle.telemetry.connected = True
                 handle.telemetry.system_id = handle.session.target_system
@@ -360,7 +380,15 @@ class VehicleRegistry:
                 handle.runtime_state.last_heartbeat_at = heartbeat_at
             except Exception as exc:
                 handle.collector = None
-                handle.session.close()
+                if collector is not None:
+                    try:
+                        collector.stop()
+                    except Exception:
+                        # Preserve the lifecycle startup failure while close()
+                        # remains the authoritative transport cleanup.
+                        pass
+                with handle.command_lock:
+                    handle.session.close()
                 handle.runtime_state.connected = False
                 handle.runtime_state.stale = True
                 handle.runtime_state.connection_status = "offline"
@@ -391,8 +419,11 @@ class VehicleRegistry:
         # sequence. It must not race an ACK wait, but it also must not block any
         # unrelated vehicle because each handle owns an independent lock.
         with handle.command_lock:
+            # Session.close() is the selected node's single heartbeat/RX/
+            # connection lifecycle terminator.
             handle.session.close()
         with handle.state_lock:
+            handle.runtime_state.active_action = None
             handle.runtime_state.connected = False
             handle.runtime_state.stale = True
             handle.runtime_state.connection_status = "offline"
@@ -485,6 +516,19 @@ class VehicleRegistry:
     def refresh_state(self, handle: VehicleHandle) -> VehicleRuntimeState:
         with handle.state_lock:
             state = handle.runtime_state
+            if handle.collector is not None and (
+                not handle.session.connected
+                or not handle.session.heartbeat_thread_alive()
+            ):
+                state.connected = False
+                state.stale = True
+                state.connection_status = "offline"
+                if handle.session.last_send_error:
+                    state.last_error = (
+                        "gcs_heartbeat_send_failed:"
+                        f"{handle.session.last_send_error}"
+                    )
+                return state
             if handle.telemetry_received_at is None:
                 state.telemetry_freshness_ms = None
                 state.stale = True

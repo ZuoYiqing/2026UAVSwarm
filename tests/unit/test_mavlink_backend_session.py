@@ -51,15 +51,77 @@ class _FakeConnection:
 def test_gcs_heartbeat_manager_start_stop_does_not_leave_thread() -> None:
     session = MavlinkBackendSession(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
     session.connection = _FakeConnection()
+    session.connected = True
     session._mavutil = type("FakeMavutil", (), {"mavlink": object()})()
 
-    assert session.start_gcs_heartbeat(period_s=0.01) is True
+    assert session.start_gcs_heartbeat(
+        period_s=0.01,
+        thread_name="px4-gcs-heartbeat-UAV-02",
+    ) is True
     assert session.heartbeat_thread_alive() is True
+    thread = session._heartbeat_thread
+    assert thread is not None
+    assert thread.name == "px4-gcs-heartbeat-UAV-02"
+    assert session.start_gcs_heartbeat(period_s=0.01) is False
+    assert session._heartbeat_thread is thread
 
     session.stop_gcs_heartbeat(join_timeout_s=1.0)
 
     assert session.heartbeat_thread_alive() is False
     assert session.connection.mav.heartbeats >= 1
+
+
+def test_heartbeat_and_command_writes_share_per_session_tx_lock() -> None:
+    heartbeat_entered = threading.Event()
+    release_heartbeat = threading.Event()
+    command_attempted = threading.Event()
+    command_sent = threading.Event()
+
+    class SerializedMav(_FakeMav):
+        def heartbeat_send(self, *args) -> None:
+            del args
+            heartbeat_entered.set()
+            assert release_heartbeat.wait(timeout=1)
+
+        def command_long_send(self, *args) -> None:
+            del args
+            command_sent.set()
+
+    connection = _FakeConnection()
+    connection.mav = SerializedMav()
+    session = MavlinkBackendSession(
+        backend_mode="sitl",
+        backend_enabled=True,
+        transport_endpoint="udp:2",
+    )
+    session.connection = connection
+    session.connected = True
+    session._mavutil = type("FakeMavutil", (), {"mavlink": object()})()
+
+    heartbeat_start = threading.Thread(
+        target=session.start_gcs_heartbeat,
+        kwargs={"period_s": 1.0},
+    )
+    heartbeat_start.start()
+    assert heartbeat_entered.wait(timeout=1)
+
+    def send_command() -> None:
+        command_attempted.set()
+        session.send_command_long(22)
+
+    command = threading.Thread(target=send_command)
+    command.start()
+    assert command_attempted.wait(timeout=1)
+    assert command_sent.wait(timeout=0.05) is False
+
+    release_heartbeat.set()
+    heartbeat_start.join(timeout=1)
+    command.join(timeout=1)
+
+    assert not heartbeat_start.is_alive()
+    assert not command.is_alive()
+    assert command_sent.is_set()
+    session.close()
 
 
 def test_ack_result_name_mapping_is_stable() -> None:

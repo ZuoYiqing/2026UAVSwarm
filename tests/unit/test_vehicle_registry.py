@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from uav_runtime.adapters.px4_telemetry import apply_mavlink_message, new_snapshot
+from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.runtime.vehicle_registry import VehicleConfig, VehicleRegistry, VehicleRegistryError
 
 
@@ -17,14 +18,69 @@ class FakeSession:
         self.connected = False
         self.target_system = config.target_system
         self.target_component = config.target_component
+        self.connect_calls = 0
+        self.rx_alive = False
+        self.rx_start_calls = 0
+        self.heartbeat_alive = False
+        self.heartbeat_start_calls = 0
+        self.heartbeat_stop_calls = 0
+        self.heartbeat_thread_names: list[str | None] = []
+        self.last_send_error: str | None = None
 
     def connect(self, *, timeout_s: float) -> object:
         del timeout_s
+        self.connect_calls += 1
         self.connected = True
         return object()
 
+    def status(self) -> str:
+        return "connected" if self.connected else "not_connected"
+
+    def start_receive_loop(self, *, thread_name: str | None = None) -> bool:
+        del thread_name
+        if self.rx_alive:
+            return False
+        self.rx_start_calls += 1
+        self.rx_alive = True
+        return True
+
+    def receive_thread_alive(self) -> bool:
+        return self.rx_alive
+
+    def start_gcs_heartbeat(self, *, thread_name: str | None = None) -> bool:
+        if self.heartbeat_alive:
+            return False
+        self.heartbeat_start_calls += 1
+        self.heartbeat_thread_names.append(thread_name)
+        self.heartbeat_alive = True
+        return True
+
+    def heartbeat_thread_alive(self) -> bool:
+        return self.heartbeat_alive
+
+    def stop_gcs_heartbeat(self) -> None:
+        self.heartbeat_stop_calls += 1
+        self.heartbeat_alive = False
+
+    def request_local_position_stream(self, **_: object) -> dict[str, object]:
+        return {"result": 0, "timeout": False}
+
+    def arm(self, **_: object) -> dict[str, object]:
+        return {"result": 0, "timeout": False}
+
+    def takeoff(self, **_: object) -> dict[str, object]:
+        return {"result": 0, "timeout": False, "local_position_cursor": 0}
+
+    def observe_local_position_altitude(self, **_: object) -> dict[str, object]:
+        return {"max_altitude_m": 2.0, "threshold_reached": True}
+
+    def land(self, **_: object) -> dict[str, object]:
+        return {"result": 0, "timeout": False}
+
     def close(self) -> None:
         self.closed += 1
+        self.stop_gcs_heartbeat()
+        self.rx_alive = False
         self.connected = False
 
 
@@ -43,6 +99,33 @@ def registry(clock=lambda: 10.0) -> VehicleRegistry:  # type: ignore[no-untyped-
 
 def configs() -> list[VehicleConfig]:
     return [VehicleConfig(node_id=f"UAV-0{i}", endpoint=f"udp:{i}", system_id=i) for i in range(1, 4)]
+
+
+def install_lifecycle_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    class LifecycleCollector:
+        def __init__(self, store: object, **kwargs: object) -> None:
+            del store
+            self.session = kwargs["session"]
+            self.node_id = str(kwargs["node_id"])
+            self.running = False
+
+        def start(self) -> bool:
+            self.session.start_receive_loop(
+                thread_name=f"mavlink-rx-{self.node_id}"
+            )
+            self.running = True
+            return True
+
+        def stop(self) -> None:
+            self.running = False
+
+        def is_running(self) -> bool:
+            return self.running and self.session.receive_thread_alive()
+
+    monkeypatch.setattr(
+        "uav_runtime.adapters.px4_telemetry_collector.Px4TelemetryCollector",
+        LifecycleCollector,
+    )
 
 
 def test_three_nodes_have_independent_sessions_and_stop_isolated() -> None:
@@ -255,7 +338,9 @@ def test_concurrent_start_creates_only_one_running_collector(
 
     class FakeCollector:
         def __init__(self, store: object, **kwargs: object) -> None:
+            del store
             self.running = False
+            self.session = kwargs["session"]
             instances.append(self)
 
         def start(self) -> bool:
@@ -263,6 +348,7 @@ def test_concurrent_start_creates_only_one_running_collector(
             if len(starts) == 1:
                 first_start_entered.set()
                 assert allow_first_start.wait(timeout=2)
+            self.session.start_receive_loop(thread_name="mavlink-rx-UAV-01")
             self.running = True
             return True
 
@@ -324,3 +410,134 @@ def test_stop_waits_only_for_selected_node_command_lock() -> None:
         unrelated.join(timeout=1)
     assert not blocked.is_alive()
     assert second.session.closed == 1
+
+
+def test_vehicle_lifecycle_owns_heartbeat_across_takeoff_and_land(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_lifecycle_collector(monkeypatch)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+    reg = registry()
+    handle = reg.register_vehicle(configs()[1])
+
+    reg.start_vehicle("UAV-02")
+
+    assert handle.session.connected is True
+    assert handle.session.receive_thread_alive() is True
+    assert handle.session.heartbeat_thread_alive() is True
+    assert handle.session.heartbeat_thread_names == ["px4-gcs-heartbeat-UAV-02"]
+
+    backend = Px4SitlBackend(handle.config.to_mavlink_config(), handle.session)  # type: ignore[arg-type]
+    takeoff = backend.execute_takeoff_smoke(altitude_m=2.0, auto_land=False)
+    assert takeoff["result"] == "pass"
+    assert handle.session.connected is True
+    assert handle.session.receive_thread_alive() is True
+    assert handle.session.heartbeat_thread_alive() is True
+    assert handle.session.heartbeat_stop_calls == 0
+
+    landed = backend.execute_land_action()
+    assert landed["result"] == "pass"
+    assert handle.session.connected is True
+    assert handle.session.receive_thread_alive() is True
+    assert handle.session.heartbeat_thread_alive() is True
+    assert handle.session.heartbeat_stop_calls == 0
+
+    reg.stop_vehicle("UAV-02")
+    assert handle.session.heartbeat_thread_alive() is False
+    assert handle.session.receive_thread_alive() is False
+    assert handle.session.connected is False
+
+
+def test_three_node_heartbeat_and_rx_stop_are_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_lifecycle_collector(monkeypatch)
+    reg = registry()
+    handles = [reg.register_vehicle(config) for config in configs()]
+    reg.start_all()
+
+    reg.stop_vehicle("UAV-02")
+
+    assert [handle.session.heartbeat_thread_alive() for handle in handles] == [
+        True,
+        False,
+        True,
+    ]
+    assert [handle.session.receive_thread_alive() for handle in handles] == [
+        True,
+        False,
+        True,
+    ]
+    assert [handle.session.connected for handle in handles] == [True, False, True]
+    reg.stop_all()
+
+
+def test_repeated_start_vehicle_is_idempotent_for_all_transport_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_lifecycle_collector(monkeypatch)
+    reg = registry()
+    handle = reg.register_vehicle(configs()[1])
+
+    reg.start_vehicle("UAV-02")
+    collector = handle.collector
+    reg.start_vehicle("UAV-02")
+
+    assert handle.collector is collector
+    assert handle.session.connect_calls == 1
+    assert handle.session.rx_start_calls == 1
+    assert handle.session.heartbeat_start_calls == 1
+    reg.stop_vehicle("UAV-02")
+
+
+def test_heartbeat_start_failure_fails_closed_and_cleans_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_lifecycle_collector(monkeypatch)
+
+    class FailingHeartbeatSession(FakeSession):
+        def start_gcs_heartbeat(self, *, thread_name: str | None = None) -> bool:
+            del thread_name
+            raise OSError("heartbeat tx failed")
+
+    reg = VehicleRegistry(
+        scene_id="scene",
+        session_factory=FailingHeartbeatSession,
+        clock=lambda: 10.0,
+    )
+    handle = reg.register_vehicle(configs()[1])
+
+    reg.start_vehicle("UAV-02")
+
+    state = handle.runtime_state
+    assert handle.collector is None
+    assert handle.session.closed == 1
+    assert handle.session.connected is False
+    assert handle.session.receive_thread_alive() is False
+    assert handle.session.heartbeat_thread_alive() is False
+    assert state.connected is False
+    assert state.connection_status == "offline"
+    assert state.last_error == (
+        "vehicle_start_failed:OSError:heartbeat tx failed"
+    )
+
+
+def test_dead_persistent_heartbeat_is_not_reported_online(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_lifecycle_collector(monkeypatch)
+    reg = registry()
+    handle = reg.register_vehicle(configs()[1])
+    reg.start_vehicle("UAV-02")
+    handle.session.heartbeat_alive = False
+    handle.session.connected = False
+    handle.session.last_send_error = "OSError: heartbeat tx failed"
+
+    state = reg.refresh_state(handle)
+
+    assert state.connected is False
+    assert state.stale is True
+    assert state.connection_status == "offline"
+    assert state.last_error == (
+        "gcs_heartbeat_send_failed:OSError: heartbeat tx failed"
+    )
