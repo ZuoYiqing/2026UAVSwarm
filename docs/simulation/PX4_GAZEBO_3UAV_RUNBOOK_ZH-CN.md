@@ -1,5 +1,27 @@
 # PX4 / Gazebo 三机运行手册
 
+## Runtime transport / safe stop addendum (v0.1.1, 2026-08-11)
+
+Runtime directly consumes `config/three_uav_sitl.json` and creates one shared
+MAVLink session/RX owner per vehicle. Do not start a second telemetry listener
+on the same `14540/14541/14542` endpoint. Finish the short-lived health command
+before starting Runtime.
+
+The stopper no longer trusts PID/PGID alone. Harness state contains `/proc`
+start time, executable, cmdline, cwd, node and process group. If any live record
+does not match, stop exits with `stale_state` or `process_identity_mismatch`,
+preserves state for inspection, and sends no TERM/KILL. Never replace this with
+`pkill` or `killall`.
+
+Runtime integration order:
+
+1. validate the manifest;
+2. start the harness and run health to completion;
+3. start Runtime and confirm three shared sessions are connected;
+4. query vehicles, per-node telemetry, and the full snapshot;
+5. take off/land UAV-02, observe landing, and verify UAV-01/UAV-03 stay passive;
+6. stop Runtime first, then use the identity-checked harness stopper.
+
 ## 1. 边界
 
 本 Harness 只管理本地 Gazebo + PX4 SITL 三机仿真。它不修改 Agent Planner、
@@ -153,6 +175,61 @@ pkill -f python
 pkill -f gz
 killall
 ```
+
+### 状态文件与安全停止机制
+
+`.runtime/px4_gazebo/harness_state.json` 是一次 Harness 运行的进程所有权凭据，
+不是普通 PID 列表。每次 `start` 都生成新的 `run_id`，状态顶层记录 `run_id`、
+`started_at`、manifest、PX4/Gazebo 版本和本次启动的 process entries。每个 entry
+包含便于运维查看的 `pid`、`pgid`、`node_id`、`runtime_dir`，以及从真实 Linux
+`/proc/<pid>/` 采集的：
+
+```json
+{
+  "process_identity": {
+    "pid": 12345,
+    "pgid": 12345,
+    "proc_start_time_ticks": 987654321,
+    "executable": "/home/user/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+    "cmdline": [".../px4", "-i", "0", "-d", ".../etc"],
+    "cwd": "/mnt/d/2026UAVSwarm/.runtime/px4_gazebo/UAV-01",
+    "run_id": "本次启动的唯一标识"
+  }
+}
+```
+
+PID 和 PGID 都可能在旧进程退出后被 Linux 复用，单独匹配它们不能证明进程属于
+本 Harness。`stop` 在发送信号前重新读取 `/proc/<pid>/stat` field 22、`exe`、
+`cmdline`、`cwd`、当前 PGID，并检查进程环境中的 Harness `run_id`。`stat` 的
+`comm` 允许包含空格和括号，解析器不会对整行直接 `split()`。
+
+停止判定分为四类：
+
+- `match`：全部身份字段匹配，才允许向已记录 PGID 发送信号；
+- `process_exited`：PID 已不存在，视为幂等成功，不发送信号；
+- `stale_state`：状态缺字段、内部矛盾或 `/proc` 无法可靠读取，拒绝发送信号；
+- `process_identity_mismatch`：PID 存在但启动时间、exe、cmdline、cwd、run_id 或
+  PGID 任一不符，判定为 PID 复用或非 Harness 进程，拒绝发送信号。
+
+正常流程仍是 `SIGTERM -> 有界等待 -> SIGKILL`。等待期间进程可能退出，PID 也
+可能被重新占用，所以 `SIGKILL` 前必须再次完整校验身份；复查不匹配时禁止升级
+信号。只有所有记录都已确认退出，才删除各运行目录中的 `px4.pid` 和
+`harness_state.json`。身份不匹配时保留状态文件，避免丢失诊断证据。
+
+出现 `stale_state` 或 `process_identity_mismatch` 时，先停止 Runtime，再只读检查：
+
+```bash
+cat .runtime/px4_gazebo/harness_state.json
+ps -o pid,pgid,lstart,args -p <PID>
+readlink /proc/<PID>/exe
+readlink /proc/<PID>/cwd
+tr '\0' ' ' < /proc/<PID>/cmdline
+```
+
+确认 PID 已经退出时可再次执行 Harness `stop`，它会幂等清理合法过期状态。若 PID
+仍存在但身份不匹配，不要删除状态后重试，也不要用 `pkill`、`killall` 或模糊
+`pgrep | kill` 绕过校验；应先确认该进程的真实所有者，再由运维人员处理并归档
+诊断状态。无边界进程名匹配可能停止 Runtime、测试进程或同一 WSL 中的其他任务。
 
 ## 9. 日志
 

@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,15 @@ DEFAULT_MANIFEST_PATH = HARNESS_DIR / "config" / "three_uav_sitl.json"
 RUNTIME_ROOT = REPO_ROOT / ".runtime" / "px4_gazebo"
 STATE_PATH = RUNTIME_ROOT / "harness_state.json"
 MINIMUM_VEHICLE_COUNT = 3
+HARNESS_RUN_ID_ENV = "UAV_SWARM_HARNESS_RUN_ID"
+
+IDENTITY_OBSERVED = "identity_observed"
+IDENTITY_MATCH = "match"
+PROCESS_EXITED = "process_exited"
+STALE_STATE = "stale_state"
+PROCESS_IDENTITY_MISMATCH = "process_identity_mismatch"
+SIGTERM = int(getattr(signal, "SIGTERM", 15))
+SIGKILL = int(getattr(signal, "SIGKILL", 9))
 
 
 class HarnessError(RuntimeError):
@@ -54,6 +64,79 @@ class GazeboPose:
                 self.yaw_rad,
             )
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessIdentity:
+    """Linux process identity captured from procfs for one harness run."""
+
+    pid: int
+    pgid: int
+    proc_start_time_ticks: int
+    executable: str
+    cmdline: tuple[str, ...]
+    cwd: str
+    run_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "proc_start_time_ticks": self.proc_start_time_ticks,
+            "executable": self.executable,
+            "cmdline": list(self.cmdline),
+            "cwd": self.cwd,
+            "run_id": self.run_id,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ProcessIdentity:
+        cmdline = value.get("cmdline")
+        if not isinstance(cmdline, list) or not cmdline:
+            raise ValueError("cmdline must be a non-empty list")
+        run_id = value.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id must be a non-empty string")
+        return cls(
+            pid=int(value["pid"]),
+            pgid=int(value["pgid"]),
+            proc_start_time_ticks=int(value["proc_start_time_ticks"]),
+            executable=str(value["executable"]),
+            cmdline=tuple(str(part) for part in cmdline),
+            cwd=str(value["cwd"]),
+            run_id=run_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessIdentityReadResult:
+    code: str
+    identity: ProcessIdentity | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessIdentityDecision:
+    code: str
+    node_id: str | None
+    pid: int | None
+    signal_allowed: bool
+    mismatches: tuple[str, ...] = ()
+    expected: ProcessIdentity | None = None
+    observed: ProcessIdentity | None = None
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "node_id": self.node_id,
+            "pid": self.pid,
+            "signal_allowed": self.signal_allowed,
+            "mismatches": list(self.mismatches),
+            "expected": self.expected.to_dict() if self.expected else None,
+            "observed": self.observed.to_dict() if self.observed else None,
+            "detail": self.detail,
+        }
 
 
 def utc_now() -> str:
@@ -156,11 +239,16 @@ def validate_manifest(
     for vehicle in vehicles:
         instance = int(vehicle["px4_instance"])
         system_id = int(vehicle["system_id"])
+        component_id = int(vehicle.get("component_id", 1))
         expected_model = f"{str(manifest['px4_sim_model']).removeprefix('gz_')}_{instance}"
         if system_id != instance + 1:
             raise HarnessError(
                 f"{vehicle['node_id']} system_id must equal px4_instance + 1 "
                 f"for this PX4 build"
+            )
+        if not 1 <= component_id <= 255:
+            raise HarnessError(
+                f"{vehicle['node_id']} component_id must be between 1 and 255"
             )
         if vehicle["gazebo_model_name"] != expected_model:
             raise HarnessError(
@@ -219,7 +307,48 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
     manifest = load_json(path.resolve())
     scene = load_json(resolve_repo_path(str(manifest["scene_path"])))
     validate_manifest(manifest, scene=scene)
+    runtime_config_path = REPO_ROOT / "config" / "vehicles.sitl.json"
+    if path.resolve() == DEFAULT_MANIFEST_PATH.resolve() and runtime_config_path.exists():
+        validate_runtime_mapping(manifest, load_json(runtime_config_path))
     return manifest
+
+
+def runtime_mapping_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Generate the compatibility Runtime mapping from the manifest truth."""
+    return [
+        {
+            "node_id": row["node_id"],
+            "endpoint": row["command_endpoint"],
+            "telemetry_endpoint": row["telemetry_endpoint"],
+            "system_id": int(row["system_id"]),
+            "component_id": int(row.get("component_id", 1)),
+            "enabled": bool(row.get("enabled", True)),
+        }
+        for row in manifest["vehicles"]
+    ]
+
+
+def validate_runtime_mapping(
+    manifest: dict[str, Any], runtime_config: dict[str, Any]
+) -> None:
+    """Reject drift in the retained generated compatibility JSON."""
+    expected = runtime_mapping_rows(manifest)
+    actual = [
+        {
+            key: row.get(key)
+            for key in (
+                "node_id",
+                "endpoint",
+                "telemetry_endpoint",
+                "system_id",
+                "component_id",
+                "enabled",
+            )
+        }
+        for row in runtime_config.get("vehicles", [])
+    ]
+    if runtime_config.get("scene_id") != manifest.get("scene_id") or actual != expected:
+        raise HarnessError("runtime vehicle mapping drifted from simulation manifest")
 
 
 def mapping_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -309,8 +438,10 @@ def read_state() -> dict[str, Any] | None:
         return None
     try:
         return load_json(STATE_PATH)
-    except (OSError, json.JSONDecodeError, HarnessError):
-        return None
+    except (OSError, json.JSONDecodeError, HarnessError) as exc:
+        raise HarnessError(
+            f"{STALE_STATE}: invalid harness state at {STATE_PATH}: {exc}"
+        ) from exc
 
 
 def gazebo_models() -> set[str]:
@@ -405,10 +536,26 @@ def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
         raise HarnessError(f"Gazebo world missing: {world_path}")
 
     current_state = read_state()
-    if current_state and any(
-        process_alive(int(item["pid"])) for item in current_state.get("processes", [])
-    ):
-        raise HarnessError("this harness is already running; stop it first")
+    if current_state:
+        processes = list(current_state.get("processes", []))
+        identities = _validate_processes(
+            processes,
+            run_id=str(current_state.get("run_id", "")),
+        )
+        unsafe = [
+            row
+            for row in identities
+            if row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+        ]
+        if unsafe:
+            raise HarnessError(
+                f"{unsafe[0].code}: "
+                + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
+            )
+        if any(row.code == IDENTITY_MATCH for row in identities):
+            raise HarnessError("this harness is already running; stop it first")
+        if identities and all(row.code == PROCESS_EXITED for row in identities):
+            _cleanup_harness_state(processes)
     foreign_px4 = _foreign_px4_pids()
     if foreign_px4:
         raise HarnessError(
@@ -514,32 +661,364 @@ def _write_state(state: dict[str, Any]) -> None:
     temporary.replace(STATE_PATH)
 
 
-def _terminate_process_groups(processes: list[dict[str, Any]]) -> None:
-    for item in reversed(processes):
-        pgid = int(item.get("pgid") or item["pid"])
+def _parse_proc_start_time(stat_text: str) -> int:
+    """Return proc stat field 22 without splitting the parenthesized comm field."""
+    comm_end = stat_text.rfind(") ")
+    if comm_end < 0:
+        raise ValueError("missing proc stat comm terminator")
+    # The tail starts at field 3 (state), so field 22 is tail index 19.
+    tail = stat_text[comm_end + 2 :].split()
+    if len(tail) <= 19:
+        raise ValueError("proc stat does not contain field 22")
+    return int(tail[19])
+
+
+def _proc_run_id(environ: bytes) -> str:
+    prefix = f"{HARNESS_RUN_ID_ENV}=".encode("utf-8")
+    for entry in environ.split(b"\0"):
+        if entry.startswith(prefix):
+            return entry[len(prefix) :].decode("utf-8", errors="strict")
+    return ""
+
+
+def read_process_identity(
+    pid: int, *, proc_root: Path = Path("/proc")
+) -> ProcessIdentityReadResult:
+    """Read one coherent identity snapshot from Linux procfs."""
+    process_root = proc_root / str(pid)
+    try:
+        first_start_time = _parse_proc_start_time(
+            (process_root / "stat").read_text(encoding="utf-8")
+        )
+        cmdline = tuple(
+            part.decode("utf-8", errors="surrogateescape")
+            for part in (process_root / "cmdline").read_bytes().split(b"\0")
+            if part
+        )
+        if not cmdline:
+            raise ValueError("process cmdline is empty")
+        executable = os.readlink(process_root / "exe")
+        cwd = os.readlink(process_root / "cwd")
+        run_id = _proc_run_id((process_root / "environ").read_bytes())
+        pgid = os.getpgid(pid)
+        second_start_time = _parse_proc_start_time(
+            (process_root / "stat").read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, ProcessLookupError):
+        return ProcessIdentityReadResult(code=PROCESS_EXITED)
+    except (OSError, UnicodeError, ValueError) as exc:
+        return ProcessIdentityReadResult(
+            code=STALE_STATE,
+            detail=f"proc_identity_read_failed:{type(exc).__name__}:{exc}",
+        )
+    if first_start_time != second_start_time:
+        return ProcessIdentityReadResult(
+            code=STALE_STATE,
+            detail="process_changed_while_reading_procfs",
+        )
+    return ProcessIdentityReadResult(
+        code=IDENTITY_OBSERVED,
+        identity=ProcessIdentity(
+            pid=pid,
+            pgid=pgid,
+            proc_start_time_ticks=first_start_time,
+            executable=executable,
+            cmdline=cmdline,
+            cwd=cwd,
+            run_id=run_id,
+        ),
+    )
+
+
+def compare_process_identity(
+    expected: ProcessIdentity, observed: ProcessIdentity
+) -> tuple[str, ...]:
+    fields = (
+        "pid",
+        "pgid",
+        "proc_start_time_ticks",
+        "executable",
+        "cmdline",
+        "cwd",
+        "run_id",
+    )
+    return tuple(
+        field for field in fields if getattr(expected, field) != getattr(observed, field)
+    )
+
+
+def _runtime_dir_is_safe(runtime_dir: str, expected_cwd: str) -> bool:
+    try:
+        resolved = Path(runtime_dir).resolve()
+        resolved.relative_to(RUNTIME_ROOT.resolve())
+    except (OSError, ValueError):
+        return False
+    return resolved == Path(expected_cwd).resolve()
+
+
+def validate_process_identity(
+    item: dict[str, Any],
+    *,
+    run_id: str,
+    identity_reader: Callable[[int], ProcessIdentityReadResult] | None = None,
+) -> ProcessIdentityDecision:
+    """Decide whether one persisted process entry may receive a signal."""
+    node_id = str(item.get("node_id")) if item.get("node_id") else None
+    try:
+        payload = item["process_identity"]
+        if not isinstance(payload, dict):
+            raise ValueError("process_identity must be an object")
+        expected = ProcessIdentity.from_dict(payload)
+        pid = int(item["pid"])
+        pgid = int(item["pgid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        return ProcessIdentityDecision(
+            code=STALE_STATE,
+            node_id=node_id,
+            pid=None,
+            signal_allowed=False,
+            detail=f"invalid_process_entry:{exc}",
+        )
+
+    state_mismatches: list[str] = []
+    if not node_id:
+        state_mismatches.append("node_id")
+    if item.get("run_id") != run_id or expected.run_id != run_id:
+        state_mismatches.append("run_id")
+    if pid != expected.pid:
+        state_mismatches.append("pid")
+    if pgid != expected.pgid:
+        state_mismatches.append("pgid")
+    if not _runtime_dir_is_safe(str(item.get("runtime_dir", "")), expected.cwd):
+        state_mismatches.append("runtime_dir")
+    if state_mismatches:
+        return ProcessIdentityDecision(
+            code=STALE_STATE,
+            node_id=node_id,
+            pid=pid,
+            signal_allowed=False,
+            mismatches=tuple(state_mismatches),
+            expected=expected,
+            detail="persisted_state_is_internally_inconsistent",
+        )
+
+    reader = identity_reader or read_process_identity
+    read_result = reader(pid)
+    if read_result.code == PROCESS_EXITED:
+        return ProcessIdentityDecision(
+            code=PROCESS_EXITED,
+            node_id=node_id,
+            pid=pid,
+            signal_allowed=False,
+            expected=expected,
+        )
+    if read_result.code != IDENTITY_OBSERVED or read_result.identity is None:
+        return ProcessIdentityDecision(
+            code=STALE_STATE,
+            node_id=node_id,
+            pid=pid,
+            signal_allowed=False,
+            expected=expected,
+            detail=read_result.detail or "process_identity_unavailable",
+        )
+
+    observed = read_result.identity
+    mismatches = compare_process_identity(expected, observed)
+    if mismatches:
+        return ProcessIdentityDecision(
+            code=PROCESS_IDENTITY_MISMATCH,
+            node_id=node_id,
+            pid=pid,
+            signal_allowed=False,
+            mismatches=mismatches,
+            expected=expected,
+            observed=observed,
+        )
+    return ProcessIdentityDecision(
+        code=IDENTITY_MATCH,
+        node_id=node_id,
+        pid=pid,
+        signal_allowed=True,
+        expected=expected,
+        observed=observed,
+    )
+
+
+def _validate_processes(
+    processes: list[dict[str, Any]],
+    *,
+    run_id: str,
+    identity_reader: Callable[[int], ProcessIdentityReadResult] | None = None,
+) -> list[ProcessIdentityDecision]:
+    if not run_id or not processes:
+        return [
+            ProcessIdentityDecision(
+                code=STALE_STATE,
+                node_id=None,
+                pid=None,
+                signal_allowed=False,
+                detail="state_requires_run_id_and_processes",
+            )
+        ]
+    try:
+        pids = [int(item["pid"]) for item in processes]
+        pgids = [int(item["pgid"]) for item in processes]
+        node_ids = [str(item["node_id"]) for item in processes]
+    except (KeyError, TypeError, ValueError) as exc:
+        return [
+            ProcessIdentityDecision(
+                code=STALE_STATE,
+                node_id=None,
+                pid=None,
+                signal_allowed=False,
+                detail=f"invalid_process_collection:{exc}",
+            )
+        ]
+    if (
+        len(set(pids)) != len(pids)
+        or len(set(pgids)) != len(pgids)
+        or len(set(node_ids)) != len(node_ids)
+    ):
+        return [
+            ProcessIdentityDecision(
+                code=STALE_STATE,
+                node_id=None,
+                pid=None,
+                signal_allowed=False,
+                detail="duplicate_pid_pgid_or_node_id",
+            )
+        ]
+    return [
+        validate_process_identity(
+            item,
+            run_id=run_id,
+            identity_reader=identity_reader,
+        )
+        for item in processes
+    ]
+
+
+def _terminate_process_groups(
+    processes: list[dict[str, Any]],
+    *,
+    run_id: str,
+    term_timeout_s: float = 10.0,
+    kill_timeout_s: float = 2.0,
+    identity_reader: Callable[[int], ProcessIdentityReadResult] | None = None,
+    signal_sender: Callable[[int, int], None] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[ProcessIdentityDecision]:
+    """Stop verified process groups without ever trusting PID/PGID alone."""
+    decisions = _validate_processes(
+        processes,
+        run_id=run_id,
+        identity_reader=identity_reader,
+    )
+    if any(
+        row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+        for row in decisions
+    ):
+        return decisions
+
+    managed_pids = {row.pid for row in decisions if row.code == IDENTITY_MATCH}
+    if not managed_pids:
+        return decisions
+    sender = signal_sender or getattr(os, "killpg", None)
+    if sender is None:
+        raise HarnessError("process-group signalling requires Linux/WSL")
+    for item, row in reversed(list(zip(processes, decisions))):
+        if row.code != IDENTITY_MATCH:
+            continue
         try:
-            os.killpg(pgid, signal.SIGTERM)
+            sender(int(item["pgid"]), SIGTERM)
         except ProcessLookupError:
             continue
-    deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline:
-        if not any(process_alive(int(item["pid"])) for item in processes):
-            return
-        time.sleep(0.25)
+
+    deadline = monotonic() + max(0.0, term_timeout_s)
+    while True:
+        decisions = _validate_processes(
+            processes,
+            run_id=run_id,
+            identity_reader=identity_reader,
+        )
+        managed = [row for row in decisions if row.pid in managed_pids]
+        if all(row.code == PROCESS_EXITED for row in managed):
+            return decisions
+        if any(
+            row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+            for row in managed
+        ):
+            return decisions
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(0.25, remaining))
+
+    # Re-read identity immediately before escalation. A reused PID must never
+    # inherit the previous process's eligibility for SIGKILL.
+    decisions = _validate_processes(
+        processes,
+        run_id=run_id,
+        identity_reader=identity_reader,
+    )
+    by_pid = {row.pid: row for row in decisions}
     for item in reversed(processes):
-        pgid = int(item.get("pgid") or item["pid"])
+        row = by_pid.get(int(item["pid"]))
+        if row is None or row.code != IDENTITY_MATCH:
+            continue
         try:
-            os.killpg(pgid, signal.SIGKILL)
+            sender(int(item["pgid"]), SIGKILL)
         except ProcessLookupError:
             continue
+
+    deadline = monotonic() + max(0.0, kill_timeout_s)
+    while True:
+        decisions = _validate_processes(
+            processes,
+            run_id=run_id,
+            identity_reader=identity_reader,
+        )
+        managed = [row for row in decisions if row.pid in managed_pids]
+        if all(row.code == PROCESS_EXITED for row in managed):
+            return decisions
+        if any(
+            row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+            for row in managed
+        ):
+            return decisions
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return decisions
+        sleep(min(0.1, remaining))
+
+
+def _cleanup_harness_state(processes: list[dict[str, Any]]) -> None:
+    """Remove only PID files rooted under this harness runtime directory."""
+    runtime_root = RUNTIME_ROOT.resolve()
+    for item in processes:
+        runtime_dir = Path(str(item.get("runtime_dir", ""))).resolve()
+        try:
+            runtime_dir.relative_to(runtime_root)
+        except ValueError as exc:
+            raise HarnessError(
+                f"{STALE_STATE}: unsafe runtime_dir in harness state: {runtime_dir}"
+            ) from exc
+        pid_path = runtime_dir / "px4.pid"
+        if pid_path.exists():
+            pid_path.unlink()
+    if STATE_PATH.exists():
+        STATE_PATH.unlink()
 
 
 def start_harness(manifest_path: Path, *, headless: bool) -> None:
     manifest = load_manifest(manifest_path)
     environment = preflight(manifest)
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex
     state: dict[str, Any] = {
-        "version": "1.0",
+        "version": "1.1",
+        "run_id": run_id,
         "manifest_path": str(manifest_path.resolve()),
         "started_at": utc_now(),
         "mode": "headless" if headless else "gui",
@@ -563,16 +1042,18 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
                 "-d",
                 str(environment["etc_dir"]),
             ]
+            process_environment = px4_environment(
+                manifest,
+                vehicle,
+                environment=environment,
+                headless=headless,
+                standalone=index > 0,
+            )
+            process_environment[HARNESS_RUN_ID_ENV] = run_id
             process = subprocess.Popen(
                 command,
                 cwd=runtime_dir,
-                env=px4_environment(
-                    manifest,
-                    vehicle,
-                    environment=environment,
-                    headless=headless,
-                    standalone=index > 0,
-                ),
+                env=process_environment,
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
@@ -582,12 +1063,30 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
                 "kind": "px4",
                 "node_id": vehicle["node_id"],
                 "pid": process.pid,
-                "pgid": os.getpgid(process.pid),
+                "pgid": process.pid,
+                "run_id": run_id,
                 "owns_gazebo": index == 0,
-                "runtime_dir": str(runtime_dir),
+                "runtime_dir": str(runtime_dir.resolve()),
+                "process_identity": None,
             }
             state["processes"].append(process_row)
             (runtime_dir / "px4.pid").write_text(str(process.pid), encoding="ascii")
+            _write_state(state)
+
+            identity_result = read_process_identity(process.pid)
+            identity = identity_result.identity
+            if identity_result.code != IDENTITY_OBSERVED or identity is None:
+                raise HarnessError(
+                    f"failed to capture process identity for {vehicle['node_id']}: "
+                    f"{identity_result.code}:{identity_result.detail}"
+                )
+            if identity.pgid != process.pid or identity.run_id != run_id:
+                raise HarnessError(
+                    f"captured process identity is not bound to run {run_id}: "
+                    f"pid={identity.pid} pgid={identity.pgid} run_id={identity.run_id!r}"
+                )
+            process_row["pgid"] = identity.pgid
+            process_row["process_identity"] = identity.to_dict()
             _write_state(state)
             wait_for_model(
                 str(vehicle["gazebo_model_name"]),
@@ -598,10 +1097,31 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         print()
         print_mapping_table(manifest)
         print(f"\nHarness state: {STATE_PATH}")
-    except Exception:
-        _terminate_process_groups(state["processes"])
-        if STATE_PATH.exists():
-            STATE_PATH.unlink()
+    except Exception as exc:
+        processes = list(state["processes"])
+        if not processes:
+            raise
+        try:
+            decisions = _terminate_process_groups(processes, run_id=run_id)
+        except Exception as cleanup_exc:
+            _write_state(state)
+            raise HarnessError(
+                f"start failed ({exc}); identity-safe cleanup failed: {cleanup_exc}"
+            ) from exc
+        unsafe = [
+            row
+            for row in decisions
+            if row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+        ]
+        remaining = [row for row in decisions if row.code == IDENTITY_MATCH]
+        if unsafe or remaining:
+            _write_state(state)
+            problem = unsafe or remaining
+            raise HarnessError(
+                f"start failed ({exc}); cleanup refused/incomplete: "
+                + json.dumps([row.to_dict() for row in problem], sort_keys=True)
+            ) from exc
+        _cleanup_harness_state(processes)
         raise
     finally:
         for handle in opened_logs:
@@ -614,17 +1134,27 @@ def stop_harness() -> None:
         print("No harness state found; nothing to stop.")
         return
     processes = list(state.get("processes", []))
-    _terminate_process_groups(processes)
-    for item in processes:
-        runtime_dir = Path(str(item.get("runtime_dir", "")))
-        pid_path = runtime_dir / "px4.pid"
-        if pid_path.exists():
-            pid_path.unlink()
-    if STATE_PATH.exists():
-        STATE_PATH.unlink()
-    alive = [item for item in processes if process_alive(int(item["pid"]))]
-    if alive:
-        raise HarnessError(f"failed to stop harness processes: {alive}")
+    decisions = _terminate_process_groups(
+        processes,
+        run_id=str(state.get("run_id", "")),
+    )
+    unsafe = [
+        row
+        for row in decisions
+        if row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+    ]
+    if unsafe:
+        raise HarnessError(
+            f"{unsafe[0].code}: "
+            + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
+        )
+    remaining = [row for row in decisions if row.code == IDENTITY_MATCH]
+    if remaining:
+        raise HarnessError(
+            "failed to stop harness processes: "
+            + json.dumps([row.to_dict() for row in remaining], sort_keys=True)
+        )
+    _cleanup_harness_state(processes)
     print("Three-UAV PX4/Gazebo harness stopped.")
 
 
@@ -636,6 +1166,7 @@ def probe_heartbeat(endpoint: str, timeout_s: float) -> dict[str, Any]:
         return {
             "heartbeat_received": False,
             "observed_system_id": None,
+            "observed_component_id": None,
             "last_heartbeat_age_s": None,
             "error": "pymavlink_missing",
         }
@@ -648,6 +1179,7 @@ def probe_heartbeat(endpoint: str, timeout_s: float) -> dict[str, Any]:
         return {
             "heartbeat_received": True,
             "observed_system_id": int(heartbeat.get_srcSystem()),
+            "observed_component_id": int(heartbeat.get_srcComponent()),
             "last_heartbeat_age_s": round(time.monotonic() - started, 3),
             "error": None,
         }
@@ -655,6 +1187,7 @@ def probe_heartbeat(endpoint: str, timeout_s: float) -> dict[str, Any]:
         return {
             "heartbeat_received": False,
             "observed_system_id": None,
+            "observed_component_id": None,
             "last_heartbeat_age_s": None,
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -683,12 +1216,16 @@ def collect_health(
     for vehicle in manifest["vehicles"]:
         heartbeat = heartbeat_probe(str(vehicle["telemetry_endpoint"]), timeout_s)
         expected_system_id = int(vehicle["system_id"])
+        expected_component_id = int(vehicle.get("component_id", 1))
         observed_system_id = heartbeat.get("observed_system_id")
+        observed_component_id = heartbeat.get("observed_component_id")
         pid = pid_by_node.get(str(vehicle["node_id"]))
         row = {
             "node_id": vehicle["node_id"],
             "expected_system_id": expected_system_id,
             "observed_system_id": observed_system_id,
+            "expected_component_id": expected_component_id,
+            "observed_component_id": observed_component_id,
             "heartbeat_received": bool(heartbeat.get("heartbeat_received")),
             "endpoint": vehicle["telemetry_endpoint"],
             "gazebo_model_name": vehicle["gazebo_model_name"],
@@ -701,6 +1238,7 @@ def collect_health(
         row["readiness"] = (
             row["heartbeat_received"]
             and observed_system_id == expected_system_id
+            and observed_component_id == expected_component_id
             and row["process_alive"]
             and row["model_binding"]
         )
