@@ -17,41 +17,48 @@ const navItems = [
 const state = {
   page: "overview",
   backendConnected: false,
-  currentAction: "TAKEOFF",
+  currentAction: "IDLE",
   targetAltitude: 3,
-  altitude: 18,
-  maxAltitude: 20.4,
-  lastZ: -19.8,
-  thresholdReached: true,
-  missionCount: 3,
-  successRate: 96.3,
-  policyBlocks: 18,
-  linkIssues: 2,
-  activeTrace: "trc_8f3a2c91",
-  selectedUav: "UAV-01",
-  replayIndex: 4,
-  simRunning: false,
+  altitude: null,
+  maxAltitude: null,
+  lastZ: null,
+  thresholdReached: null,
+  missionCount: null,
+  policyBlocks: null,
+  linkIssues: null,
+  activeTrace: null,
+  selectedUav: null,
+  replayIndex: 0,
   apiBaseUrl: window.SwarmRuntimeApi?.getConfiguredBaseUrl?.() || "http://127.0.0.1:8765/api",
   apiStatus: "checking",
   apiLastError: null,
   runtimeHealth: null,
   lastProbeAt: null,
   runtimeEventsLoaded: false,
-  dataStatus: "demo",
+  dataStatus: "checking",
   lastBackendResult: null,
   lastActionResult: null,
   lastPlanResult: null,
+  runtimeSnapshot: null,
+  telemetry: null,
+  vehicleSnapshot: null,
+  agentStatus: null,
+  simulationStatus: null,
+  registryPayload: null,
+  skillsPayload: null,
+  policyDecisions: [],
+  recentActions: [],
+  fleet: [],
+  nodeStats: {},
+  runtimeEvents: [],
+  stateSyncInFlight: false,
+  actionInFlight: false,
+  simulationReady: false,
+  simulationUrl: "http://127.0.0.1:5179/",
   toast: [],
 };
 
-const events = [
-  ["14:30:55", "SYSTEM", "Backend 切换完成：AUTO -> MISSION", "cyan"],
-  ["14:31:20", "TIMEOUT", "UAV-05 心跳超时，持续 15s", "red"],
-  ["14:31:44", "LINK_WARNING", "UAV-09 链路质量下降，RSSI -112 dBm", "amber"],
-  ["14:31:58", "ACTION_RESULT", "UAV-01 执行 TakePhoto 成功", "green"],
-  ["14:32:12", "POLICY_DECISION_EVENT", "Policy 拦截 ACTION_REQUEST，决策 DENY", "violet"],
-  ["14:32:15", "ACTION_REQUEST", "UAV-03 请求执行 TakePhoto", "cyan"],
-];
+const events = [];
 
 function pushEvent(type, message, color = "cyan") {
   const now = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -70,19 +77,52 @@ function notify(title, body, color = "cyan") {
   }, 4200);
 }
 
-function currentRuntimeRequest() {
-  return {
-    backend: "px4_sitl",
-    backend_mode: "sitl",
-    backend_enabled: true,
-    transport_endpoint: "udpin:127.0.0.1:14540",
-    altitude_m: Number(state.targetAltitude.toFixed(1)),
-    connect_timeout_ms: 5000,
-    command_timeout_ms: 10000,
-    observe_timeout_ms: 25000,
-    threshold_ratio: 0.7,
-    auto_land: false,
-  };
+function showStatusHelp() {
+  notify(
+    "状态来源",
+    "LIVE 表示 Runtime API 可达；STALE 表示保留最后快照；PX4 就绪按所选载具遥测判断。",
+    "cyan"
+  );
+}
+
+function currentRuntimeRequest(options = {}) {
+  return window.SwarmConsoleModel.buildRuntimeRequest(
+    selectedVehicle(),
+    state.targetAltitude,
+    options
+  );
+}
+
+function selectedVehicle() {
+  return window.SwarmConsoleModel.findVehicle(state.fleet, state.selectedUav);
+}
+
+function selectedNodeStats() {
+  if (!state.selectedUav) return {};
+  return state.nodeStats[state.selectedUav] || {};
+}
+
+function actionPermission() {
+  if (state.actionInFlight) return { allowed: false, reason: "动作执行中" };
+  return window.SwarmConsoleModel.canExecute(selectedVehicle(), state.apiStatus);
+}
+
+function updateSelectedTelemetry() {
+  const vehicle = selectedVehicle();
+  if (!vehicle) {
+    state.altitude = null;
+    state.maxAltitude = null;
+    state.lastZ = null;
+    state.thresholdReached = null;
+    state.currentAction = "IDLE";
+    return;
+  }
+  const stats = state.nodeStats[vehicle.id] || {};
+  state.altitude = vehicle.altitudeM;
+  state.maxAltitude = stats.maxAltitude ?? vehicle.altitudeM;
+  state.lastZ = vehicle.zDownM;
+  state.thresholdReached = stats.thresholdReached ?? null;
+  state.currentAction = vehicle.activeAction || vehicle.flightMode || "IDLE";
 }
 
 function applyApiSuccess(source, payload) {
@@ -96,11 +136,9 @@ function applyApiSuccess(source, payload) {
     state.lastBackendResult = payload;
   } else if (source === "action") {
     state.lastActionResult = payload;
-    state.dataStatus = "partial";
     applyActionResult(payload);
   } else if (source === "plan") {
     state.lastPlanResult = payload;
-    state.dataStatus = "partial";
   }
 }
 
@@ -112,8 +150,8 @@ function applyApiFailure(source, error, notifyFailure = true) {
   if (source === "health" || state.apiStatus === "offline") {
     state.backendConnected = false;
   }
-  if (state.apiStatus === "offline" && state.dataStatus === "partial") {
-    state.dataStatus = "stale";
+  if (state.apiStatus === "offline") {
+    state.dataStatus = state.dataStatus === "live" ? "stale" : "unavailable";
   }
   if (notifyFailure) {
     const title = state.apiStatus === "live" ? "Runtime API 返回错误" : "Runtime API 未连接";
@@ -129,16 +167,14 @@ function applyActionResult(payload) {
   const lastZ = payload.last_z ?? result.last_z ?? observation.last_z;
   const thresholdReached = payload.threshold_reached ?? result.threshold_reached ?? observation.threshold_reached;
 
-  if (typeof maxAltitude === "number") {
-    state.maxAltitude = maxAltitude;
-  }
-  if (typeof lastZ === "number") {
-    state.lastZ = lastZ;
-    state.altitude = Math.max(0, -lastZ);
-  }
-  if (typeof thresholdReached === "boolean") {
-    state.thresholdReached = thresholdReached;
-  }
+  const nodeId = payload.resolved_node_id || payload.node_id || state.selectedUav;
+  if (!nodeId) return;
+  const stats = state.nodeStats[nodeId] || {};
+  if (typeof maxAltitude === "number") stats.maxAltitude = maxAltitude;
+  if (typeof lastZ === "number") stats.lastZ = lastZ;
+  if (typeof thresholdReached === "boolean") stats.thresholdReached = thresholdReached;
+  state.nodeStats[nodeId] = stats;
+  if (nodeId === state.selectedUav) updateSelectedTelemetry();
 }
 
 async function callRuntime(source, call, fallback, options = {}) {
@@ -162,20 +198,24 @@ function runtimeApiStatus() {
 
 function dataSourceStatus() {
   return {
-    demo: { label: "DEMO", color: "amber" },
-    partial: { label: "LIVE PARTIAL", color: "cyan" },
-    stale: { label: "CACHED", color: "amber" },
+    checking: { label: "同步中", color: "cyan" },
+    live: { label: "LIVE", color: "green" },
+    stale: { label: "STALE", color: "amber" },
+    unavailable: { label: "无数据", color: "red" },
   }[state.dataStatus] || { label: "UNKNOWN", color: "amber" };
 }
 
-function backendStatus() {
+function backendStatus(vehicle = selectedVehicle()) {
   if (state.apiStatus === "checking") {
     return { label: "探测中", color: "cyan" };
   }
   if (state.apiStatus !== "live") {
     return { label: "未知", color: "amber" };
   }
-  return state.backendConnected
+  const selectedReady = vehicle
+    ? vehicle.enabled && vehicle.connected && !vehicle.stale
+    : state.backendConnected;
+  return selectedReady
     ? { label: "READY", color: "green" }
     : { label: "NOT READY", color: "red" };
 }
@@ -213,8 +253,8 @@ async function syncRuntimeEvents(options = {}) {
         eventColor(event.severity, event.event_type),
       ]);
     events.splice(0, events.length, ...normalized);
+    state.runtimeEvents = payload.slice().reverse().slice(0, 30);
     state.runtimeEventsLoaded = true;
-    state.dataStatus = "partial";
     state.apiStatus = "live";
     state.apiLastError = null;
   } catch (error) {
@@ -239,8 +279,10 @@ async function probeRuntime(options = {}) {
   try {
     const healthPayload = await window.SwarmRuntimeApi.health();
     applyApiSuccess("health", healthPayload);
-    await checkBackend({ notifyUser: false, automatic: true });
-    await syncRuntimeEvents({ notifyFailure: false });
+    await Promise.all([
+      syncRuntimeState({ notifyFailure: false }),
+      syncRuntimeEvents({ notifyFailure: false }),
+    ]);
     if (options.notifyUser) {
       notify("Runtime API 已连接", state.apiBaseUrl, "green");
     }
@@ -250,16 +292,87 @@ async function probeRuntime(options = {}) {
   render();
 }
 
-const vehicles = [
-  ["UAV-01", "在线", "巡检-北区", "78%", "强", "1.2 km"],
-  ["UAV-02", "在线", "巡检-北区", "64%", "强", "1.6 km"],
-  ["UAV-03", "在线", "拍照-园区", "81%", "强", "1.8 km"],
-  ["UAV-04", "在线", "归巢-西区", "52%", "中", "2.3 km"],
-  ["UAV-05", "告警", "续航-南区", "18%", "弱", "2.6 km"],
-  ["UAV-06", "在线", "中继-西区", "69%", "强", "1.9 km"],
-  ["UAV-07", "在线", "扫描-园区", "73%", "强", "2.0 km"],
-  ["UAV-09", "告警", "侦察-南区", "12%", "弱", "2.9 km"],
-];
+async function syncRuntimeState(options = {}) {
+  if (state.stateSyncInFlight || !window.SwarmRuntimeApi) return;
+  state.stateSyncInFlight = true;
+  try {
+    const calls = {
+    runtimeSnapshot: window.SwarmRuntimeApi.snapshot(),
+    telemetry: window.SwarmRuntimeApi.telemetryLatest(),
+    vehicleSnapshot: window.SwarmRuntimeApi.vehicleSnapshot(),
+    agentStatus: window.SwarmRuntimeApi.agentStatus(),
+    simulationStatus: window.SwarmRuntimeApi.simulationStatus(),
+    registryPayload: window.SwarmRuntimeApi.vehicles(),
+    skillsPayload: window.SwarmRuntimeApi.skills(),
+    policyDecisions: window.SwarmRuntimeApi.policyDecisions(20),
+    recentActions: window.SwarmRuntimeApi.recentActions(20),
+  };
+    const keys = Object.keys(calls);
+    const results = await Promise.allSettled(Object.values(calls));
+    const resultsByKey = Object.fromEntries(keys.map((key, index) => [key, results[index]]));
+    let successCount = 0;
+    let firstError = null;
+    results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      state[keys[index]] = result.value;
+      successCount += 1;
+    } else if (!firstError) {
+      firstError = result.reason;
+    }
+    });
+
+    if (successCount > 0) {
+    state.apiStatus = "live";
+    state.apiLastError = successCount === keys.length ? null : `${keys.length - successCount} 个状态接口不可用`;
+    const criticalStateFailed = ["telemetry", "vehicleSnapshot", "registryPayload"]
+      .some((key) => resultsByKey[key]?.status !== "fulfilled");
+    if (criticalStateFailed) {
+      state.fleet = window.SwarmConsoleModel.markFleetStale(state.fleet);
+      state.vehicleSnapshot = window.SwarmConsoleModel.markVehicleSnapshotStale(
+        state.vehicleSnapshot
+      );
+      state.backendConnected = false;
+      state.dataStatus = "stale";
+      updateSelectedTelemetry();
+      postVehicleSnapshot();
+      return;
+    }
+    state.fleet = window.SwarmConsoleModel.mergeFleet(
+      state.registryPayload,
+      state.telemetry,
+      state.vehicleSnapshot
+    );
+    if (!state.fleet.some((vehicle) => vehicle.id === state.selectedUav)) {
+      state.selectedUav = state.fleet[0]?.id || null;
+    }
+    for (const vehicle of state.fleet) {
+      const stats = state.nodeStats[vehicle.id] || {};
+      if (typeof vehicle.altitudeM === "number") {
+        stats.maxAltitude = Math.max(stats.maxAltitude ?? vehicle.altitudeM, vehicle.altitudeM);
+      }
+      state.nodeStats[vehicle.id] = stats;
+    }
+    state.backendConnected = window.SwarmConsoleModel.isFleetReady(state.fleet);
+    state.missionCount = state.agentStatus?.active_plans?.length ?? null;
+    const decisions = state.runtimeSnapshot?.policy_summary?.recent_decisions || [];
+    state.policyBlocks = decisions.filter((item) => String(item.decision_code || item.decision || "").toUpperCase() === "DENY").length;
+    state.linkIssues = state.fleet.filter((vehicle) => vehicle.enabled && (!vehicle.connected || vehicle.stale)).length;
+    state.dataStatus = state.telemetry?.status === "ok"
+      ? "live"
+      : state.telemetry?.status === "stale"
+        ? "stale"
+        : "unavailable";
+    updateSelectedTelemetry();
+    postVehicleSnapshot();
+    } else if (firstError) {
+      applyApiFailure("snapshot", firstError, options.notifyFailure === true);
+    }
+  } catch (error) {
+    applyApiFailure("snapshot-contract", error, options.notifyFailure === true);
+  } finally {
+    state.stateSyncInFlight = false;
+  }
+}
 
 const capabilities = [
   ["起飞", "takeoff", "中风险", "PX4 MAVLink", "98.7%"],
@@ -278,7 +391,9 @@ function esc(value) {
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function badge(text, color = "cyan") {
@@ -291,6 +406,19 @@ function metric(title, value, detail, color = "cyan") {
     <b class="${color}">${esc(value)}</b>
     <div class="delta ${color}">${esc(detail)}</div>
   </section>`;
+}
+
+function formatNumber(value, digits = 1, suffix = "") {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toFixed(digits)}${suffix}`
+    : "--";
+}
+
+function fleetSummary() {
+  const total = state.fleet.length;
+  const online = state.fleet.filter((vehicle) => vehicle.connected && !vehicle.stale).length;
+  const armed = state.fleet.filter((vehicle) => vehicle.armed === true).length;
+  return { total, online, armed };
 }
 
 function panel(title, body, extra = "") {
@@ -346,6 +474,9 @@ function scene3d(size = "full") {
 }
 
 function eventList() {
+  if (!events.length) {
+    return `<div class="empty-state">暂无 Runtime 事件</div>`;
+  }
   return `<div class="event-list">${events.map((e) => `
     <div class="event">
       <div class="time">${e[0]}</div>
@@ -354,28 +485,91 @@ function eventList() {
 }
 
 function vehicleTable() {
+  if (!state.fleet.length) {
+    return `<div class="empty-state">Runtime 尚未提供已注册载具</div>`;
+  }
   return `<table class="table">
-    <thead><tr><th>ID</th><th>状态</th><th>任务</th><th>电量</th><th>链路</th><th>距离</th></tr></thead>
-    <tbody>${vehicles.map((v) => `
-      <tr><td>${v[0]}</td><td>${badge(v[1], v[1] === "告警" ? "red" : "green")}</td><td>${v[2]}</td><td>${v[3]}</td><td>${v[4]}</td><td>${v[5]}</td></tr>
+    <thead><tr><th>节点</th><th>状态</th><th>Identity</th><th>模式</th><th>高度</th><th>电量</th></tr></thead>
+    <tbody>${state.fleet.map((vehicle) => `
+      <tr class="selectable-row ${vehicle.id === state.selectedUav ? "selected" : ""}" data-vehicle-id="${esc(vehicle.id)}">
+        <td><b>${esc(vehicle.displayName)}</b></td>
+        <td>${badge(vehicle.connected ? "在线" : vehicle.stale ? "过期" : "离线", vehicle.connected ? "green" : vehicle.stale ? "amber" : "red")}</td>
+        <td>${esc(`${vehicle.systemId ?? "-"}/${vehicle.componentId ?? "-"}`)}</td>
+        <td>${esc(vehicle.activeAction || vehicle.flightMode || "--")}</td>
+        <td>${esc(formatNumber(vehicle.altitudeM, 1, " m"))}</td>
+        <td>${esc(formatNumber(vehicle.batteryPercent, 0, "%"))}</td>
+      </tr>
     `).join("")}</tbody>
   </table>`;
 }
 
+function fleetPreview() {
+  if (!state.fleet.length) return `<div class="empty-state fleet-empty">等待 vehicle snapshot</div>`;
+  return `<div class="fleet-preview">
+    <div class="fleet-grid"></div>
+    ${state.fleet.map((vehicle, index) => {
+      const column = index % 3;
+      const row = Math.floor(index / 3);
+      const left = 18 + column * 32;
+      const top = 24 + row * 34;
+      const color = vehicle.connected ? "green" : vehicle.stale ? "amber" : "red";
+      return `<button class="fleet-node ${color} ${vehicle.id === state.selectedUav ? "selected" : ""}" style="left:${left}%;top:${top}%" data-vehicle-id="${esc(vehicle.id)}">
+        <span>${esc(vehicle.id)}</span><small>${esc(formatNumber(vehicle.altitudeM, 1, "m"))}</small>
+      </button>`;
+    }).join("")}
+    <div class="fleet-preview-meta">${badge(`源 ${state.vehicleSnapshot?.source?.label || "Runtime"}`, "cyan")} ${badge(`场景 ${state.vehicleSnapshot?.scene_id || "--"}`, "green")}</div>
+  </div>`;
+}
+
+function simulationFrame() {
+  return `<div class="simulation-frame-wrap">
+    <iframe id="simulation-frame" class="simulation-frame" src="${esc(state.simulationUrl)}" title="Cesium 三维集群态势"></iframe>
+    <div class="simulation-frame-note">${state.simulationReady ? "Runtime 快照由主控制台统一推送" : "等待 5179 三维服务响应"}</div>
+  </div>`;
+}
+
+function simulationOrigin() {
+  try {
+    return new URL(state.simulationUrl, window.location.href).origin;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function postVehicleSnapshot() {
+  const frame = document.getElementById("simulation-frame");
+  const origin = simulationOrigin();
+  if (!frame?.contentWindow || !origin || !state.vehicleSnapshot) return;
+  frame.contentWindow.postMessage(
+    { type: "uav-swarm/vehicle-snapshot", payload: state.vehicleSnapshot },
+    origin
+  );
+}
+
+function selectVehicle(nodeId) {
+  if (!state.fleet.some((vehicle) => vehicle.id === nodeId)) return;
+  state.selectedUav = nodeId;
+  updateSelectedTelemetry();
+  render();
+}
+
 function overviewPage() {
+  const summary = fleetSummary();
+  const activeActions = state.runtimeSnapshot?.active_actions?.length ?? 0;
+  const mode = selectedVehicle()?.backendMode?.toUpperCase() || "--";
   return `<div class="page">
     ${pageTitle("总览驾驶舱", "三维态势 · Runtime 执行链路 · 策略安全 · 审计回放")}
     <div class="metrics">
-      ${metric("在线节点数", "37 / 48", "较昨日 +5", "cyan")}
-      ${metric("当前任务数", state.missionCount, `运行中 ${state.missionCount} / 计划 5`, "blue")}
-      ${metric("执行成功率", `${state.successRate.toFixed(1)}%`, "近 24h +2.1%", "green")}
-      ${metric("Policy 拦截次数", state.policyBlocks, "近 24h +3", "violet")}
-      ${metric("链路异常数", state.linkIssues, "近 24h -1", "amber")}
-      ${metric("Backend 模式", "MISSION", "主用", "cyan")}
+      ${metric("在线节点数", `${summary.online} / ${summary.total}`, `已武装 ${summary.armed}`, "cyan")}
+      ${metric("活跃计划", state.missionCount ?? "--", "Agent Runtime 快照", "blue")}
+      ${metric("执行中动作", activeActions, "当前 Runtime", "green")}
+      ${metric("最近拒绝", state.policyBlocks ?? "--", "最近策略窗口", "violet")}
+      ${metric("离线 / 过期", state.linkIssues ?? "--", "已启用节点", "amber")}
+      ${metric("Backend 模式", mode, state.selectedUav || "未选择", "cyan")}
     </div>
     <div class="main-overview">
-      ${panel("三维任务态势预览", scene3d(), "h-fill")}
-      ${panel("最近动作记录 / 事件流", `<p class="small">点击 Check Backend、Smoke Test、Land、策略预检、故障注入后会写入这里。</p>${eventList()}`, "h-fill scroll")}
+      ${panel("实时集群状态预览", fleetPreview(), "h-fill")}
+      ${panel("最近动作记录 / 事件流", eventList(), "h-fill scroll")}
     </div>
     ${runtimeChain(true)}
   </div>`;
@@ -390,15 +584,19 @@ function pageTitle(title, subtitle, actions = "") {
 }
 
 function runtimeChain(compact = false) {
+  const summary = fleetSummary();
+  const activePlans = state.agentStatus?.active_plans?.length ?? 0;
+  const decisions = state.runtimeSnapshot?.policy_summary?.recent_decisions?.length ?? 0;
+  const activeActions = state.runtimeSnapshot?.active_actions?.length ?? 0;
   const cards = [
-    ["任务输入", "3", "NEW"],
-    ["Agent Runtime", "37", "ACTIVE"],
-    ["Policy Gate", "18", "TODAY"],
-    ["Skill Router", "145", "ROUTED"],
-    ["Adapter Gateway", "6", "ADAPTERS"],
-    ["MAVLink / Hardware", "37", "NODES"],
-    ["Action Result", "96.3%", "SUCCESS"],
-    ["Audit / Replay", "ON", "TRACE"],
+    ["任务输入", activePlans, "ACTIVE PLANS"],
+    ["Agent Runtime", state.agentStatus?.planner_version || "--", state.agentStatus?.planner_kind || "UNAVAILABLE"],
+    ["Policy Gate", decisions, "RECENT"],
+    ["Skill Router", "--", "NOT EXPOSED"],
+    ["Adapter Gateway", state.apiStatus === "live" ? "ON" : "OFF", "HTTP BRIDGE"],
+    ["MAVLink / PX4", `${summary.online}/${summary.total}`, "ONLINE"],
+    ["Active Action", activeActions, "RUNNING"],
+    ["Audit / Replay", state.runtimeEvents.length, "RECENT"],
   ];
   return panel("Agent Runtime 执行链路（实时）", `<div class="runtime-chain">${cards.map((c, i) => `
     <div class="chain-card">
@@ -409,27 +607,23 @@ function runtimeChain(compact = false) {
 }
 
 function twinPage() {
+  const summary = fleetSummary();
   return `<div class="page">
-    ${pageTitle("三维集群态势", "Cesium 3D Tiles · 倾斜摄影接入位 · 多机任务态势")}
+    ${pageTitle("三维集群态势", "Cesium · Runtime vehicle snapshot · 多机任务态势", `<a class="button" href="${esc(state.simulationUrl)}" target="_blank" rel="noreferrer">独立打开</a>`)}
     <div class="two-main" style="grid-template-columns:1.42fr .58fr">
-      ${panel("三维 Mission Twin", scene3d(), "h-fill")}
+      ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "h-fill twin-panel")}
       <div class="grid" style="grid-template-rows:auto 1fr">
         <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
-          ${metric("在线节点", "37/48", "77%", "cyan")}
-          ${metric("执行成功率", "96.3%", "近 24h", "green")}
-          ${metric("策略生效数", "18", "今日", "violet")}
+          ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan")}
+          ${metric("已武装", summary.armed, "Telemetry", "green")}
+          ${metric("离线 / 过期", state.linkIssues ?? "--", "Fleet", "amber")}
         </div>
         ${panel("节点列表", vehicleTable(), "scroll")}
       </div>
     </div>
     <div class="split-2" style="grid-template-columns:1.15fr .85fr">
       ${vehicleDiagramPanel()}
-      ${panel("遥测与告警", `<div class="cols-4">
-        ${telemetryCard("电量", "78%", "#36c7f4")}
-        ${telemetryCard("电压", "22.8V", "#42d883")}
-        ${telemetryCard("温度", "42°C", "#ff5e5e")}
-        ${telemetryCard("RSSI", "-58 dBm", "#42d883")}
-      </div>`, "")}
+      ${panel("所选节点遥测", telemetrySummary())}
     </div>
   </div>`;
 }
@@ -493,8 +687,9 @@ function sampleActionRequest() {
 }
 
 function vehiclePage() {
+  const vehicle = selectedVehicle();
   return `<div class="page">
-    ${pageTitle("单机详情 / UAV-01", "飞控状态 · MAVLink · 载荷模块 · 遥测曲线")}
+    ${pageTitle(`单机详情 / ${vehicle?.id || "未选择"}`, "飞控状态 · MAVLink identity · 实时遥测")}
     <div class="split-2" style="grid-template-columns:1fr 1fr">
       ${panel("局部三维态势", scene3d(), "h-fill")}
       ${panel("集群节点", vehicleTable(), "scroll")}
@@ -503,16 +698,16 @@ function vehiclePage() {
       ${vehicleDiagramPanel()}
       <div class="grid">
         <div class="cols-4">
-          ${statusTile("运行状态", "飞行中", "空速 12.6 m/s · 高度 152m AGL", "green")}
-          ${statusTile("权限", "本机授权", "Operator_01 · L2", "green")}
-          ${statusTile("自主状态", "自治运行", "L3 · Planner-Agent", "cyan")}
-          ${statusTile("链路状态", "链路强", "5G / Mesh · RSSI -58 dBm", "green")}
+          ${statusTile("运行状态", vehicle?.connected ? "在线" : "离线", `${vehicle?.flightMode || "--"} · ${formatNumber(vehicle?.groundSpeedMps, 1, " m/s")}`, vehicle?.connected ? "green" : "red")}
+          ${statusTile("MAVLink Identity", `${vehicle?.systemId ?? "--"}/${vehicle?.componentId ?? "--"}`, vehicle?.endpoint || "无端点", "cyan")}
+          ${statusTile("武装状态", vehicle?.armed === true ? "ARMED" : vehicle?.armed === false ? "DISARMED" : "--", vehicle?.activeAction || "无执行中动作", vehicle?.armed ? "amber" : "green")}
+          ${statusTile("遥测新鲜度", vehicle?.stale ? "STALE" : vehicle?.connected ? "FRESH" : "--", formatNumber(vehicle?.telemetryAgeMs, 0, " ms"), vehicle?.stale ? "amber" : "green")}
         </div>
         <div class="cols-4">
-          ${telemetryCard("max_altitude_m", state.maxAltitude.toFixed(1), "#36c7f4")}
-          ${telemetryCard("last_z", state.lastZ.toFixed(1), "#42d883")}
-          ${telemetryCard("threshold_reached", String(state.thresholdReached), "#f5b84c")}
-          ${telemetryCard("current status", `AUTO.${state.currentAction}`, "#9a7cff")}
+          ${telemetryCard("max_altitude_m", formatNumber(state.maxAltitude), "#36c7f4")}
+          ${telemetryCard("last_z", formatNumber(state.lastZ), "#42d883")}
+          ${telemetryCard("threshold_reached", state.thresholdReached === null ? "--" : String(state.thresholdReached), "#f5b84c")}
+          ${telemetryCard("current status", state.currentAction, "#9a7cff")}
         </div>
       </div>
     </div>
@@ -520,13 +715,16 @@ function vehiclePage() {
 }
 
 function vehicleDiagramPanel() {
+  const vehicle = selectedVehicle();
+  const status = vehicle?.connected ? "在线" : vehicle?.stale ? "遥测过期" : "离线";
+  const statusColor = vehicle?.connected ? "green" : vehicle?.stale ? "amber" : "red";
   return panel("单机模块健康", `<div class="vehicle-diagram">
     <div class="drone-arm a"></div><div class="drone-arm b"></div><div class="drone-body"></div>
     <div class="rotor r1"></div><div class="rotor r2"></div><div class="rotor r3"></div><div class="rotor r4"></div>
-    <div class="module-tile m1"><b>飞控</b><br><span class="green">正常</span><br><span class="small">温度 42°C</span></div>
-    <div class="module-tile m2"><b>伴随计算板</b><br><span class="green">正常</span><br><span class="small">负载 48%</span></div>
-    <div class="module-tile m3"><b>相机 / 云台</b><br><span class="green">正常</span><br><span class="small">存储 64%</span></div>
-    <div class="module-tile m4"><b>电源系统</b><br><span class="green">正常</span><br><span class="small">电量 78%</span></div>
+    <div class="module-tile m1"><b>PX4 飞控</b><br><span class="${statusColor}">${esc(status)}</span><br><span class="small">${esc(vehicle?.flightMode || "无模式数据")}</span></div>
+    <div class="module-tile m2"><b>MAVLink</b><br><span class="${statusColor}">${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}</span><br><span class="small">${esc(vehicle?.endpoint || "无端点")}</span></div>
+    <div class="module-tile m3"><b>Runtime Action</b><br><span class="cyan">${esc(vehicle?.activeAction || "IDLE")}</span><br><span class="small">${esc(vehicle?.lastError || "无错误")}</span></div>
+    <div class="module-tile m4"><b>电源遥测</b><br><span class="${typeof vehicle?.batteryPercent === "number" ? "green" : "amber"}">${esc(formatNumber(vehicle?.batteryPercent, 0, "%"))}</span><br><span class="small">${vehicle?.armed === true ? "ARMED" : vehicle?.armed === false ? "DISARMED" : "状态未知"}</span></div>
   </div>`);
 }
 
@@ -536,10 +734,10 @@ function telemetryCard(title, value, color) {
 
 function telemetrySummary() {
   return `<div class="cols-4">
-    ${telemetryCard("max_altitude_m", state.maxAltitude.toFixed(1), "#36c7f4")}
-    ${telemetryCard("last_z", state.lastZ.toFixed(1), "#42d883")}
-    ${telemetryCard("threshold_reached", String(state.thresholdReached), "#f5b84c")}
-    ${telemetryCard("current status", `AUTO.${state.currentAction}`, "#9a7cff")}
+    ${telemetryCard("max_altitude_m", formatNumber(state.maxAltitude), "#36c7f4")}
+    ${telemetryCard("last_z", formatNumber(state.lastZ), "#42d883")}
+    ${telemetryCard("threshold_reached", state.thresholdReached === null ? "--" : String(state.thresholdReached), "#f5b84c")}
+    ${telemetryCard("current status", state.currentAction, "#9a7cff")}
   </div>`;
 }
 
@@ -548,65 +746,53 @@ function statusTile(title, value, detail, color) {
 }
 
 function runtimePage() {
+  const agent = state.agentStatus || {};
+  const latestPlan = agent.latest_plan || null;
+  const queue = state.runtimeSnapshot?.agent_runtime?.queue || {};
+  const activeActions = state.runtimeSnapshot?.active_actions || [];
+  const latestAction = activeActions[0] || state.recentActions[0] || null;
   return `<div class="page">
     ${pageTitle("Agent Runtime", "任务队列 · 上下文构建 · Planner · Policy · Adapter · Audit")}
     <div class="metrics">
-      ${metric("当前 Trace ID", state.activeTrace, "开始时间 14:31:58", "violet")}
-      ${metric("活跃会话数", "18 / 36", "在线率 50%", "cyan")}
-      ${metric("队列任务总数", "142", "等待中 27", "amber")}
-      ${metric("最近执行成功率", "96.3%", "近 24h", "green")}
-      ${metric("端到端 P95 延迟", "1.23s", "-0.21s", "green")}
-      ${metric("系统负载", "42%", "CPU", "cyan")}
+      ${metric("最新 Plan", latestPlan?.plan_id || "--", latestPlan?.status || "无计划", "violet")}
+      ${metric("活跃计划", agent.active_plans?.length ?? 0, "Runtime store", "cyan")}
+      ${metric("队列深度", queue.supported ? queue.depth ?? "--" : "N/A", queue.supported ? "Runtime queue" : "后端未提供", "amber")}
+      ${metric("执行中动作", activeActions.length, "active_actions", "green")}
+      ${metric("Planner", agent.planner_version || "--", agent.planner_kind || "unavailable", "green")}
+      ${metric("LLM / 实执行", agent.llm_enabled ? "ON" : "OFF", agent.real_execution_enabled ? "REAL" : "DRY / FAKE", "cyan")}
     </div>
     ${runtimeChain()}
     <div class="split-2 h-fill" style="grid-template-columns:1fr .52fr">
       <div class="split-3">
-        ${panel("会话状态", `<table class="table"><tr><td>会话 ID</td><td>sess_7b1e9a2c</td></tr><tr><td>状态</td><td>${badge("运行中", "green")}</td></tr><tr><td>触发源</td><td>ACTION_REQUEST</td></tr><tr><td>TTL</td><td>02:13</td></tr></table>`)}
-        ${panel("上下文存储", `<div class="donut"><div class="donut-inner"><b>92.4%</b><span class="small">命中率</span></div></div>`)}
-        ${panel("执行延迟 P95", `<table class="table"><tr><td>Context</td><td>186ms</td></tr><tr><td>Planner</td><td>1.02s</td></tr><tr><td>Policy Gate</td><td>38ms</td></tr><tr><td>Adapter</td><td>412ms</td></tr></table>`)}
+        ${panel("执行能力", `<table class="table"><tr><td>LLM</td><td>${badge(agent.llm_enabled ? "启用" : "禁用", agent.llm_enabled ? "green" : "amber")}</td></tr><tr><td>真实执行</td><td>${badge(agent.real_execution_enabled ? "启用" : "禁用", agent.real_execution_enabled ? "green" : "amber")}</td></tr><tr><td>支持模式</td><td>${esc((agent.supported_execution_modes || []).join(", ") || "--")}</td></tr></table>`)}
+        ${panel("计划状态", `<table class="table"><tr><td>Plan ID</td><td>${esc(latestPlan?.plan_id || "--")}</td></tr><tr><td>状态</td><td>${esc(latestPlan?.status || "--")}</td></tr><tr><td>任务类型</td><td>${esc(latestPlan?.mission_type || "--")}</td></tr></table>`)}
+        ${panel("数据可用性", `<table class="table"><tr><td>会话指标</td><td>${badge("未提供", "amber")}</td></tr><tr><td>延迟指标</td><td>${badge("未提供", "amber")}</td></tr><tr><td>系统负载</td><td>${badge("未提供", "amber")}</td></tr></table>`)}
       </div>
-      ${panel("当前选中执行详情", `<pre class="json">${esc(JSON.stringify({
-        trace_id: state.activeTrace,
-        session_id: "sess_7b1e9a2c",
-        type: "ACTION_REQUEST",
-        task: "UAV-03 执行 TakePhoto",
-        planner_output: "PLAN_TAKEPHOTO_V2",
-        adapter: "Planner-Agent",
-        status: "SUCCESS",
-      }, null, 2))}</pre><button class="button primary">查看完整 Payload</button>`, "scroll")}
+      ${panel("当前执行 / 最近结果", `<pre class="json">${esc(JSON.stringify(latestAction || { status: "no_action_data" }, null, 2))}</pre>`, "scroll")}
     </div>
   </div>`;
 }
 
 function policyPage() {
-  const rows = [
-    ["14:32:15", "ALLOW", "UAV-03", "TAKE_PHOTO", "LOW", "OPERATOR"],
-    ["14:32:12", "DENY", "UAV-01", "ENTER_NO_FLY_ZONE", "HIGH", "SYSTEM"],
-    ["14:31:58", "REQUIRE_CONFIRM", "UAV-07", "FOLLOW_TARGET", "MEDIUM", "DELEGATED"],
-    ["14:31:45", "PREEMPT", "UAV-02", "LAND", "LOW", "OPERATOR"],
-    ["14:31:28", "DEFER", "UAV-05", "SWARM_RECONFIGURE", "MEDIUM", "SYSTEM"],
-  ];
+  const rows = Array.isArray(state.policyDecisions) ? state.policyDecisions : [];
+  const count = (code) => rows.filter((item) => String(item.decision_code || "").toUpperCase() === code).length;
+  const latest = rows[0] || null;
   return `<div class="page">
-    ${pageTitle("Policy Gate", "Safe · Deterministic · Explainable Decisions", `<button class="button primary">策略配置中心</button><button class="button">Policy Simulator</button>`)}
+    ${pageTitle("Policy Gate", "Safe · Deterministic · Explainable Decisions")}
     <div class="metrics">
-      ${metric("总决策数(24h)", "18,762", "+8.6%", "cyan")}
-      ${metric("ALLOW 允许", "14,251", "76.0%", "green")}
-      ${metric("DENY 拒绝", "2,163", "11.5%", "red")}
-      ${metric("REQUIRE_CONFIRM", "1,248", "6.6%", "amber")}
-      ${metric("PREEMPT", "812", "4.3%", "violet")}
-      ${metric("DEFER", "288", "1.5%", "blue")}
+      ${metric("最近决策", rows.length, "Audit window", "cyan")}
+      ${metric("ALLOW 允许", count("ALLOW"), "最近窗口", "green")}
+      ${metric("DENY 拒绝", count("DENY"), "最近窗口", "red")}
+      ${metric("REQUIRE_CONFIRM", count("REQUIRE_CONFIRM"), "最近窗口", "amber")}
+      ${metric("PREEMPT", count("PREEMPT"), "最近窗口", "violet")}
+      ${metric("DEFER", count("DEFER"), "最近窗口", "blue")}
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.12fr .88fr">
-      ${panel("决策监控 / Decision Monitor", `<table class="table"><thead><tr><th>时间</th><th>决策</th><th>节点</th><th>Action</th><th>Risk</th><th>Authority</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${r[0]}</td><td>${badge(r[1], decisionColor(r[1]))}</td><td>${r[2]}</td><td>${r[3]}</td><td>${badge(r[4], r[4] === "HIGH" ? "red" : r[4] === "MEDIUM" ? "amber" : "green")}</td><td>${r[5]}</td></tr>`).join("")}</tbody></table>`, "scroll")}
+      ${panel("决策监控 / Decision Monitor", rows.length ? `<table class="table"><thead><tr><th>时间</th><th>决策</th><th>节点</th><th>Action</th><th>Risk</th><th>Profile</th></tr></thead><tbody>${rows.map((item) => { const code = String(item.decision_code || "UNKNOWN").toUpperCase(); const risk = String(item.risk?.level || "--").toUpperCase(); return `<tr><td>${esc(eventTime(item.timestamp))}</td><td>${badge(code, decisionColor(code))}</td><td>${esc(item.node_id || "--")}</td><td>${esc(item.action_type || "--")}</td><td>${esc(risk)}</td><td>${esc(item.effective_profile_id || "--")}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty-state">暂无 Policy 决策</div>`, "scroll")}
       <div class="grid">
-        ${panel("决策对比 / Decision Comparison", `<div class="split-2"><pre class="json">${esc(JSON.stringify({ requested_scope: "self_only", action: "TAKE_PHOTO", altitude_m: 120 }, null, 2))}</pre><pre class="json">${esc(JSON.stringify({ effective_scope: "self_only", decision_code: "ALLOW", mitigations: ["ALTITUDE_LIMIT", "GEO_FENCE_PASS"] }, null, 2))}</pre></div>`)}
-        ${panel("约束与交接", `${checkList(["GEO_FENCE_PASS", "MAX_ALTITUDE <= 120m", "PAYLOAD_ALLOWED(CAM-01)", "LINK_STABILITY_OK"])}`)}
-        ${panel("决策说明", `<pre class="json">${esc(JSON.stringify({
-          reason_code: "ALTITUDE_ABOVE_THRESHOLD",
-          error_code: null,
-          policy_trace_id: "ptr_8f3c1a7e5c2b",
-          audit_tags: ["mission:M-0045", "node:UAV-03", "backend:MISSION"],
-        }, null, 2))}</pre>`)}
+        ${panel("最新决策", `<pre class="json">${esc(JSON.stringify(latest || { status: "no_policy_decisions" }, null, 2))}</pre>`)}
+        ${panel("约束", latest?.constraints?.length ? checkList(latest.constraints.map((item) => item.code || item.constraint_id || JSON.stringify(item))) : `<div class="empty-state">未提供约束详情</div>`)}
+        ${panel("决策说明", `<pre class="json">${esc(JSON.stringify(latest ? { explanation: latest.explanation, primary_reason_code: latest.primary_reason_code, secondary_reason_codes: latest.secondary_reason_codes, audit_tags: latest.audit_tags } : { status: "unavailable" }, null, 2))}</pre>`)}
       </div>
     </div>
   </div>`;
@@ -618,11 +804,15 @@ function decisionColor(code) {
 
 function backendPage() {
   const api = runtimeApiStatus();
-  const backend = backendStatus();
-  const probeCode = state.lastBackendResult?.connect_probe?.code || "not_checked";
-  const readiness = state.lastBackendResult?.readiness || backend.label;
+  const vehicle = selectedVehicle();
+  const backend = backendStatus(vehicle);
+  const selectedProbe = state.runtimeSnapshot?.backend_statuses?.find((item) => item.node_id === vehicle?.id);
+  const latestProbe = state.lastBackendResult?.resolved_node_id === vehicle?.id ? state.lastBackendResult : selectedProbe;
+  const probeCode = latestProbe?.connect_probe?.code || "not_checked";
+  const readiness = latestProbe?.readiness || backend.label;
   const runtimeService = state.runtimeHealth?.service || "uav_runtime_http_bridge";
-  const actionButtonsDisabled = state.apiStatus !== "live" || !state.backendConnected;
+  const permission = actionPermission();
+  const actionButtonsDisabled = !permission.allowed;
   const liveAction = state.lastActionResult;
   const actionResultView = liveAction
     ? {
@@ -637,43 +827,37 @@ function backendPage() {
         result: liveAction,
       }
     : {
-        data_source: "demo",
-        backend: "px4_sitl_backend",
+        data_source: "unavailable",
+        backend: vehicle?.backend || null,
         action_type: state.currentAction,
-        status: "DEMO",
+        status: "NO_ACTION_RESULT",
         policy_decision: null,
         arm_ack: null,
         takeoff_ack: null,
         land_ack: null,
-        result: {
-          altitude: state.altitude,
-          max_altitude_m: state.maxAltitude,
-          last_z: state.lastZ,
-          threshold_reached: state.thresholdReached,
-          mode: `AUTO.${state.currentAction}`,
-        },
+        result: null,
       };
   return `<div class="page">
     ${pageTitle("Adapter 与 Backend 管理", "PX4 SITL · MAVLink · Fake Adapter · Hardware Backend")}
     <div class="grid" style="grid-template-columns:.92fr 1.18fr auto">
       ${panel("Backend 模式", `<div class="mini-tabs"><span class="chip">FAKE</span><span class="chip active">SITL(PX4)</span><span class="chip">HARDWARE</span></div>`)}
-      ${panel("Runtime API 与传输端点", `<div class="form-grid"><div class="field"><label>Runtime API Base URL</label><input id="runtime-api-url" value="${esc(state.apiBaseUrl)}" onchange="saveApiBaseUrl(this.value)"></div><div class="field"><label>MAVLink Endpoint</label><input value="udpin:127.0.0.1:14540" readonly></div><div class="field"><label>Telemetry REST（待后端提供）</label><input value="${esc(state.apiBaseUrl)}/telemetry/latest" readonly></div></div><div style="margin-top:8px">${badge(`Runtime API ${api.label}`, api.color)} ${badge(`PX4 ${backend.label}`, backend.color)} ${state.apiLastError ? `<span class="small">${esc(state.apiLastError)}</span>` : ""}</div>`)}
-      <button class="button primary" onclick="probeRuntime({notifyUser:true})">重新探测</button>
+      ${panel("Runtime API 与传输端点", `<div class="form-grid"><div class="field"><label>Runtime API Base URL</label><input id="runtime-api-url" value="${esc(state.apiBaseUrl)}" onchange="saveApiBaseUrl(this.value)"></div><div class="field"><label>所选 MAVLink Endpoint</label><input value="${esc(vehicle?.endpoint || "--")}" readonly></div><div class="field"><label>Telemetry REST</label><input value="${esc(state.apiBaseUrl)}/telemetry/latest" readonly></div></div><div style="margin-top:8px">${badge(`Runtime API ${api.label}`, api.color)} ${badge(`PX4 ${backend.label}`, backend.color)} ${state.apiLastError ? `<span class="small">${esc(state.apiLastError)}</span>` : ""}</div>`)}
+      <button class="button primary" onclick="probeRuntime({notifyUser:true})">刷新全部状态</button>
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.12fr .88fr">
       <div class="grid">
         ${panel("Adapter 连接拓扑", adapterTopology())}
         <div class="cols-4">
-          ${statusTile("exec_unavailable", "12", "24h -2", "red")}
-          ${statusTile("smoke_not_connected", "9", "24h +3", "violet")}
-          ${statusTile("backend_probe_failed", "5", "24h -1", "red")}
-          ${statusTile("ack_failed", "4", "24h", "amber")}
+          ${statusTile("注册节点", state.fleet.length, "Vehicle Registry", "cyan")}
+          ${statusTile("在线节点", fleetSummary().online, "Fresh telemetry", "green")}
+          ${statusTile("离线 / 过期", state.linkIssues ?? "--", "Enabled nodes", "amber")}
+          ${statusTile("执行中动作", state.runtimeSnapshot?.active_actions?.length ?? 0, "Runtime store", "violet")}
         </div>
       </div>
       <div class="grid">
         ${panel("Backend 健康与探测", `<table class="table"><tr><th>组件</th><th>状态</th><th>Probe</th><th>来源</th></tr><tr><td>${esc(runtimeService)}</td><td>${badge(api.label, api.color)}</td><td>${esc(state.runtimeHealth?.status || "not_checked")}</td><td>GET /api/health</td></tr><tr><td>px4_sitl_backend</td><td>${badge(backend.label, backend.color)}</td><td>${esc(probeCode)}</td><td>${esc(readiness)}</td></tr><tr><td>hardware_backend</td><td>${badge("未接入", "amber")}</td><td>N/A</td><td>配置占位</td></tr></table>`)}
-        ${panel("Action 控制", `<div class="form-grid"><div class="field"><label>目标 Backend</label><select><option>px4_sitl_backend</option></select></div><div class="field"><label>altitude_m</label><input type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>超时(s)</label><input value="10" readonly></div></div><button class="button primary" style="margin-top:10px" onclick="runSmokeTakeoff()" ${actionButtonsDisabled ? "disabled" : ""}>Smoke Takeoff</button> <button class="button warn" onclick="runLand()" ${actionButtonsDisabled ? "disabled" : ""}>Land</button> ${badge(actionButtonsDisabled ? "等待 Runtime / PX4" : "允许调用", actionButtonsDisabled ? "amber" : "green")}`)}
-        ${panel(`Telemetry 显示 ${badge(liveAction ? (state.apiStatus === "live" ? "LIVE" : "LAST LIVE") : "DEMO", liveAction ? (state.apiStatus === "live" ? "green" : "amber") : "amber")}`, telemetrySummary())}
+        ${panel("Action 控制", `<div class="form-grid"><div class="field"><label>目标载具</label><select onchange="selectVehicle(this.value)">${state.fleet.map((item) => `<option value="${esc(item.id)}" ${item.id === state.selectedUav ? "selected" : ""}>${esc(item.id)} · SYS ${item.systemId ?? "-"}</option>`).join("")}</select></div><div class="field"><label>altitude_m</label><input type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>Identity</label><input value="${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}" readonly></div></div><button class="button" style="margin-top:10px" onclick="checkBackend()" ${!vehicle || state.apiStatus !== "live" ? "disabled" : ""}>Check Backend</button> <button class="button primary" onclick="runSmokeTakeoff()" ${actionButtonsDisabled ? "disabled" : ""}>Smoke Takeoff</button> <button class="button warn" onclick="runLand()" ${actionButtonsDisabled ? "disabled" : ""}>Land</button> ${badge(permission.reason, permission.allowed ? "green" : "amber")}`)}
+        ${panel(`Telemetry 显示 ${badge(state.dataStatus.toUpperCase(), dataSourceStatus().color)}`, telemetrySummary())}
         ${panel("Action Result JSON", `<pre class="json">${esc(JSON.stringify(actionResultView, null, 2))}</pre>`, "scroll")}
         ${panel("最近动作记录", eventList(), "scroll")}
       </div>
@@ -683,24 +867,21 @@ function backendPage() {
 
 function adapterTopology() {
   const adapters = [
-    ["Fake Adapter", "DEFINED", "v1.0.0", "cyan"],
-    ["MAVLink Adapter", state.backendConnected ? "CONNECTED" : "IDLE", "v1.1.0", state.backendConnected ? "green" : "amber"],
-    ["Payload Adapter", "DEFINED", "v1.0.0", "cyan"],
-    ["Perception Adapter", "DEFINED", "v1.0.0", "cyan"],
-    ["GPIO/UART Adapter", "DEFINED", "v1.0.0", "cyan"],
+    ["Runtime HTTP", state.apiStatus === "live" ? "LIVE" : "OFFLINE", state.runtimeHealth?.version || "--", state.apiStatus === "live" ? "green" : "amber"],
+    ["MAVLink Adapter", state.backendConnected ? "CONNECTED" : "IDLE", "px4_sitl", state.backendConnected ? "green" : "amber"],
+    ["Vehicle Registry", `${state.fleet.length} NODES`, state.registryPayload?.source || "--", "cyan"],
   ];
-  return `<div class="cols-4" style="grid-template-columns:repeat(5,1fr)">${adapters.map((a) => `<div class="chain-card"><h3>${a[0]}</h3>${badge(a[1], a[3])}<br><span class="small">${a[2]} · 拓扑定义</span></div>`).join("")}</div>
-  <div class="runtime-chain" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
-    <div class="chain-card"><h3>fake_backend</h3>${badge("未启用", "amber")}</div>
-    <div class="chain-card"><h3>px4_sitl_backend</h3>${badge(backendStatus().label, backendStatus().color)}</div>
-    <div class="chain-card"><h3>hardware_backend</h3>${badge("未接入", "amber")}</div>
-  </div>`;
+  return `<div class="cols-4" style="grid-template-columns:repeat(3,1fr)">${adapters.map((a) => `<div class="chain-card"><h3>${esc(a[0])}</h3>${badge(a[1], a[3])}<br><span class="small">${esc(a[2])}</span></div>`).join("")}</div>`;
 }
 
 async function checkBackend(options = {}) {
+  if (!selectedVehicle()) {
+    notify("无法检查 Backend", "Runtime 没有已注册载具。", "amber");
+    return null;
+  }
   const payload = await callRuntime(
     "backend",
-    () => window.SwarmRuntimeApi.checkBackend(currentRuntimeRequest()),
+    () => window.SwarmRuntimeApi.checkBackend(currentRuntimeRequest({ requireConnected: false })),
     () => ({ readiness: "unavailable", connect_probe: { code: "runtime_unreachable" } }),
     { notifyFailure: options.notifyUser !== false }
   );
@@ -709,8 +890,9 @@ async function checkBackend(options = {}) {
   state.backendConnected = readiness === "ready" || code === "backend_connected";
   pushEvent("BACKEND_CHECK", `px4_sitl_backend 探测：${code}`, state.backendConnected ? "green" : "red");
   if (options.notifyUser !== false) {
-    notify("Backend Check", `Runtime API 返回 ${code}`, state.backendConnected ? "green" : "amber");
+    notify("Backend Check", `${state.selectedUav} 返回 ${code}`, state.backendConnected ? "green" : "amber");
   }
+  await syncRuntimeState({ notifyFailure: false });
   render();
   return payload;
 }
@@ -735,75 +917,57 @@ function setTargetAltitude(value) {
 }
 
 function replayPage() {
-  const replayRows = [
-    ["14:30:00.125", "MISSION_REQUEST", "Planner-Agent", "MISSION 创建请求", "MSG-000001"],
-    ["14:30:00.532", "ACTION_REQUEST", "Planner-Agent", "UAV-03 请求执行 TakePhoto", "MSG-000002"],
-    ["14:30:00.912", "POLICY_DECISION_EVENT", "Policy Gate", "策略决策：ALLOW", "MSG-000003"],
-    ["14:30:01.301", "ADAPTER_EXECUTION", "Adapter-Gateway", "分发到 UAV-03 适配器", "MSG-000004"],
-    ["14:30:01.842", "ACTION_RESULT", "UAV-03", "执行成功：TakePhoto", "MSG-000006"],
-    ["14:30:05.412", "FAULT", "UAV-05", "电量低于阈值告警 LOW_BATTERY", "MSG-000015"],
-  ];
+  const replayRows = state.runtimeEvents;
+  const errorCount = replayRows.filter((event) => ["error", "critical"].includes(event.severity)).length;
+  const warningCount = replayRows.filter((event) => event.severity === "warning").length;
+  const involvedNodes = new Set(replayRows.map((event) => event.node_id).filter(Boolean)).size;
+  const selectedEvent = replayRows[state.replayIndex] || replayRows[0] || null;
   return `<div class="page">
-    ${pageTitle("Audit / Replay", "任务审计与回放 · 事件溯源 · 三维态势复盘", `<button class="button">导出报告</button><button class="button">下载日志</button><button class="button primary">分享链接</button>`)}
+    ${pageTitle("Audit / Replay", "任务审计与回放 · 事件溯源 · 三维态势复盘")}
     <div class="grid" style="grid-template-columns:repeat(5,1fr)">
-      ${metric("事件总数", "128", "mission-20260705", "cyan")}
-      ${metric("成功", "120", "93.8%", "green")}
-      ${metric("失败", "3", "2.3%", "red")}
-      ${metric("超时", "2", "1.6%", "amber")}
-      ${metric("涉及节点", "12", "UAV / GCS", "violet")}
+      ${metric("最近事件", replayRows.length, "Runtime audit", "cyan")}
+      ${metric("信息", replayRows.length - errorCount - warningCount, "当前窗口", "green")}
+      ${metric("错误", errorCount, "error / critical", "red")}
+      ${metric("警告", warningCount, "warning", "amber")}
+      ${metric("涉及节点", involvedNodes, "node_id", "violet")}
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.22fr .78fr">
-      ${panel("事件时间线（按时间排序）", `<table class="table"><thead><tr><th>时间</th><th>类型</th><th>节点</th><th>事件 / 消息</th><th>消息 ID</th></tr></thead><tbody>${replayRows.map((r) => `<tr><td>${r[0]}</td><td>${badge(r[1], eventColor(r[1]))}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`).join("")}</tbody></table>`, "scroll")}
+      ${panel("事件时间线（按时间排序）", replayRows.length ? `<table class="table"><thead><tr><th>时间</th><th>类型</th><th>节点</th><th>事件 / 消息</th><th>事件 ID</th></tr></thead><tbody>${replayRows.map((event) => `<tr><td>${esc(eventTime(event.timestamp))}</td><td>${badge(event.event_type || "RUNTIME_EVENT", eventColor(event.severity, event.event_type))}</td><td>${esc(event.node_id || "--")}</td><td>${esc(event.summary || "--")}</td><td>${esc(event.event_id || "--")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty-state">暂无可回放事件</div>`, "scroll")}
       <div class="grid">
-        ${panel("事件详情", `<pre class="json">${esc(JSON.stringify({
-          event_type: "ADAPTER_EXECUTION",
-          message_id: "MSG-000005",
-          node: "UAV-03",
-          action: "TakePhoto",
-          status: "SUCCESS",
-          payload: { preset: "1920x1080", storage: "/data/images/20260705/" },
-        }, null, 2))}</pre>`, "scroll")}
-        ${panel("回放控制器", `<div class="mini-tabs"><button class="button" onclick="replayStep(-1)">上一帧</button><button class="button primary" onclick="replayPlay()">播放</button><button class="button" onclick="replayStep(1)">下一帧</button><span class="chip active">1x</span><span class="chip">2x</span><span class="chip">4x</span></div><div class="progress" style="margin:14px 0"><span style="width:${Math.min(96, 18 + state.replayIndex * 9)}%"></span></div>${scene3d("small")}`)}
+        ${panel("事件详情", `<pre class="json">${esc(JSON.stringify(selectedEvent || { status: "no_runtime_events" }, null, 2))}</pre>`, "scroll")}
+        ${panel("回放控制器", `<div class="mini-tabs"><button class="button" onclick="replayStep(-1)" ${replayRows.length ? "" : "disabled"}>上一条</button><button class="button primary" onclick="replayPlay()">刷新事件</button><button class="button" onclick="replayStep(1)" ${replayRows.length ? "" : "disabled"}>下一条</button></div><div class="progress" style="margin:14px 0"><span style="width:${replayRows.length ? ((state.replayIndex + 1) / replayRows.length) * 100 : 0}%"></span></div><div class="empty-state">Runtime 尚未提供可回放的三维轨迹帧</div>`)}
       </div>
     </div>
   </div>`;
 }
 
-function eventColor(type) {
-  if (type.includes("FAULT")) return "red";
-  if (type.includes("POLICY")) return "violet";
-  if (type.includes("RESULT")) return "green";
-  if (type.includes("ADAPTER")) return "cyan";
-  return "amber";
-}
-
 function skillsPage() {
+  const skills = state.skillsPayload?.skills || [];
+  const enabledCount = skills.filter((skill) => skill.enabled).length;
+  const highRiskCount = skills.filter((skill) => Number(skill.risk_level) >= 3).length;
+  const backends = new Set(skills.flatMap((skill) => skill.supported_backends || []));
+  const selectedSkill = skills.find((skill) => skill.action_type === "takeoff") || skills[0] || null;
   return `<div class="page">
     ${pageTitle("Skills 能力库", "能力注册 · 风险分级 · Adapter 支持 · Schema 治理")}
     <div class="metrics">
-      ${metric("技能总数", "128", "本周新增 12", "cyan")}
-      ${metric("已启用", "96", "75%", "green")}
-      ${metric("高风险技能", "14", "+10.9%", "amber")}
-      ${metric("覆盖 Backend", "5", "PX4 / Payload / Fake", "cyan")}
-      ${metric("平均成功率", "96.1%", "+1.8%", "green")}
-      ${metric("今日调用次数", "8,742", "+12.3%", "amber")}
+      ${metric("技能总数", skills.length, "Capability Registry", "cyan")}
+      ${metric("已启用", enabledCount, "当前 manifest", "green")}
+      ${metric("高风险技能", highRiskCount, "risk_level >= 3", "amber")}
+      ${metric("覆盖 Backend", backends.size, [...backends].join(" / ") || "--", "cyan")}
+      ${metric("成功率", "--", "后端未提供", "green")}
+      ${metric("调用次数", skills.reduce((sum, skill) => sum + (skill.usage?.total_calls || 0), 0), "usage source", "amber")}
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1fr .52fr">
-      ${panel("能力卡片", `<div class="cap-grid">${capabilities.map((c) => `<div class="cap-card"><h3>${c[0]}</h3><div class="small">${c[1]}</div><div class="meta">${badge("已启用", "green")}${badge(c[2], c[2].includes("高") ? "red" : c[2].includes("中") ? "amber" : "green")}${badge(c[3], "cyan")}</div><div style="margin-top:14px"><span class="small">近7天成功率</span><b class="green" style="display:block;font-size:22px">${c[4]}</b></div></div>`).join("")}</div>`, "scroll")}
-      ${panel("起飞 takeoff 详情", `<div class="mini-tabs"><span class="chip active">概览</span><span class="chip">接口定义</span><span class="chip">使用统计</span><span class="chip">版本历史</span></div><pre class="json" style="margin-top:10px">${esc(JSON.stringify({
-        skill_id: "takeoff",
-        category: "flight_control",
-        risk_level: 2,
-        supported_backend: ["PX4", "MAVLink"],
-        input_schema: { altitude_m: "number", heading: "number", frame: "AMSL|AGL" },
-        output_schema: { success: "boolean", achieved_altitude: "number", duration: "number" },
-      }, null, 2))}</pre><button class="button primary">执行测试</button> <button class="button">在任务中使用</button>`, "scroll")}
+      ${panel("能力卡片", skills.length ? `<div class="cap-grid">${skills.map((skill) => `<div class="cap-card"><h3>${esc(skill.display_name)}</h3><div class="small">${esc(skill.action_type)}</div><div class="meta">${badge(skill.enabled ? "已启用" : "禁用", skill.enabled ? "green" : "red")}${badge(`风险 ${skill.risk_level}`, Number(skill.risk_level) >= 3 ? "red" : Number(skill.risk_level) >= 2 ? "amber" : "green")}${badge((skill.supported_adapters || []).join(" / ") || "无 Adapter", "cyan")}</div><div style="margin-top:14px"><span class="small">${esc(skill.description || "")}</span></div></div>`).join("")}</div>` : `<div class="empty-state">暂无 Skill manifest</div>`, "scroll")}
+      ${panel(`${selectedSkill?.display_name || "Skill"} 详情`, `<pre class="json" style="margin-top:10px">${esc(JSON.stringify(selectedSkill || { status: "unavailable" }, null, 2))}</pre>`, "scroll")}
     </div>
   </div>`;
 }
 
 function simulationPage() {
   const px4 = backendStatus();
+  const simulation = state.simulationStatus || {};
+  const summary = fleetSummary();
   const smokeResult = state.lastActionResult
     ? {
         data_source: "runtime_api",
@@ -816,37 +980,37 @@ function simulationPage() {
         backend: state.lastActionResult.backend || "px4_sitl_backend",
       }
     : {
-        data_source: "demo",
+        data_source: "unavailable",
         max_altitude_m: state.maxAltitude,
         last_z: state.lastZ,
         threshold_reached: state.thresholdReached,
         arm_ack: null,
         takeoff_ack: null,
         land_ack: null,
-        backend: "px4_sitl_backend",
+        backend: selectedVehicle()?.backend || null,
       };
   return `<div class="page">
-    ${pageTitle("仿真中心", "PX4 SITL · Gazebo · 高逼真数字孪生 · Smoke Test", `<button class="button primary" onclick="runScenario()">运行场景</button><button class="button" onclick="injectFault()">故障注入</button>`)}
+    ${pageTitle("仿真中心", "PX4 SITL · Gazebo · Cesium 数字孪生 · Smoke Test", `<button class="button primary" onclick="runScenario()">进入三维态势</button><button class="button" onclick="probeRuntime({notifyUser:true})">刷新状态</button>`)}
     <div class="split-2 h-fill" style="grid-template-columns:.92fr 1.08fr">
       <div class="grid">
         ${panel("仿真环境", `<div class="cap-grid" style="grid-template-columns:repeat(2,1fr)">
-          ${simCard("Fake Simulation", "轻量级逻辑仿真", "本地演示", "cyan")}
+          ${simCard("Gazebo", simulation.reason || "独立状态探测", simulation.status || "unknown", simulation.status === "running" ? "green" : "amber")}
           ${simCard("PX4 SITL + Gazebo", "飞控闭环验证", px4.label, px4.color)}
-          ${simCard("RflySim", "多机稳定仿真", "未接入", "amber")}
-          ${simCard("ProSim / UE", "高保真渲染仿真", "未接入", "amber")}
+          ${simCard("PX4 节点", "Runtime Registry", `${summary.online}/${summary.total} 在线`, summary.online ? "green" : "amber")}
+          ${simCard("Cesium", "vehicle snapshot 可视化", state.simulationReady ? "CONNECTED" : "独立服务", state.simulationReady ? "green" : "cyan")}
         </div>`)}
-        ${panel(`仿真任务 ${badge("DEMO", "amber")}`, `<table class="table"><tr><th>任务名</th><th>环境</th><th>状态</th><th>节点</th><th>操作</th></tr><tr><td>Sim_Task_001</td><td>PX4 SITL</td><td>${badge("演示记录", "cyan")}</td><td>8 UAV / 1 GCS</td><td>详情</td></tr><tr><td>Sim_Task_002</td><td>ProSim / UE</td><td>${badge("演示记录", "cyan")}</td><td>4 UAV / 1 GCS</td><td>回放</td></tr><tr><td>Sim_Task_003</td><td>Fake</td><td>${badge("演示记录", "cyan")}</td><td>10 UAV</td><td>详情</td></tr></table>`)}
+        ${panel(`仿真状态 ${badge(String(simulation.status || "unknown").toUpperCase(), simulation.status === "running" ? "green" : "amber")}`, `<table class="table"><tr><th>来源</th><th>注册</th><th>启用</th><th>连接</th><th>过期</th></tr><tr><td>${esc(simulation.source || "runtime_state_store")}</td><td>${simulation.total_registered_nodes ?? "--"}</td><td>${simulation.total_enabled_nodes ?? "--"}</td><td>${simulation.connected_nodes ?? "--"}</td><td>${simulation.stale_nodes ?? "--"}</td></tr></table>`)}
       </div>
       <div class="grid" style="grid-template-rows:1fr auto">
-        ${panel("高逼真仿真预览", scene3d(), "h-fill")}
-        ${panel(`Smoke Test 状态 ${badge(smokeResult.data_source === "runtime_api" ? (state.apiStatus === "live" ? "LIVE" : "LAST LIVE") : "DEMO", smokeResult.data_source === "runtime_api" && state.apiStatus === "live" ? "green" : "amber")}`, `<div class="split-2"><div><div class="donut"><div class="donut-inner"><b>${smokeResult.data_source === "runtime_api" ? (state.thresholdReached ? "PASS" : "WAIT") : "--"}</b><span class="small">最近结果</span></div></div></div><pre class="json">${esc(JSON.stringify(smokeResult, null, 2))}</pre></div>`)}
+        ${panel("Runtime 载具预览", fleetPreview(), "h-fill")}
+        ${panel(`Smoke Test 状态 ${badge(smokeResult.data_source === "runtime_api" ? "LIVE RESULT" : "NO RESULT", smokeResult.data_source === "runtime_api" ? "green" : "amber")}`, `<div class="split-2"><div><div class="donut"><div class="donut-inner"><b>${smokeResult.data_source === "runtime_api" ? (state.thresholdReached ? "PASS" : "WAIT") : "--"}</b><span class="small">最近结果</span></div></div></div><pre class="json">${esc(JSON.stringify(smokeResult, null, 2))}</pre></div>`)}
       </div>
     </div>
   </div>`;
 }
 
 function simCard(name, detail, status, color) {
-  return `<div class="cap-card"><h3>${esc(name)}</h3><div class="small">${esc(detail)}</div><div style="height:76px;margin:10px 0;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(135deg,rgba(54,199,244,.16),rgba(66,216,131,.08)),rgba(5,14,18,.8)"></div>${badge(status, color)} <button class="button" style="float:right">进入</button></div>`;
+  return `<div class="cap-card"><h3>${esc(name)}</h3><div class="small">${esc(detail)}</div><div style="height:76px;margin:10px 0;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(135deg,rgba(54,199,244,.16),rgba(66,216,131,.08)),rgba(5,14,18,.8)"></div>${badge(status, color)}</div>`;
 }
 
 async function generateRequest() {
@@ -860,19 +1024,17 @@ async function generateRequest() {
       objective: "园区巡检、拍照取证、返航降落",
       dry_run: true,
     }),
-    () => ({ result: "ready", plan: sampleActionRequest() })
+    () => ({ result: "unavailable", plan: null, failure_reason: "runtime_api_unreachable" })
   );
   pushEvent("MISSION_REQUEST", `生成任务请求 ${state.activeTrace}`, state.apiStatus === "live" ? "green" : "cyan");
-  notify("已生成 ActionRequest", state.apiStatus === "live" ? "已从 Runtime API 获取 plan-mission 结果。" : "任务输入已转换为结构化 mission_request / action_request。", state.apiStatus === "live" ? "green" : "cyan");
+  const planned = payload.result !== "unavailable";
+  notify(planned ? "已生成 ActionRequest" : "任务规划失败", planned ? "已从 Runtime API 获取 plan-mission 结果。" : "Runtime API 未返回可用计划。", planned ? "green" : "red");
   state.lastPlanResult = payload;
   render();
 }
 
 function policyPrecheck() {
-  state.policyBlocks += 1;
-  pushEvent("POLICY_DECISION_EVENT", "策略预检通过：18 条约束命中，0 条阻断", "green");
-  notify("策略预检通过", "GEO_FENCE_PASS / MAX_ALTITUDE / LINK_STABILITY 均通过。", "green");
-  render();
+  notify("策略预检不可用", "当前 HTTP API 没有独立的 Policy 预检执行接口。", "amber");
 }
 
 function simulationPreview() {
@@ -883,83 +1045,82 @@ function simulationPreview() {
 }
 
 function dispatchMission() {
-  state.missionCount += 1;
-  state.currentAction = "MISSION_DISPATCH";
-  pushEvent("MISSION_DISPATCH", "任务已下发：Planner-Agent -> Policy Gate -> Adapter Gateway", "green");
-  notify("任务已下发", "这是前端原型态，后续会接 Python runtime API。", "green");
-  render();
+  notify("任务未下发", "Agent Runtime 当前 real_execution_enabled=false。", "amber");
 }
 
 async function runSmokeTakeoff() {
-  if (state.apiStatus !== "live" || !state.backendConnected) {
-    notify("无法执行 Smoke Takeoff", "Runtime API 或 PX4 Backend 当前未就绪。", "amber");
+  const permission = actionPermission();
+  if (!permission.allowed) {
+    notify("无法执行 Smoke Takeoff", permission.reason, "amber");
     return;
   }
   state.currentAction = "TAKEOFF";
-  state.simRunning = false;
-  state.thresholdReached = false;
-  state.altitude = 0;
-  state.lastZ = 0;
-  const payload = await callRuntime(
-    "action",
-    () => window.SwarmRuntimeApi.smokeTakeoff(currentRuntimeRequest()),
-    () => ({
-      action: "takeoff",
-      backend: "px4_sitl",
-      result: "unavailable",
-      failure_reason: "runtime_api_unreachable",
-    })
-  );
-  pushEvent("ACTION_REQUEST", `smoke-takeoff 请求已创建（${state.apiStatus}）`, state.apiStatus === "live" ? "green" : "red");
-  notify("Smoke Takeoff", state.apiStatus === "live" ? "已调用 Runtime API /actions/smoke-takeoff。" : "Runtime API 调用失败，未启动本地假动作。", state.apiStatus === "live" ? "green" : "red");
-  state.lastActionResult = payload;
+  state.actionInFlight = true;
+  const stats = state.nodeStats[state.selectedUav] || {};
+  stats.thresholdReached = null;
+  state.nodeStats[state.selectedUav] = stats;
   render();
+  try {
+    const payload = await window.SwarmRuntimeApi.smokeTakeoff(currentRuntimeRequest());
+    applyApiSuccess("action", payload);
+    pushEvent("ACTION_RESULT", `${state.selectedUav} smoke-takeoff 已返回`, "green");
+    notify("Smoke Takeoff", `${state.selectedUav} 已返回真实 Runtime 结果。`, "green");
+  } catch (error) {
+    applyApiFailure("smoke-takeoff", error, false);
+    pushEvent("ACTION_FAILED", `${state.selectedUav} smoke-takeoff：${error.message}`, "red");
+    notify("Smoke Takeoff 失败", error.message, "red");
+  } finally {
+    state.actionInFlight = false;
+    await Promise.all([syncRuntimeState(), syncRuntimeEvents()]);
+    render();
+  }
 }
 
 async function runLand() {
-  if (state.apiStatus !== "live" || !state.backendConnected) {
-    notify("无法执行 Land", "Runtime API 或 PX4 Backend 当前未就绪。", "amber");
+  const permission = actionPermission();
+  if (!permission.allowed) {
+    notify("无法执行 Land", permission.reason, "amber");
     return;
   }
   state.currentAction = "LAND";
-  const payload = await callRuntime(
-    "action",
-    () => window.SwarmRuntimeApi.land(currentRuntimeRequest()),
-    () => ({ action: "land", result: "unavailable", failure_reason: "runtime_api_unreachable" })
-  );
-  pushEvent("ACTION_REQUEST", `LAND 请求已创建（${state.apiStatus}）`, "amber");
-  notify("Land", state.apiStatus === "live" ? "已调用 Runtime API /actions/land。" : "Runtime API 调用失败，未启动本地假动作。", "amber");
-  state.lastActionResult = payload;
+  state.actionInFlight = true;
   render();
+  try {
+    const payload = await window.SwarmRuntimeApi.land(currentRuntimeRequest());
+    applyApiSuccess("action", payload);
+    pushEvent("ACTION_RESULT", `${state.selectedUav} LAND 已返回`, "green");
+    notify("Land", `${state.selectedUav} 已返回真实 Runtime 结果。`, "green");
+  } catch (error) {
+    applyApiFailure("land", error, false);
+    pushEvent("ACTION_FAILED", `${state.selectedUav} LAND：${error.message}`, "red");
+    notify("Land 失败", error.message, "red");
+  } finally {
+    state.actionInFlight = false;
+    await Promise.all([syncRuntimeState(), syncRuntimeEvents()]);
+    render();
+  }
 }
 
 function runScenario() {
-  state.simRunning = true;
-  state.currentAction = "SIM_SCENARIO";
-  pushEvent("SIMULATION", "场景运行：链路正常、低风、PX4 SITL ready", "green");
-  notify("仿真场景运行中", "三维态势、Telemetry 与 Replay 进度开始模拟更新。", "green");
+  state.page = "twin";
   render();
 }
 
 function injectFault() {
-  state.linkIssues += 1;
-  state.successRate = Math.max(90, state.successRate - 0.4);
-  pushEvent("FAULT", "故障注入：UAV-05 LOW_BATTERY / link degraded", "red");
-  notify("故障已注入", "UAV-05 触发低电量与链路降级告警。", "red");
-  render();
+  notify("故障注入不可用", "当前 Runtime API 未提供仿真故障注入接口。", "amber");
 }
 
 function replayStep(delta) {
-  state.replayIndex = Math.max(0, Math.min(10, state.replayIndex + delta));
-  notify("Replay Step", `当前回放帧：${state.replayIndex}`, "cyan");
+  const lastIndex = Math.max(0, state.runtimeEvents.length - 1);
+  state.replayIndex = Math.max(0, Math.min(lastIndex, state.replayIndex + delta));
+  notify("Replay Step", `当前事件：${state.replayIndex + 1} / ${state.runtimeEvents.length}`, "cyan");
   render();
 }
 
 async function replayPlay() {
-  state.replayIndex = (state.replayIndex + 1) % 11;
-  await callRuntime("replay", () => window.SwarmRuntimeApi.replayLast(20), () => events);
-  pushEvent("REPLAY", `回放跳转到事件帧 ${state.replayIndex}`, "cyan");
-  notify("Replay Playing", state.apiStatus === "live" ? "已从 Runtime API 获取 replay 记录。" : "审计事件时间轴已推进一帧。", "cyan");
+  await syncRuntimeEvents({ notifyFailure: true });
+  state.replayIndex = Math.min(state.replayIndex, Math.max(0, state.runtimeEvents.length - 1));
+  notify("Replay Playing", state.apiStatus === "live" ? "已刷新 Runtime audit 记录。" : "Runtime API 未连接。", state.apiStatus === "live" ? "cyan" : "amber");
   render();
 }
 
@@ -1026,6 +1187,8 @@ function render() {
 function topbar() {
   const api = runtimeApiStatus();
   const dataSource = dataSourceStatus();
+  const summary = fleetSummary();
+  const now = new Date();
   const systemState = state.apiStatus === "checking"
     ? "检查中"
     : state.apiStatus === "live" && state.backendConnected
@@ -1033,17 +1196,17 @@ function topbar() {
       : "未连接";
   return `<header class="topbar">
     <div class="brand"><div class="mark"></div><div class="brand-title">2026UAVSwarm Console</div></div>
-    <div class="top-pill">Ground Profile</div>
+    <div class="top-pill profile-pill">Ground Profile</div>
     <div class="top-pill">系统运行<strong class="${state.backendConnected ? "green" : "amber"}">${systemState}</strong></div>
-    <div class="top-pill">在线节点<strong>37 / 48</strong></div>
-    <div class="top-pill">Backend 模式<strong>MISSION</strong></div>
+    <div class="top-pill">在线节点<strong>${summary.online} / ${summary.total}</strong></div>
+    <div class="top-pill">目标载具<strong>${esc(state.selectedUav || "--")}</strong></div>
     <div class="top-pill">当前 Action<strong>${state.currentAction}</strong></div>
     <div class="top-pill">Runtime API<strong class="${api.color}">${api.label}</strong></div>
     <div class="top-pill">数据源<strong class="${dataSource.color}">${dataSource.label}</strong></div>
     <div class="top-actions">
-      <button class="icon-btn">N</button><button class="icon-btn">?</button><button class="icon-btn">L</button>
+      <button class="icon-btn" title="三维态势" onclick="setPage('twin')">3D</button><button class="icon-btn" title="状态说明" onclick="showStatusHelp()">?</button><button class="icon-btn" title="刷新 Runtime" onclick="probeRuntime({notifyUser:true})">R</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
-      <div class="small">2026-07-05<br>UTC+8</div>
+      <div class="small top-time">${esc(now.toLocaleDateString("zh-CN"))}<br>UTC+8</div>
     </div>
   </header>`;
 }
@@ -1056,6 +1219,7 @@ function sidebar() {
 
 function setPage(page) {
   state.page = page;
+  if (page === "twin") state.simulationReady = false;
   render();
 }
 
@@ -1081,30 +1245,47 @@ function route() {
 render();
 probeRuntime();
 
-setInterval(() => {
-  if (!state.simRunning) {
+app.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-vehicle-id]");
+  if (target) selectVehicle(target.dataset.vehicleId);
+});
+
+function renderRuntimeUpdate() {
+  if (state.page === "twin") {
+    postVehicleSnapshot();
     return;
   }
-  if (state.currentAction === "TAKEOFF" || state.currentAction === "SIM_SCENARIO") {
-    state.altitude = Math.min(24, state.altitude + 0.8);
-    state.maxAltitude = Math.max(state.maxAltitude, state.altitude);
-    state.lastZ = -state.altitude;
-    state.thresholdReached = state.altitude >= 2.4;
-  } else if (state.currentAction === "LAND") {
-    state.altitude = Math.max(0, state.altitude - 0.9);
-    state.lastZ = -state.altitude;
-  }
-  if (state.page === "vehicle" || state.page === "backend" || state.page === "simulation") {
-    render();
-  }
-}, 1600);
+  if (document.activeElement?.matches("input, textarea, select")) return;
+  render();
+}
 
-setInterval(() => {
+window.addEventListener("message", (event) => {
+  if (event.origin !== simulationOrigin()) return;
+  if (event.data?.type !== "uav-swarm/simulation-ready") return;
+  state.simulationReady = true;
+  const note = document.querySelector(".simulation-frame-note");
+  if (note) note.textContent = "Runtime 快照由主控制台统一推送";
+  const headingBadge = document.querySelector(".twin-panel .badge");
+  if (headingBadge) {
+    headingBadge.textContent = "CONNECTED";
+    headingBadge.className = "badge green";
+  }
+  postVehicleSnapshot();
+});
+
+setInterval(async () => {
   if (state.apiStatus === "offline") {
     probeRuntime();
     return;
   }
   if (state.apiStatus === "live") {
-    syncRuntimeEvents({ notifyFailure: false }).then(render);
+    await syncRuntimeState({ notifyFailure: false });
+    renderRuntimeUpdate();
   }
-}, 10000);
+}, 2000);
+
+setInterval(async () => {
+  if (state.apiStatus !== "live") return;
+  await syncRuntimeEvents({ notifyFailure: false });
+  renderRuntimeUpdate();
+}, 5000);

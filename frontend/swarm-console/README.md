@@ -36,13 +36,25 @@ http://localhost:5178/
 - 模型与知识
 - 系统设置
 
-## 后续接入点
+Cesium 三维子项目需要单独启动：
+
+```powershell
+cd D:\2026UAVSwarm\frontend\swarm-console\simulation-3d
+npm run dev
+```
+
+三维页面默认运行在 `http://127.0.0.1:5179/`。主控制台会将其作为 iframe 嵌入，并成为
+`vehicle-snapshot` 的唯一轮询方和消息发送方。
+
+## LIVE 数据接入
 
 - `runtime-api.js` 是前端到 runtime HTTP 服务的唯一适配层。
-- `app.js` 启动时自动调用 `/api/health`，并显示 `连接中 / LIVE / OFFLINE`。
-- 静态总览数据保留作 DEMO，但飞行动作不会在后端离线时伪装成成功。
-- `simulation-3d/` 是独立的 CesiumJS 场景，后续通过 vehicle snapshot 契约嵌入主控制台。
-- `Policy Gate`、`Adapter / Backend`、`Audit / Replay` 页面字段按当前 Python runtime 的 contract 设计。
+- `app.js` 启动后轮询 Runtime snapshot、Registry、Telemetry、Agent、Simulation 和 Cesium vehicle snapshot。
+- 载具列表由 `/api/vehicles`、`/api/telemetry/latest` 和 `/api/vehicle-snapshot` 合并，不再使用固定八机数组。
+- 选择 UAV 后，Check Backend、Smoke Takeoff 和 Land 请求携带该节点的 `node_id`、endpoint、`system_id` 和 `component_id`。
+- Runtime 离线、节点未启用、遥测过期或 identity 缺失时，飞行动作保持禁用。
+- `simulation-3d/` 通过严格来源的 `postMessage` 接收主控制台轮询到的完整快照。
+- Agent、Policy、Skills、Audit / Replay 页面只展示后端已提供的数据，缺失指标显示为未提供，不生成成功率和延迟等假数据。
 
 ## Runtime API 配置
 
@@ -52,7 +64,7 @@ http://localhost:5178/
 http://127.0.0.1:8765/api
 ```
 
-`8765` 是 WSL/Python `uav_runtime_http_bridge` 的 HTTP 端口，不是前端页面端口，也不是 MAVLink 端口。`/api` 是该服务的固定路由前缀；PX4 SITL 的 MAVLink 数据仍使用 `udpin:127.0.0.1:14540`。
+`8765` 是 WSL/Python `uav_runtime_http_bridge` 的 HTTP 端口，不是前端页面端口，也不是 MAVLink 端口。`/api` 是该服务的固定路由前缀；各 PX4 SITL MAVLink endpoint 由 Runtime Registry 返回，前端不写死端口。
 
 可在页面 `Adapter / Backend -> Runtime API 与传输端点 -> Runtime API Base URL` 中修改，配置会保存到浏览器 `localStorage`。
 
@@ -61,9 +73,9 @@ http://127.0.0.1:8765/api
 - `Runtime API 连接中`：页面正在探测 `/api/health`。
 - `Runtime API LIVE`：浏览器可以访问 HTTP bridge。
 - `Runtime API OFFLINE`：HTTP bridge 未启动、地址错误或请求超时。
-- `数据源 DEMO`：页面仍在显示静态演示指标。
-- `数据源 LIVE PARTIAL`：事件、动作结果等已由真实 Runtime API 部分覆盖。
-- `数据源 CACHED`：Runtime API 已断开，页面保留的是最近一次真实数据快照。
+- `数据源 LIVE`：Telemetry 快照新鲜。
+- `数据源 STALE`：Runtime API 断开或 Telemetry 已过期，页面保留最后快照。
+- `数据源 无数据`：Runtime 可达但还没有 Telemetry，或 Runtime 完全不可达且无缓存。
 
 ## 前端期望的后端接口
 
@@ -81,6 +93,12 @@ GET  /api/events?n=50
 GET  /api/actions/recent?n=20
 GET  /api/policy/decisions?n=20
 GET  /api/skills
+GET  /api/vehicles
+GET  /api/telemetry/latest
+GET  /api/snapshot
+GET  /api/vehicle-snapshot
+GET  /api/agent/status
+GET  /api/simulation/status
 ```
 
 推荐请求示例：
@@ -90,7 +108,10 @@ GET  /api/skills
   "backend": "px4_sitl",
   "backend_mode": "sitl",
   "backend_enabled": true,
-  "transport_endpoint": "udpin:127.0.0.1:14540",
+  "node_id": "UAV-02",
+  "system_id": 2,
+  "component_id": 1,
+  "transport_endpoint": "udpin:127.0.0.1:14541",
   "altitude_m": 3,
   "connect_timeout_ms": 5000,
   "command_timeout_ms": 10000,
@@ -100,15 +121,7 @@ GET  /api/skills
 }
 ```
 
-后端可先把这些 HTTP 请求映射到现有 CLI/runtime 能力：
-
-- `/api/backend/check` -> `check-backend`
-- `/api/actions/smoke-takeoff` -> `smoke-takeoff`
-- `/api/planner/plan-mission` -> `plan-mission`
-- `/api/replay` -> `replay-last`
-- `/api/capabilities` -> `list-capabilities`
-
-最小返回要求：
+关键返回要求：
 
 - `check-backend` 返回 `readiness` 或 `connect_probe.code`。
 - `smoke-takeoff` 返回 `policy_decision`、`arm_ack`、`takeoff_ack`、`land_ack`、`max_altitude_m`、`altitude_observation.last_z`、`threshold_reached`、`result`。
@@ -120,6 +133,16 @@ GET  /api/skills
 - `Adapter / Backend -> Check Backend`：调用 `/api/backend/check`。
 - `Adapter / Backend -> Smoke Takeoff`：调用 `/api/actions/smoke-takeoff`。
 - `Adapter / Backend -> Land`：调用 `/api/actions/land`。
-- `Audit / Replay -> 播放`：调用 `/api/replay?n=20`。
+- `Audit / Replay -> 刷新事件`：调用 `/api/events?n=30`。
+
+## 前端验证
+
+```powershell
+npm run check
+npm test
+```
+
+`console-model.js` 是可独立测试的数据映射层，负责合并多机快照、判断动作权限和构造带
+MAVLink identity 的请求。浏览器页面不直接连接 MAVLink、Gazebo Transport 或 DDS。
 
 接口失败时页面会显示明确的 OFFLINE 或 HTTP 错误状态。静态页面仍可浏览，但 Smoke Takeoff 和 Land 在 Runtime API 或 PX4 Backend 未就绪时会被禁用。

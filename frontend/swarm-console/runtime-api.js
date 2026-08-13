@@ -23,6 +23,22 @@
   const DEFAULT_BASE_URL = "http://127.0.0.1:8765/api";
   const STORAGE_KEY = "swarm-console.runtime-api-base-url";
   const DEFAULT_TIMEOUT_MS = 5000;
+  const ACTION_TIMEOUT_GRACE_MS = 5000;
+
+  function smokeTakeoffTimeoutMs(body = {}) {
+    const commandTimeout = Number(body.command_timeout_ms) || 10000;
+    const observeTimeout = Number(body.observe_timeout_ms) || 25000;
+    const commandCount = body.auto_land === true ? 4 : 3;
+    return Math.max(
+      DEFAULT_TIMEOUT_MS,
+      commandCount * commandTimeout + observeTimeout + ACTION_TIMEOUT_GRACE_MS
+    );
+  }
+
+  function landTimeoutMs(body = {}) {
+    const commandTimeout = Number(body.command_timeout_ms) || 10000;
+    return Math.max(DEFAULT_TIMEOUT_MS, commandTimeout + ACTION_TIMEOUT_GRACE_MS);
+  }
 
   function getConfiguredBaseUrl() {
     return localStorage.getItem(STORAGE_KEY) || DEFAULT_BASE_URL;
@@ -97,8 +113,16 @@
     setConfiguredBaseUrl,
     health: () => request("/health", { timeoutMs: 2500 }),
     checkBackend: (body) => request("/backend/check", { method: "POST", body }),
-    smokeTakeoff: (body) => request("/actions/smoke-takeoff", { method: "POST", body }),
-    land: (body) => request("/actions/land", { method: "POST", body }),
+    smokeTakeoff: (body) => request("/actions/smoke-takeoff", {
+      method: "POST",
+      body,
+      timeoutMs: smokeTakeoffTimeoutMs(body),
+    }),
+    land: (body) => request("/actions/land", {
+      method: "POST",
+      body,
+      timeoutMs: landTimeoutMs(body),
+    }),
     planMission: (body) => request("/planner/plan-mission", { method: "POST", body }),
     replayLast: (n = 20) => request(`/replay?n=${encodeURIComponent(n)}`),
     capabilities: () => request("/capabilities"),
@@ -106,10 +130,13 @@
     recentActions: (n = 20) => request(`/actions/recent?n=${encodeURIComponent(n)}`),
     policyDecisions: (n = 20) => request(`/policy/decisions?n=${encodeURIComponent(n)}`),
     skills: () => request("/skills"),
+    vehicles: () => request("/vehicles"),
     telemetryLatest: () => request("/telemetry/latest"),
     snapshot: () => request("/snapshot"),
     vehicleSnapshot: () => request("/vehicle-snapshot"),
     agentStatus: () => request("/agent/status"),
     simulationStatus: () => request("/simulation/status"),
+    smokeTakeoffTimeoutMs,
+    landTimeoutMs,
   };
 })(window);
