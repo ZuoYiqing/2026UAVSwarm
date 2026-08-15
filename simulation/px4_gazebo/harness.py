@@ -227,6 +227,8 @@ def validate_manifest(
         "system_id",
         "gazebo_model_name",
         "command_endpoint",
+        "px4_mavlink_local_port",
+        "gcs_local_port",
         "runtime_dir",
     )
     for field in unique_fields:
@@ -348,7 +350,22 @@ def validate_runtime_mapping(
         for row in runtime_config.get("vehicles", [])
     ]
     if runtime_config.get("scene_id") != manifest.get("scene_id") or actual != expected:
-        raise HarnessError("runtime vehicle mapping drifted from simulation manifest")
+        raise HarnessError(
+            "shared_config_mismatch:"
+            + json.dumps(
+                {
+                    "authoritative_source": str(DEFAULT_MANIFEST_PATH),
+                    "read_only_shared_config": str(
+                        REPO_ROOT / "config" / "vehicles.sitl.json"
+                    ),
+                    "expected_scene_id": manifest.get("scene_id"),
+                    "actual_scene_id": runtime_config.get("scene_id"),
+                    "expected_vehicles": expected,
+                    "actual_vehicles": actual,
+                },
+                sort_keys=True,
+            )
+        )
 
 
 def mapping_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -515,6 +532,31 @@ def _running_gazebo_worlds() -> list[str]:
     return sorted(set(worlds))
 
 
+def _validate_start_state(current_state: dict[str, Any] | None) -> None:
+    """Reject a duplicate run and clean only identity-proven exited state."""
+    if not current_state:
+        return
+    processes = list(current_state.get("processes", []))
+    identities = _validate_processes(
+        processes,
+        run_id=str(current_state.get("run_id", "")),
+    )
+    unsafe = [
+        row
+        for row in identities
+        if row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
+    ]
+    if unsafe:
+        raise HarnessError(
+            f"{unsafe[0].code}: "
+            + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
+        )
+    if any(row.code == IDENTITY_MATCH for row in identities):
+        raise HarnessError("this harness is already running; stop it first")
+    if identities and all(row.code == PROCESS_EXITED for row in identities):
+        _cleanup_harness_state(processes)
+
+
 def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
     if os.name != "posix":
         raise HarnessError("PX4/Gazebo multi-vehicle harness must run inside Linux/WSL")
@@ -535,27 +577,7 @@ def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
     if not world_path.is_file():
         raise HarnessError(f"Gazebo world missing: {world_path}")
 
-    current_state = read_state()
-    if current_state:
-        processes = list(current_state.get("processes", []))
-        identities = _validate_processes(
-            processes,
-            run_id=str(current_state.get("run_id", "")),
-        )
-        unsafe = [
-            row
-            for row in identities
-            if row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH}
-        ]
-        if unsafe:
-            raise HarnessError(
-                f"{unsafe[0].code}: "
-                + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
-            )
-        if any(row.code == IDENTITY_MATCH for row in identities):
-            raise HarnessError("this harness is already running; stop it first")
-        if identities and all(row.code == PROCESS_EXITED for row in identities):
-            _cleanup_harness_state(processes)
+    _validate_start_state(read_state())
     foreign_px4 = _foreign_px4_pids()
     if foreign_px4:
         raise HarnessError(
@@ -1017,7 +1039,7 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
     state: dict[str, Any] = {
-        "version": "1.1",
+        "version": "1.2",
         "run_id": run_id,
         "manifest_path": str(manifest_path.resolve()),
         "started_at": utc_now(),
@@ -1025,6 +1047,10 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         "px4_commit": environment["px4_commit"],
         "gazebo_version": environment["gazebo_version"],
         "world_name": manifest["world_name"],
+        "required_udp_ports": [
+            {"host": host, "port": port, "owner": owner}
+            for host, port, owner in required_udp_ports(manifest)
+        ],
         "processes": [],
     }
     opened_logs: list[Any] = []
@@ -1128,11 +1154,59 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
             handle.close()
 
 
-def stop_harness() -> None:
+def _wait_for_cleanup(
+    state: dict[str, Any],
+    *,
+    timeout_s: float = 10.0,
+    world_probe: Callable[[], list[str]] = _running_gazebo_worlds,
+    port_probe: Callable[[str, int], bool] = udp_port_available,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Wait until this run's world disappears and UDP ports are reusable."""
+    expected_world = str(state.get("world_name", ""))
+    port_rows = list(state.get("required_udp_ports", []))
+    deadline = monotonic() + max(0.0, timeout_s)
+    while True:
+        worlds = world_probe()
+        ports = []
+        for row in port_rows:
+            host = str(row.get("host", ""))
+            port = int(row.get("port", 0))
+            ports.append(
+                {
+                    "host": host,
+                    "port": port,
+                    "owner": row.get("owner"),
+                    "available": bool(host and port and port_probe(host, port)),
+                }
+            )
+        world_stopped = not expected_world or expected_world not in worlds
+        ports_released = all(row["available"] for row in ports)
+        clean = world_stopped and ports_released
+        evidence = {
+            "clean": clean,
+            "expected_world": expected_world or None,
+            "observed_worlds": worlds,
+            "world_stopped": world_stopped,
+            "ports_released": ports_released,
+            "ports": ports,
+        }
+        if clean or monotonic() >= deadline:
+            return evidence
+        sleep(0.25)
+
+
+def stop_harness() -> dict[str, Any]:
     state = read_state()
     if not state:
         print("No harness state found; nothing to stop.")
-        return
+        return {
+            "status": "stopped",
+            "idempotent": True,
+            "processes": [],
+            "cleanup": {"clean": True},
+        }
     processes = list(state.get("processes", []))
     decisions = _terminate_process_groups(
         processes,
@@ -1154,111 +1228,42 @@ def stop_harness() -> None:
             "failed to stop harness processes: "
             + json.dumps([row.to_dict() for row in remaining], sort_keys=True)
         )
+    cleanup = _wait_for_cleanup(state)
+    if not cleanup["clean"]:
+        raise HarnessError(
+            "cleanup_incomplete:" + json.dumps(cleanup, sort_keys=True)
+        )
     _cleanup_harness_state(processes)
-    print("Three-UAV PX4/Gazebo harness stopped.")
-
-
-def probe_heartbeat(endpoint: str, timeout_s: float) -> dict[str, Any]:
-    started = time.monotonic()
-    try:
-        from pymavlink import mavutil  # type: ignore
-    except ImportError:
-        return {
-            "heartbeat_received": False,
-            "observed_system_id": None,
-            "observed_component_id": None,
-            "last_heartbeat_age_s": None,
-            "error": "pymavlink_missing",
-        }
-    connection = None
-    try:
-        connection = mavutil.mavlink_connection(endpoint, timeout=max(timeout_s, 0.1))
-        heartbeat = connection.wait_heartbeat(timeout=max(timeout_s, 0.1))
-        if heartbeat is None:
-            raise TimeoutError("heartbeat_timeout")
-        return {
-            "heartbeat_received": True,
-            "observed_system_id": int(heartbeat.get_srcSystem()),
-            "observed_component_id": int(heartbeat.get_srcComponent()),
-            "last_heartbeat_age_s": round(time.monotonic() - started, 3),
-            "error": None,
-        }
-    except Exception as exc:
-        return {
-            "heartbeat_received": False,
-            "observed_system_id": None,
-            "observed_component_id": None,
-            "last_heartbeat_age_s": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    finally:
-        close = getattr(connection, "close", None)
-        if callable(close):
-            close()
+    payload = {
+        "status": "stopped",
+        "idempotent": False,
+        "run_id": state.get("run_id"),
+        "processes": [row.to_dict() for row in decisions],
+        "cleanup": cleanup,
+    }
+    print(json.dumps(payload, indent=2))
+    return payload
 
 
 def collect_health(
     manifest: dict[str, Any],
     *,
     timeout_s: float,
-    heartbeat_probe: Callable[[str, float], dict[str, Any]] = probe_heartbeat,
-    process_probe: Callable[[int], bool] = process_alive,
-    model_probe: Callable[[], set[str]] = gazebo_models,
+    stability_window_s: float = 10.0,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    state = read_state() or {}
-    pid_by_node = {
-        str(item.get("node_id")): int(item["pid"])
-        for item in state.get("processes", [])
-        if item.get("node_id") and item.get("pid")
-    }
-    models = model_probe()
-    vehicles = []
-    for vehicle in manifest["vehicles"]:
-        heartbeat = heartbeat_probe(str(vehicle["telemetry_endpoint"]), timeout_s)
-        expected_system_id = int(vehicle["system_id"])
-        expected_component_id = int(vehicle.get("component_id", 1))
-        observed_system_id = heartbeat.get("observed_system_id")
-        observed_component_id = heartbeat.get("observed_component_id")
-        pid = pid_by_node.get(str(vehicle["node_id"]))
-        row = {
-            "node_id": vehicle["node_id"],
-            "expected_system_id": expected_system_id,
-            "observed_system_id": observed_system_id,
-            "expected_component_id": expected_component_id,
-            "observed_component_id": observed_component_id,
-            "heartbeat_received": bool(heartbeat.get("heartbeat_received")),
-            "endpoint": vehicle["telemetry_endpoint"],
-            "gazebo_model_name": vehicle["gazebo_model_name"],
-            "model_binding": vehicle["gazebo_model_name"] in models,
-            "process_pid": pid,
-            "process_alive": bool(pid and process_probe(pid)),
-            "last_heartbeat_age_s": heartbeat.get("last_heartbeat_age_s"),
-            "error": heartbeat.get("error"),
-        }
-        row["readiness"] = (
-            row["heartbeat_received"]
-            and observed_system_id == expected_system_id
-            and observed_component_id == expected_component_id
-            and row["process_alive"]
-            and row["model_binding"]
-        )
-        vehicles.append(row)
-    observed_ids = [
-        row["observed_system_id"]
-        for row in vehicles
-        if row["observed_system_id"] is not None
-    ]
-    unique_system_ids = len(observed_ids) == len(set(observed_ids))
-    ready = all(row["readiness"] for row in vehicles) and unique_system_ids
-    return {
-        "status": "ready" if ready else "not_ready",
-        "ready": ready,
-        "scene_id": manifest["scene_id"],
-        "world_name": manifest["world_name"],
-        "unique_system_ids": unique_system_ids,
-        "checked_at": utc_now(),
-        "vehicles": vehicles,
-    }
+    """Compatibility entrypoint for the authoritative health module."""
+    try:
+        from .health import collect_health as collect
+    except ImportError:
+        from health import collect_health as collect  # type: ignore
+
+    return collect(
+        manifest,
+        timeout_s=timeout_s,
+        stability_window_s=stability_window_s,
+        **kwargs,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

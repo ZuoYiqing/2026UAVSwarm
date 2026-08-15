@@ -1,159 +1,83 @@
 # PX4 / Gazebo 三机验证记录
 
-## 2026-08-11 Runtime transport hardening note
+## 1. 历史真实基线
 
-The PASS evidence below is the historical PX4/Gazebo harness run. It does not
-claim that the new shared-session Runtime transport was run against live PX4.
+日期：2026-07-30（Asia/Shanghai）
 
-- shared-session, ACK dispatcher, telemetry, identity, endpoint, PID reuse,
-  scene-frame, landing-cleanup, and audit-isolation paths: unit tested;
-- authoritative manifest/config validation: passed without opening UDP;
-- current machine WSL/PX4/Gazebo harness: unavailable (no installed WSL distro);
-- real three-PX4 Runtime connection/action/snapshot run: pending.
+结论：**PASS（SITL_ONLY，逐机隔离验证）**
 
-Future live evidence must separately record harness health, Runtime connection
-state for all three nodes, UAV-02 action isolation, observed landing, safe stop,
-and exact PX4/Gazebo versions. A cleanup LAND exception is evidence but must not
-replace the original validation failure.
+该历史记录证明：
 
-## 1. 结论
+- 三个 Gazebo x500 model 存在；
+- UAV-01 / UAV-02 / UAV-03 分别绑定 system_id 1 / 2 / 3；
+- endpoint 分别为 14540 / 14541 / 14542；
+- 三机逐机 ARM / TAKEOFF / LAND 成功；
+- 主动节点飞行时，其余节点保持 disarmed；
+- 停止后 PX4、Gazebo world、state 和 PID 文件已清理。
 
-状态：**PASS（SITL_ONLY）**
-
-验证日期：2026-07-30（Asia/Shanghai）
-
-本记录只证明本机三架 PX4 SITL + Gazebo 的身份、heartbeat、单机控制隔离、低高度起飞和
-降落闭环。它不代表实机、编队、复杂航迹或集群算法已完成。
-
-## 2. 环境
+环境证据：
 
 | 项目 | 值 |
 | --- | --- |
 | PX4 commit | `171f0f38cffa95f28d5e159f7aaf7599756f9e0e` |
 | Gazebo Sim | `8.14.0` |
-| UAV repository base commit | `11a22f9` |
-| 模式 | headless |
 | world | `simple_recon_v0_1` |
-| model | 三架 `gz_x500` |
-| 目标高度 | 2.0 m |
+| model | 3 x `gz_x500` |
+| 模式 | headless |
+| 逐机目标高度 | 2.0 m |
 | 完成阈值 | 1.4 m（70%） |
 
-验证时 UAV repository 是 dirty worktree，包含本任务修改和任务开始前已有的 audit、
-egg-info、pytest 缓存等本地运行产物。未执行 Git commit/push。
+逐机结果：
 
-## 3. Mapping
+| node_id | ARM ACK | TAKEOFF ACK | 最大高度 | LAND ACK | 最终高度 | 被动节点隔离 |
+| --- | --- | --- | ---: | --- | ---: | --- |
+| UAV-01 | accepted | accepted | 1.41 m | accepted | 0.105 m | PASS |
+| UAV-02 | accepted | accepted | 1.41 m | accepted | 0.112 m | PASS |
+| UAV-03 | accepted | accepted | 1.40 m | accepted | 0.108 m | PASS |
 
-| node_id | instance | sysid | model | endpoint | spawn NED |
-| --- | ---: | ---: | --- | --- | --- |
-| UAV-01 | 0 | 1 | `x500_0` | `udpin:127.0.0.1:14540` | `(0, 0, 0)` |
-| UAV-02 | 1 | 2 | `x500_1` | `udpin:127.0.0.1:14541` | `(0, 8, 0)` |
-| UAV-03 | 2 | 3 | `x500_2` | `udpin:127.0.0.1:14542` | `(0, -8, 0)` |
+该基线不代表三机同时巡检、航点飞行、Runtime 多机会话或前端实时联动已经验证。
 
-## 4. 静态和单元验证
+## 2. 当前三机巡检工作线
 
-| 检查 | 结果 |
-| --- | --- |
-| Python compile | PASS |
-| manifest validation | PASS |
-| scene validation | PASS，`vehicle_count=3` |
-| `gz sdf -k` | PASS |
-| shell `bash -n` | PASS |
-| 相关 unit tests | PASS，18 passed |
-| 默认完整 pytest | PASS，230 passed |
+分支：`codex/px4-gazebo-three-uav-mission`
 
-unit tests 使用 fake heartbeat、fake PID 和 fake model probe，不访问 `14540/14541/14542`。
+新增目标：
 
-## 5. Health 结果
+- 10 秒连续 heartbeat 和 `LOCAL_POSITION_NED` 健康证明；
+- Gazebo world/model/clock 和 Process Identity 联合证据；
+- Standalone 与 Runtime endpoint 强互斥；
+- 8 / 10 / 12 m 三条固定 NED 巡检航线；
+- 每机 3 个航点、2 m 到达半径、连续新样本判据；
+- 全程三机最小空间距离；
+- 顺序 LAND 和 disarm 确认；
+- 停止后 world 和 UDP 端口释放证明；
+- 机器可读 health 与 patrol JSON。
 
-| node_id | expected sysid | observed sysid | heartbeat | process | model | readiness |
-| --- | ---: | ---: | --- | --- | --- | --- |
-| UAV-01 | 1 | 1 | PASS | alive | `x500_0` | PASS |
-| UAV-02 | 2 | 2 | PASS | alive | `x500_1` | PASS |
-| UAV-03 | 3 | 3 | PASS | alive | `x500_2` | PASS |
+当前自动化证据会在 PR 中记录。真实三机巡检只有在 WSL 中实际完成以下闭环后才能写为 PASS：
 
-三个 observed sysid 唯一，未出现 telemetry 串线。
+```text
+start
+-> 10 s health
+-> retained isolation validation
+-> deterministic patrol
+-> land/disarm
+-> stop
+-> residual process/world/port check
+```
 
-## 6. 控制隔离和动作完成
+## 3. 结果文件
 
-### UAV-01 active
+真实运行证据写入：
 
-| 项目 | 结果 |
-| --- | --- |
-| ARM ACK | accepted |
-| TAKEOFF ACK | accepted |
-| 最大观测高度 | 1.41 m |
-| 起飞阈值 | reached |
-| UAV-02 passive | unarmed，最大 0.022 m |
-| UAV-03 passive | unarmed，最大 0.015 m |
-| LAND ACK | accepted |
-| 最终观测高度 | 0.105 m |
-| 落地连续样本 | PASS |
+```text
+.runtime/px4_gazebo/validation/
+```
 
-### UAV-02 active
+文件包括：
 
-| 项目 | 结果 |
-| --- | --- |
-| ARM ACK | accepted |
-| TAKEOFF ACK | accepted |
-| 最大观测高度 | 1.41 m |
-| 起飞阈值 | reached |
-| UAV-01 passive | unarmed，最大 0.000 m |
-| UAV-03 passive | unarmed，最大 0.033 m |
-| LAND ACK | accepted |
-| 最终观测高度 | 0.112 m |
-| 落地连续样本 | PASS |
+```text
+three_uav_validation_<timestamp>.json
+three_uav_patrol_<timestamp>.json
+```
 
-### UAV-03 active
-
-| 项目 | 结果 |
-| --- | --- |
-| ARM ACK | accepted |
-| TAKEOFF ACK | accepted |
-| 最大观测高度 | 1.40 m |
-| 起飞阈值 | reached |
-| UAV-01 passive | unarmed，最大 0.000 m |
-| UAV-02 passive | unarmed，最大 0.038 m |
-| LAND ACK | accepted |
-| 最终观测高度 | 0.108 m |
-| 落地连续样本 | PASS |
-
-原始机器可读结果保存在 `.runtime/px4_gazebo/validation/`，该目录不提交 Git。
-
-## 7. 停止验证
-
-`stop_three_uav.sh` 返回成功。停止后：
-
-- 无 PX4 进程；
-- 无 Gazebo world topic；
-- `harness_state.json` 已删除；
-- 三个 `px4.pid` 已删除。
-
-未使用全局 `pkill`/`killall`。
-
-## 8. 已知问题与未测试
-
-- 首次冷启动曾在 45 秒模型等待窗口内超时，自动清理成功；第二次启动三机成功。首机等待现
-  已提高到 75 秒，后续实例为 45 秒。
-- Gazebo GUI：**NOT TESTED**，本轮只验证 headless。
-- 三架同时起飞：**NOT TESTED**，本轮按要求优先验证逐机隔离。
-- 编队、航点任务、避障、故障注入：**NOT IMPLEMENTED**。
-- Runtime 多会话 Registry 和 `/api/vehicle-snapshot`：由下一工作线实现。
-- 5/10 架真实资源与性能：**NOT TESTED**。
-
-## 9. 状态分类
-
-**IMPLEMENTED**
-
-- manifest、三机 scene、对齐 world、launcher、stopper、health、isolation validator。
-
-**UNIT TESTED**
-
-- 身份唯一性、端口规则、scene 绑定、NED/ENU/yaw、health 判定、SDF 模型边界。
-
-**INTEGRATION TESTED**
-
-- 三机启动、三个唯一 heartbeat、逐机 ARM/TAKEOFF/LAND、被动隔离、动作完成、停止清理。
-
-**NOT TESTED**
-
-- GUI、同时起飞、编队、复杂任务、5/10 架、Runtime 多机接入、Cesium 实时链路。
+这些是运行产物，不提交 Git。PR 只记录命令、统计、环境版本和结论，不能用单元测试替代真实飞行结果。

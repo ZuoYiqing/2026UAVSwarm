@@ -10,12 +10,19 @@ Agent planning and frontend code are outside this directory.
 simulation/px4_gazebo/
 |-- config/three_uav_sitl.json
 |-- harness.py
+|-- health.py
+|-- patrol.py
 `-- scripts/
     |-- start_three_uav.sh
     |-- stop_three_uav.sh
     |-- health_three_uav.py
+    |-- patrol_three_uav.py
     `-- validate_three_uav.py
 ```
+
+The reusable acceptance route and criteria live with the scenario at
+`scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json`; the
+standalone controller remains under this simulation directory.
 
 The JSON manifest is the single implementation binding source for `node_id`,
 PX4 instance, MAVLink system ID, Gazebo model, endpoint, spawn and runtime
@@ -28,8 +35,17 @@ cd /mnt/d/2026UAVSwarm
 bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless
 python3 simulation/px4_gazebo/scripts/health_three_uav.py --pretty
 python3 simulation/px4_gazebo/scripts/validate_three_uav.py
+python3 simulation/px4_gazebo/scripts/patrol_three_uav.py --pretty
 bash simulation/px4_gazebo/scripts/stop_three_uav.sh
 ```
+
+`validate_three_uav.py` is the retained per-node ARM/TAKEOFF/LAND isolation
+regression. `patrol_three_uav.py` is an acceptance-only three-aircraft patrol:
+it requires exclusive ownership of all three Runtime/PX4 MAVLink endpoints,
+flies three fixed NED corridors, checks each waypoint and inter-vehicle
+separation, lands/disarms every aircraft, and writes JSON evidence. Stop
+Runtime before either standalone validator; integrated actions remain owned by
+Runtime and Policy Gate.
 
 Use `--gui` instead of `--headless` when WSLg and Gazebo GUI are available.
 Override the external PX4 checkout without editing the manifest:
