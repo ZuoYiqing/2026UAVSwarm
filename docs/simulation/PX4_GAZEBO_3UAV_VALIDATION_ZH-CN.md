@@ -45,8 +45,12 @@
 
 - 10 秒连续 heartbeat 和 `LOCAL_POSITION_NED` 健康证明；
 - Gazebo world/model/clock 和 Process Identity 联合证据；
-- Standalone 与 Runtime endpoint 强互斥；
-- 8 / 10 / 12 m 三条固定 NED 巡检航线；
+- Standalone health 直连 MAVLink，integrated health 只消费 Runtime telemetry；
+- Standalone validator 与 Runtime endpoint 强互斥；
+- 8 / 10 / 12 m 三条固定 `scene_ned` 巡检航线；
+- `scene_ned` 与每机 `vehicle_local_ned` 之间执行 spawn 平移和 yaw 旋转；
+- PX4 telemetry 转回 `scene_ned` 后再计算障碍物、航点和机间距离；
+- patrol JSON 同时记录 `scene_position` 与 `vehicle_local_position`；
 - 每机 3 个航点、2 m 到达半径、连续新样本判据；
 - 全程三机最小空间距离；
 - 顺序 LAND 和 disarm 确认；

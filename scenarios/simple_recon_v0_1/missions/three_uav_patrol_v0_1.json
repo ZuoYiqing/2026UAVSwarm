@@ -3,7 +3,7 @@
   "mission_id": "simple_recon_three_uav_patrol_v0_1",
   "scene_id": "simple_recon_v0_1",
   "purpose": "standalone_acceptance_validator",
-  "frame": "local_ned",
+  "frame": "scene_ned",
   "arrival_radius_m": 2.0,
   "arrival_hold_samples": 5,
   "waypoint_timeout_s": 45.0,

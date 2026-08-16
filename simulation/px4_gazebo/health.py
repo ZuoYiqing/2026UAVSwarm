@@ -17,6 +17,7 @@ except ImportError:  # Direct script execution adds this directory to sys.path.
 DEFAULT_STABILITY_WINDOW_S = 10.0
 HEARTBEAT_MAX_AGE_S = 2.5
 TELEMETRY_MAX_AGE_S = 1.5
+HEALTH_MODES = {"standalone", "integrated"}
 
 
 def _message_type(message: Any) -> str:
@@ -251,18 +252,95 @@ def _failed_probe(reason: str, exc: Exception) -> dict[str, Any]:
     }
 
 
+def _runtime_telemetry_probes(
+    manifest: dict[str, Any],
+    runtime_telemetry: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    rows = (
+        runtime_telemetry.get("vehicles", [])
+        if isinstance(runtime_telemetry, dict)
+        else []
+    )
+    if not isinstance(rows, list):
+        rows = []
+    by_node: dict[str, dict[str, Any]] = {}
+    duplicate_nodes: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("node_id"):
+            continue
+        node_id = str(row["node_id"])
+        if node_id in by_node:
+            duplicate_nodes.add(node_id)
+        by_node[node_id] = row
+    probes: dict[str, dict[str, Any]] = {}
+    for vehicle in manifest["vehicles"]:
+        node_id = str(vehicle["node_id"])
+        row = by_node.get(node_id)
+        if row is None:
+            probes[node_id] = _failed_probe(
+                "runtime_telemetry_missing",
+                RuntimeError(f"Runtime did not provide telemetry for {node_id}"),
+            )
+            continue
+        if node_id in duplicate_nodes:
+            probes[node_id] = _failed_probe(
+                "runtime_telemetry_duplicate",
+                RuntimeError(f"Runtime provided duplicate telemetry for {node_id}"),
+            )
+            continue
+        try:
+            observed_system_ids = (
+                [int(row["system_id"])] if row.get("system_id") is not None else []
+            )
+            observed_component_ids = (
+                [int(row["component_id"])]
+                if row.get("component_id") is not None
+                else []
+            )
+        except (TypeError, ValueError) as exc:
+            probes[node_id] = _failed_probe("runtime_telemetry_invalid", exc)
+            continue
+        heartbeat_fresh = bool(row.get("heartbeat_fresh"))
+        telemetry_fresh = bool(row.get("telemetry_fresh"))
+        probes[node_id] = {
+            "heartbeat_fresh": heartbeat_fresh,
+            "telemetry_fresh": telemetry_fresh,
+            "observed_system_ids": observed_system_ids,
+            "observed_component_ids": observed_component_ids,
+            "last_seen": row.get("last_seen"),
+            "reason": str(
+                row.get("reason")
+                or (
+                    "ok"
+                    if heartbeat_fresh and telemetry_fresh
+                    else "runtime_telemetry_stale"
+                )
+            ),
+            "evidence": {
+                "source": "runtime",
+                "runtime_status": row.get("status"),
+                "runtime_evidence": row.get("evidence", {}),
+            },
+        }
+    return probes
+
+
 def collect_health(
     manifest: dict[str, Any],
     *,
     timeout_s: float,
     stability_window_s: float = DEFAULT_STABILITY_WINDOW_S,
+    mode: str = "standalone",
+    runtime_telemetry: dict[str, Any] | None = None,
     mavlink_probe: Callable[[str, float, float], dict[str, Any]] = probe_mavlink_stream,
     clock_probe: Callable[[str, float], dict[str, Any]] = probe_gazebo_clock,
     model_probe: Callable[[], set[str]] = harness.gazebo_models,
     world_probe: Callable[[], list[str]] = harness._running_gazebo_worlds,
     identity_reader: Callable[[int], harness.ProcessIdentityReadResult] | None = None,
 ) -> dict[str, Any]:
-    """Collect fail-closed simulator, process and MAVLink readiness evidence."""
+    """Collect fail-closed simulator and mode-specific telemetry evidence."""
+    if mode not in HEALTH_MODES:
+        raise ValueError(f"unsupported health mode: {mode}")
     state = harness.read_state() or {}
     processes = list(state.get("processes", []))
     decisions = harness._validate_processes(
@@ -287,22 +365,25 @@ def collect_health(
         }
 
     vehicles = list(manifest["vehicles"])
-    probe_rows: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=len(vehicles)) as executor:
-        futures = {
-            str(vehicle["node_id"]): executor.submit(
-                mavlink_probe,
-                str(vehicle["command_endpoint"]),
-                timeout_s,
-                stability_window_s,
-            )
-            for vehicle in vehicles
-        }
-        for node_id, future in futures.items():
-            try:
-                probe_rows[node_id] = future.result()
-            except Exception as exc:
-                probe_rows[node_id] = _failed_probe("mavlink_probe_failed", exc)
+    if mode == "integrated":
+        probe_rows = _runtime_telemetry_probes(manifest, runtime_telemetry)
+    else:
+        probe_rows: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=len(vehicles)) as executor:
+            futures = {
+                str(vehicle["node_id"]): executor.submit(
+                    mavlink_probe,
+                    str(vehicle["command_endpoint"]),
+                    timeout_s,
+                    stability_window_s,
+                )
+                for vehicle in vehicles
+            }
+            for node_id, future in futures.items():
+                try:
+                    probe_rows[node_id] = future.result()
+                except Exception as exc:
+                    probe_rows[node_id] = _failed_probe("mavlink_probe_failed", exc)
 
     rows: list[dict[str, Any]] = []
     observed_system_ids: list[int] = []
@@ -354,7 +435,10 @@ def collect_health(
                     "gazebo_model_name": model_name,
                     "model_present": model_name in models,
                     "process": identity.to_dict() if identity is not None else None,
-                    "mavlink": probe.get("evidence", {}),
+                    "telemetry_source": (
+                        "runtime" if mode == "integrated" else "direct_mavlink"
+                    ),
+                    "telemetry": probe.get("evidence", {}),
                 },
                 "readiness": ready,
             }
@@ -388,6 +472,7 @@ def collect_health(
     return {
         "contract_version": "1.0",
         "simulator": "gazebo",
+        "mode": mode,
         "status": "ready" if ready else "not_ready",
         "ready": ready,
         "server_running": world_correct,
@@ -405,6 +490,14 @@ def collect_health(
             "clock": clock.get("evidence", {}),
             "stability_window_s": stability_window_s,
             "run_id": state.get("run_id"),
+            "telemetry_source": (
+                "runtime" if mode == "integrated" else "direct_mavlink"
+            ),
+            "runtime_telemetry_contract_version": (
+                runtime_telemetry.get("contract_version")
+                if mode == "integrated" and isinstance(runtime_telemetry, dict)
+                else None
+            ),
         },
         "vehicles": rows,
     }

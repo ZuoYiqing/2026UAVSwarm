@@ -11,7 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 from harness import DEFAULT_MANIFEST_PATH, RUNTIME_ROOT, HarnessError, load_manifest
-from health import DEFAULT_STABILITY_WINDOW_S, collect_health
+from health import DEFAULT_STABILITY_WINDOW_S, HEALTH_MODES, collect_health
 from patrol import PatrolError, require_standalone_endpoints
 
 
@@ -19,6 +19,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--mode",
+        choices=sorted(HEALTH_MODES),
+        default="standalone",
+        help="standalone probes MAVLink; integrated consumes Runtime telemetry",
+    )
+    parser.add_argument(
+        "--runtime-telemetry",
+        type=Path,
+        help="Runtime-owned node telemetry JSON, required in integrated mode",
+    )
     parser.add_argument(
         "--stability-window",
         type=float,
@@ -36,16 +47,32 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 0
     try:
         manifest = load_manifest(args.config)
-        require_standalone_endpoints(manifest)
+        runtime_telemetry = None
+        if args.mode == "integrated":
+            if args.runtime_telemetry is None:
+                raise HarnessError(
+                    "integrated health requires --runtime-telemetry"
+                )
+            runtime_telemetry = json.loads(
+                args.runtime_telemetry.read_text(encoding="utf-8")
+            )
+            if not isinstance(runtime_telemetry, dict):
+                raise HarnessError("Runtime telemetry root must be a JSON object")
+        else:
+            require_standalone_endpoints(manifest)
         payload = collect_health(
             manifest,
             timeout_s=args.timeout,
             stability_window_s=args.stability_window,
+            mode=args.mode,
+            runtime_telemetry=runtime_telemetry,
         )
-        require_standalone_endpoints(manifest)
-    except (HarnessError, PatrolError) as exc:
+        if args.mode == "standalone":
+            require_standalone_endpoints(manifest)
+    except (HarnessError, PatrolError, OSError, json.JSONDecodeError) as exc:
         payload = {
             "contract_version": "1.0",
+            "mode": args.mode,
             "status": "error",
             "ready": False,
             "reason": (

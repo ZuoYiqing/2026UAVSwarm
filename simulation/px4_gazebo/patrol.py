@@ -52,6 +52,65 @@ class PositionNED:
         return asdict(self)
 
 
+def vehicle_local_to_scene_ned(
+    position: PositionNED,
+    vehicle_spawn_ned: dict[str, Any],
+) -> PositionNED:
+    """Transform one PX4-local NED position into the shared scene NED frame."""
+    yaw_rad = math.radians(float(vehicle_spawn_ned.get("yaw_deg", 0.0)))
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
+    return PositionNED(
+        x_m=(
+            float(vehicle_spawn_ned["x_m"])
+            + cos_yaw * position.x_m
+            - sin_yaw * position.y_m
+        ),
+        y_m=(
+            float(vehicle_spawn_ned["y_m"])
+            + sin_yaw * position.x_m
+            + cos_yaw * position.y_m
+        ),
+        z_m=float(vehicle_spawn_ned["z_m"]) + position.z_m,
+    )
+
+
+def scene_to_vehicle_local_ned(
+    position: PositionNED,
+    vehicle_spawn_ned: dict[str, Any],
+) -> PositionNED:
+    """Transform one shared scene NED position into a PX4-local NED frame."""
+    yaw_rad = math.radians(float(vehicle_spawn_ned.get("yaw_deg", 0.0)))
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
+    delta_x = position.x_m - float(vehicle_spawn_ned["x_m"])
+    delta_y = position.y_m - float(vehicle_spawn_ned["y_m"])
+    return PositionNED(
+        x_m=cos_yaw * delta_x + sin_yaw * delta_y,
+        y_m=-sin_yaw * delta_x + cos_yaw * delta_y,
+        z_m=position.z_m - float(vehicle_spawn_ned["z_m"]),
+    )
+
+
+def framed_position_report(
+    *,
+    scene_position: PositionNED | None,
+    vehicle_local_position: PositionNED | None,
+) -> dict[str, Any]:
+    return {
+        "scene_position": (
+            None
+            if scene_position is None
+            else {"frame": "scene_ned", **scene_position.to_dict()}
+        ),
+        "vehicle_local_position": (
+            None
+            if vehicle_local_position is None
+            else {"frame": "vehicle_local_ned", **vehicle_local_position.to_dict()}
+        ),
+    }
+
+
 def enu_to_ned(*, east_m: float, north_m: float, up_m: float) -> PositionNED:
     return PositionNED(x_m=float(north_m), y_m=float(east_m), z_m=-float(up_m))
 
@@ -169,7 +228,7 @@ def _validate_sequential_entry_separation(
         node_id: PositionNED(
             x_m=float(vehicle["spawn_ned"]["x_m"]),
             y_m=float(vehicle["spawn_ned"]["y_m"]),
-            z_m=-float(
+            z_m=float(vehicle["spawn_ned"]["z_m"]) - float(
                 next(
                     row["takeoff_altitude_m"]
                     for row in plan["vehicles"]
@@ -220,8 +279,8 @@ def load_patrol_plan(
         raise PatrolError("patrol purpose must be standalone_acceptance_validator")
     if plan.get("scene_id") != manifest.get("scene_id"):
         raise PatrolError("patrol scene_id does not match harness manifest")
-    if plan.get("frame") != "local_ned":
-        raise PatrolError("patrol frame must be local_ned")
+    if plan.get("frame") != "scene_ned":
+        raise PatrolError("patrol frame must be scene_ned")
     for field in (
         "arrival_radius_m",
         "arrival_hold_samples",
@@ -269,10 +328,15 @@ def load_patrol_plan(
         altitude_m = float(row.get("takeoff_altitude_m", 0.0))
         if altitude_m <= 0:
             raise PatrolError(f"{node_id} takeoff_altitude_m must be positive")
+        spawn = manifest_by_node[node_id]["spawn_ned"]
+        spawn_z_m = float(spawn["z_m"])
         all_waypoints = parsed_entries + parsed_route
-        if any(point.z_m >= 0 for point in all_waypoints):
-            raise PatrolError(f"{node_id} waypoint z_m must be negative in NED")
-        if any(abs(point.altitude_m - altitude_m) > 0.01 for point in all_waypoints):
+        if any(point.z_m >= spawn_z_m for point in all_waypoints):
+            raise PatrolError(f"{node_id} waypoint must be above its scene spawn")
+        if any(
+            abs((spawn_z_m - point.z_m) - altitude_m) > 0.01
+            for point in all_waypoints
+        ):
             raise PatrolError(f"{node_id} waypoint altitude differs from takeoff altitude")
         corridor_y = {round(point.y_m, 6) for point in parsed_route}
         if len(corridor_y) != 1:
@@ -282,11 +346,10 @@ def load_patrol_plan(
             raise PatrolError(f"{node_id} entry must finish on its patrol corridor")
         corridor_y_values.append(corridor_y_m)
 
-        spawn = manifest_by_node[node_id]["spawn_ned"]
         previous = PositionNED(
             x_m=float(spawn["x_m"]),
             y_m=float(spawn["y_m"]),
-            z_m=-altitude_m,
+            z_m=float(spawn["z_m"]) - altitude_m,
         )
         for point in all_waypoints:
             for sample in _segment_samples(previous, point):
@@ -355,8 +418,14 @@ class MavlinkPatrolController:
         self.vehicle = vehicle
         self.session = session
         self.node_id = str(vehicle["node_id"])
+        self.vehicle_spawn_ned = dict(vehicle["spawn_ned"])
+        self.spawn_scene_position = _position(
+            self.vehicle_spawn_ned,
+            context=f"{self.node_id} scene spawn",
+        )
         self._condition = threading.Condition(threading.RLock())
-        self._position: PositionNED | None = None
+        self._scene_position: PositionNED | None = None
+        self._vehicle_local_position: PositionNED | None = None
         self._position_sequence = 0
         self._armed: bool | None = None
         self._custom_mode: int | None = None
@@ -381,21 +450,33 @@ class MavlinkPatrolController:
 
     def position(self) -> PositionNED | None:
         with self._condition:
-            return self._position
+            return self._scene_position
+
+    def vehicle_local_position(self) -> PositionNED | None:
+        with self._condition:
+            return self._vehicle_local_position
+
+    def _positions(self) -> tuple[PositionNED | None, PositionNED | None]:
+        with self._condition:
+            return self._scene_position, self._vehicle_local_position
 
     def _observe(self, message: Any) -> None:
         message_type = getattr(message, "get_type", lambda: "")()
         with self._condition:
             if message_type == "LOCAL_POSITION_NED":
-                self._position = PositionNED(
+                self._vehicle_local_position = PositionNED(
                     x_m=float(getattr(message, "x", 0.0)),
                     y_m=float(getattr(message, "y", 0.0)),
                     z_m=float(getattr(message, "z", 0.0)),
                 )
+                self._scene_position = vehicle_local_to_scene_ned(
+                    self._vehicle_local_position,
+                    self.vehicle_spawn_ned,
+                )
                 self._position_sequence += 1
                 self._max_altitude_m = max(
                     self._max_altitude_m,
-                    self._position.altitude_m,
+                    self._vehicle_local_position.altitude_m,
                 )
                 self._last_telemetry_at = time.monotonic()
             elif message_type == "HEARTBEAT":
@@ -444,22 +525,36 @@ class MavlinkPatrolController:
         deadline = time.monotonic() + timeout_s
         with self._condition:
             while time.monotonic() < deadline:
-                if self._position is not None and self._position.altitude_m >= threshold_m:
+                if (
+                    self._vehicle_local_position is not None
+                    and self._vehicle_local_position.altitude_m >= threshold_m
+                ):
                     return {
                         "threshold_reached": True,
                         "threshold_m": threshold_m,
-                        "position": self._position.to_dict(),
+                        **framed_position_report(
+                            scene_position=self._scene_position,
+                            vehicle_local_position=self._vehicle_local_position,
+                        ),
                         "max_altitude_m": round(self._max_altitude_m, 3),
                     }
                 self._condition.wait(timeout=max(min(deadline - time.monotonic(), 0.5), 0.01))
+        scene_position, vehicle_local_position = self._positions()
         return {
             "threshold_reached": False,
             "threshold_m": threshold_m,
-            "position": self._position.to_dict() if self._position else None,
+            **framed_position_report(
+                scene_position=scene_position,
+                vehicle_local_position=vehicle_local_position,
+            ),
             "max_altitude_m": round(self.max_altitude_m, 3),
         }
 
-    def _send_setpoint(self, target: PositionNED) -> None:
+    def _send_setpoint(self, scene_target: PositionNED) -> None:
+        vehicle_local_target = scene_to_vehicle_local_ned(
+            scene_target,
+            self.vehicle_spawn_ned,
+        )
         mavlink = getattr(self.session._mavutil, "mavlink", None)
         frame = int(getattr(mavlink, "MAV_FRAME_LOCAL_NED", 1))
         with self.session.tx_lock:
@@ -472,9 +567,9 @@ class MavlinkPatrolController:
                 self.session.target_component,
                 frame,
                 POSITION_ONLY_TYPE_MASK,
-                target.x_m,
-                target.y_m,
-                target.z_m,
+                vehicle_local_target.x_m,
+                vehicle_local_target.y_m,
+                vehicle_local_target.z_m,
                 0.0,
                 0.0,
                 0.0,
@@ -498,11 +593,16 @@ class MavlinkPatrolController:
                 self._setpoint_stop.set()
                 return
 
-    def start_offboard(self, target: PositionNED, *, timeout_s: float) -> dict[str, Any]:
+    def start_offboard(
+        self,
+        scene_target: PositionNED,
+        *,
+        timeout_s: float,
+    ) -> dict[str, Any]:
         with self._condition:
-            self._setpoint = target
+            self._setpoint = scene_target
         self._setpoint_stop.clear()
-        self._send_setpoint(target)
+        self._send_setpoint(scene_target)
         self._setpoint_thread = threading.Thread(
             target=self._stream_setpoints,
             name=f"patrol-setpoint-{self.node_id}",
@@ -523,7 +623,22 @@ class MavlinkPatrolController:
                     else (self._custom_mode >> 16) & 0xFF
                 )
                 if main_mode == PX4_CUSTOM_MAIN_MODE_OFFBOARD:
-                    return {"offboard_observed": True, "custom_main_mode": main_mode}
+                    vehicle_local_target = scene_to_vehicle_local_ned(
+                        scene_target,
+                        self.vehicle_spawn_ned,
+                    )
+                    return {
+                        "offboard_observed": True,
+                        "custom_main_mode": main_mode,
+                        "scene_target": {
+                            "frame": "scene_ned",
+                            **scene_target.to_dict(),
+                        },
+                        "vehicle_local_target": {
+                            "frame": "vehicle_local_ned",
+                            **vehicle_local_target.to_dict(),
+                        },
+                    }
                 if self._setpoint_error:
                     break
                 self._condition.wait(timeout=max(min(deadline - time.monotonic(), 0.25), 0.01))
@@ -533,14 +648,18 @@ class MavlinkPatrolController:
 
     def goto(
         self,
-        waypoint: PositionNED,
+        scene_waypoint: PositionNED,
         *,
         radius_m: float,
         hold_samples: int,
         timeout_s: float,
     ) -> dict[str, Any]:
         with self._condition:
-            self._setpoint = waypoint
+            self._setpoint = scene_waypoint
+        vehicle_local_target = scene_to_vehicle_local_ned(
+            scene_waypoint,
+            self.vehicle_spawn_ned,
+        )
         deadline = time.monotonic() + timeout_s
         consecutive = 0
         seen_sequence = -1
@@ -552,7 +671,8 @@ class MavlinkPatrolController:
                 failure_reason = self._setpoint_error
                 break
             with self._condition:
-                position = self._position
+                scene_position = self._scene_position
+                vehicle_local_position = self._vehicle_local_position
                 sequence = self._position_sequence
                 last_telemetry_at = self._last_telemetry_at
             if (
@@ -561,11 +681,11 @@ class MavlinkPatrolController:
             ):
                 failure_reason = "telemetry_stale"
                 break
-            if position is not None and sequence > seen_sequence:
+            if scene_position is not None and sequence > seen_sequence:
                 seen_sequence = sequence
                 reached, final_error_m = waypoint_reached(
-                    position,
-                    waypoint,
+                    scene_position,
+                    scene_waypoint,
                     radius_m=radius_m,
                 )
                 best_error_m = (
@@ -577,17 +697,40 @@ class MavlinkPatrolController:
                 if consecutive >= hold_samples:
                     return {
                         "reached": True,
-                        "target": waypoint.to_dict(),
-                        "observed": position.to_dict(),
+                        "frame": "scene_ned",
+                        "scene_target": {
+                            "frame": "scene_ned",
+                            **scene_waypoint.to_dict(),
+                        },
+                        "vehicle_local_target": {
+                            "frame": "vehicle_local_ned",
+                            **vehicle_local_target.to_dict(),
+                        },
+                        **framed_position_report(
+                            scene_position=scene_position,
+                            vehicle_local_position=vehicle_local_position,
+                        ),
                         "arrival_error_m": round(final_error_m, 3),
                         "best_error_m": round(best_error_m, 3),
                         "hold_samples": consecutive,
                     }
             time.sleep(0.1)
+        scene_position, vehicle_local_position = self._positions()
         return {
             "reached": False,
-            "target": waypoint.to_dict(),
-            "observed": self.position().to_dict() if self.position() else None,
+            "frame": "scene_ned",
+            "scene_target": {
+                "frame": "scene_ned",
+                **scene_waypoint.to_dict(),
+            },
+            "vehicle_local_target": {
+                "frame": "vehicle_local_ned",
+                **vehicle_local_target.to_dict(),
+            },
+            **framed_position_report(
+                scene_position=scene_position,
+                vehicle_local_position=vehicle_local_position,
+            ),
             "arrival_error_m": (
                 None if final_error_m is None else round(final_error_m, 3)
             ),
@@ -620,7 +763,10 @@ class MavlinkPatrolController:
                     break
                 if self._position_sequence > seen_sequence:
                     seen_sequence = self._position_sequence
-                    if self._position is not None and self._position.altitude_m <= 0.3:
+                    if (
+                        self._vehicle_local_position is not None
+                        and self._vehicle_local_position.altitude_m <= 0.3
+                    ):
                         low_samples += 1
                     else:
                         low_samples = 0
@@ -628,13 +774,20 @@ class MavlinkPatrolController:
                     return {
                         "landed": True,
                         "disarmed": True,
-                        "position": self._position.to_dict(),
+                        **framed_position_report(
+                            scene_position=self._scene_position,
+                            vehicle_local_position=self._vehicle_local_position,
+                        ),
                     }
                 self._condition.wait(timeout=max(min(deadline - time.monotonic(), 0.5), 0.01))
+        scene_position, vehicle_local_position = self._positions()
         return {
             "landed": False,
             "disarmed": self._armed is False,
-            "position": self._position.to_dict() if self._position else None,
+            **framed_position_report(
+                scene_position=scene_position,
+                vehicle_local_position=vehicle_local_position,
+            ),
             "reason": reason,
         }
 
@@ -672,6 +825,8 @@ def run_patrol(
         str(row["node_id"]): {
             "node_id": row["node_id"],
             "corridor": row["corridor"],
+            "task_frame": "scene_ned",
+            "px4_frame": "vehicle_local_ned",
             "entry_waypoints": [],
             "waypoints": [],
         }
@@ -767,7 +922,10 @@ def run_patrol(
             hold_target = PositionNED(
                 x_m=current.x_m,
                 y_m=current.y_m,
-                z_m=-float(row["takeoff_altitude_m"]),
+                z_m=(
+                    controller.spawn_scene_position.z_m
+                    - float(row["takeoff_altitude_m"])
+                ),
             )
             results[node_id]["offboard"] = controller.start_offboard(
                 hold_target,
@@ -841,11 +999,11 @@ def run_patrol(
             controller = by_node[node_id]
             if not controller.connected:
                 continue
-            position = controller.position()
+            vehicle_local_position = controller.vehicle_local_position()
             if (
                 getattr(controller, "armed", None) is False
-                and position is not None
-                and position.altitude_m <= 0.3
+                and vehicle_local_position is not None
+                and vehicle_local_position.altitude_m <= 0.3
             ):
                 results[node_id]["recovery"] = "already_grounded_disarmed"
                 continue
@@ -868,6 +1026,10 @@ def run_patrol(
                 controller.max_altitude_m,
                 3,
             )
+            results[controller.node_id]["final_position"] = framed_position_report(
+                scene_position=controller.position(),
+                vehicle_local_position=controller.vehicle_local_position(),
+            )
             controller.close()
 
     minimum_distance = separation["minimum_distance_m"]
@@ -886,7 +1048,11 @@ def run_patrol(
         "scope": "SITL_STANDALONE_ACCEPTANCE",
         "mission_id": plan["mission_id"],
         "scene_id": plan["scene_id"],
-        "frame": plan["frame"],
+        "frame": "scene_ned",
+        "frames": {
+            "task_and_safety": "scene_ned",
+            "px4_setpoint_and_telemetry": "vehicle_local_ned",
+        },
         "started_at": started_at,
         "completed_at": harness.utc_now(),
         "vehicles": [results[str(row["node_id"])] for row in plan_rows],

@@ -268,7 +268,7 @@ def main() -> int:
     try:
         manifest = load_manifest(args.config)
         require_standalone_endpoints(manifest)
-        health = collect_health(manifest, timeout_s=5.0)
+        health = collect_health(manifest, timeout_s=5.0, mode="standalone")
         require_standalone_endpoints(manifest)
     except (HarnessError, PatrolError) as exc:
         print(json.dumps({"status": "ERROR", "error": str(exc)}, indent=2))

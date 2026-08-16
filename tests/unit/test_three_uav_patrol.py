@@ -4,8 +4,10 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -39,7 +41,7 @@ def test_patrol_plan_has_three_separated_safe_ned_routes() -> None:
         scene=scene,
     )
 
-    assert plan["frame"] == "local_ned"
+    assert plan["frame"] == "scene_ned"
     assert [row["node_id"] for row in plan["vehicles"]] == [
         "UAV-01",
         "UAV-02",
@@ -65,6 +67,132 @@ def test_enu_ned_round_trip_and_positive_altitude() -> None:
         "north_m": 12.0,
         "up_m": 8.0,
     }
+
+
+def test_scene_and_vehicle_local_transform_include_spawn_rotation_and_translation() -> None:
+    spawn = {"x_m": 100.0, "y_m": 50.0, "z_m": 2.0, "yaw_deg": 90.0}
+    scene_position = patrol.PositionNED(100.0, 60.0, -8.0)
+
+    vehicle_local = patrol.scene_to_vehicle_local_ned(scene_position, spawn)
+
+    assert vehicle_local.x_m == pytest.approx(10.0, abs=1e-9)
+    assert vehicle_local.y_m == pytest.approx(0.0, abs=1e-9)
+    assert vehicle_local.z_m == pytest.approx(-10.0, abs=1e-9)
+    round_trip = patrol.vehicle_local_to_scene_ned(vehicle_local, spawn)
+    assert round_trip.x_m == pytest.approx(scene_position.x_m, abs=1e-9)
+    assert round_trip.y_m == pytest.approx(scene_position.y_m, abs=1e-9)
+    assert round_trip.z_m == pytest.approx(scene_position.z_m, abs=1e-9)
+
+
+def test_current_spawn_offsets_preserve_public_scene_corridors() -> None:
+    manifest, scene, _ = _inputs()
+    plan = patrol.load_patrol_plan(PATROL_PATH, manifest=manifest, scene=scene)
+    by_node = {row["node_id"]: row for row in manifest["vehicles"]}
+    route_by_node = {row["node_id"]: row for row in plan["vehicles"]}
+
+    scene_uav02 = patrol.PositionNED(
+        **route_by_node["UAV-02"]["waypoints"][0]
+    )
+    scene_uav03 = patrol.PositionNED(
+        **route_by_node["UAV-03"]["waypoints"][0]
+    )
+    local_uav02 = patrol.scene_to_vehicle_local_ned(
+        scene_uav02,
+        by_node["UAV-02"]["spawn_ned"],
+    )
+    local_uav03 = patrol.scene_to_vehicle_local_ned(
+        scene_uav03,
+        by_node["UAV-03"]["spawn_ned"],
+    )
+
+    assert local_uav02.y_m == pytest.approx(-8.0)
+    assert local_uav03.y_m == pytest.approx(28.0)
+    observed_scene = {
+        "UAV-02": patrol.vehicle_local_to_scene_ned(
+            local_uav02,
+            by_node["UAV-02"]["spawn_ned"],
+        ),
+        "UAV-03": patrol.vehicle_local_to_scene_ned(
+            local_uav03,
+            by_node["UAV-03"]["spawn_ned"],
+        ),
+    }
+    separation, pair = patrol.minimum_pairwise_distance(observed_scene)
+
+    assert pair == ("UAV-02", "UAV-03")
+    assert separation is not None and separation > 20.0
+    assert abs(observed_scene["UAV-02"].y_m - observed_scene["UAV-03"].y_m) == 20.0
+    assert abs((8.0 + 0.0) - (-8.0 + 20.0)) == 4.0
+
+
+def test_controller_converts_scene_setpoint_and_px4_local_telemetry() -> None:
+    manifest, _, _ = _inputs()
+    vehicle = manifest["vehicles"][1]
+    captured: list[tuple[Any, ...]] = []
+
+    class CaptureMav:
+        def set_position_target_local_ned_send(self, *args: Any) -> None:
+            captured.append(args)
+
+    session = SimpleNamespace(
+        _mavutil=SimpleNamespace(
+            mavlink=SimpleNamespace(MAV_FRAME_LOCAL_NED=1),
+        ),
+        tx_lock=threading.RLock(),
+        connection=SimpleNamespace(mav=CaptureMav()),
+        connected=True,
+        target_system=2,
+        target_component=1,
+        _mavlink_const=lambda name, default: default,
+    )
+    controller = patrol.MavlinkPatrolController(vehicle, session)
+
+    controller._send_setpoint(patrol.PositionNED(15.0, 0.0, -10.0))
+
+    assert captured[0][5:8] == pytest.approx((15.0, -8.0, -10.0))
+    controller._observe(
+        SimpleNamespace(
+            x=15.0,
+            y=-8.0,
+            z=-10.0,
+            get_type=lambda: "LOCAL_POSITION_NED",
+        )
+    )
+    assert controller.position() == patrol.PositionNED(15.0, 0.0, -10.0)
+    assert controller.vehicle_local_position() == patrol.PositionNED(
+        15.0,
+        -8.0,
+        -10.0,
+    )
+    observation = controller.wait_for_altitude(threshold_m=9.0, timeout_s=0.01)
+    assert observation["scene_position"] == {
+        "frame": "scene_ned",
+        "x_m": 15.0,
+        "y_m": 0.0,
+        "z_m": -10.0,
+    }
+    assert observation["vehicle_local_position"] == {
+        "frame": "vehicle_local_ned",
+        "x_m": 15.0,
+        "y_m": -8.0,
+        "z_m": -10.0,
+    }
+    waypoint = controller.goto(
+        patrol.PositionNED(15.0, 0.0, -10.0),
+        radius_m=2.0,
+        hold_samples=1,
+        timeout_s=0.1,
+    )
+    assert waypoint["reached"] is True
+    assert waypoint["scene_target"]["frame"] == "scene_ned"
+    assert waypoint["vehicle_local_target"] == {
+        "frame": "vehicle_local_ned",
+        "x_m": 15.0,
+        "y_m": -8.0,
+        "z_m": -10.0,
+    }
+    assert waypoint["scene_position"]["frame"] == "scene_ned"
+    assert waypoint["vehicle_local_position"]["frame"] == "vehicle_local_ned"
 
 
 def test_waypoint_arrival_uses_three_dimensional_two_meter_radius() -> None:
@@ -152,10 +280,21 @@ class _FakeController:
         self,
         node_id: str,
         position: patrol.PositionNED,
+        vehicle_spawn_ned: dict[str, Any],
         events: list[str] | None = None,
     ) -> None:
         self.node_id = node_id
         self._position = position
+        self.vehicle_spawn_ned = dict(vehicle_spawn_ned)
+        self.spawn_scene_position = patrol.PositionNED(
+            x_m=float(vehicle_spawn_ned["x_m"]),
+            y_m=float(vehicle_spawn_ned["y_m"]),
+            z_m=float(vehicle_spawn_ned["z_m"]),
+        )
+        self._vehicle_local_position = patrol.scene_to_vehicle_local_ned(
+            position,
+            vehicle_spawn_ned,
+        )
         self._events = events if events is not None else []
         self.max_altitude_m = position.altitude_m
         self.connected = False
@@ -163,6 +302,9 @@ class _FakeController:
 
     def position(self) -> patrol.PositionNED:
         return self._position
+
+    def vehicle_local_position(self) -> patrol.PositionNED:
+        return self._vehicle_local_position
 
     def connect(self, *, timeout_s: float) -> dict[str, Any]:
         assert timeout_s > 0
@@ -179,7 +321,11 @@ class _FakeController:
         self._position = patrol.PositionNED(
             self._position.x_m,
             self._position.y_m,
-            -altitude_m,
+            self.spawn_scene_position.z_m - altitude_m,
+        )
+        self._vehicle_local_position = patrol.scene_to_vehicle_local_ned(
+            self._position,
+            self.vehicle_spawn_ned,
         )
         return {"result": 0, "timeout": False}
 
@@ -192,11 +338,19 @@ class _FakeController:
 
     def start_offboard(self, target: patrol.PositionNED, *, timeout_s: float) -> dict[str, Any]:
         self._position = target
+        self._vehicle_local_position = patrol.scene_to_vehicle_local_ned(
+            target,
+            self.vehicle_spawn_ned,
+        )
         return {"offboard_observed": True, "custom_main_mode": 6}
 
     def goto(self, waypoint: patrol.PositionNED, **kwargs: Any) -> dict[str, Any]:
         del kwargs
         self._position = waypoint
+        self._vehicle_local_position = patrol.scene_to_vehicle_local_ned(
+            waypoint,
+            self.vehicle_spawn_ned,
+        )
         time.sleep(0.04)
         return {
             "reached": True,
@@ -213,9 +367,20 @@ class _FakeController:
         self._position = patrol.PositionNED(
             self._position.x_m,
             self._position.y_m,
-            0.0,
+            self.spawn_scene_position.z_m,
         )
-        return {"landed": True, "disarmed": True, "position": self._position.to_dict()}
+        self._vehicle_local_position = patrol.scene_to_vehicle_local_ned(
+            self._position,
+            self.vehicle_spawn_ned,
+        )
+        return {
+            "landed": True,
+            "disarmed": True,
+            **patrol.framed_position_report(
+                scene_position=self._position,
+                vehicle_local_position=self._vehicle_local_position,
+            ),
+        }
 
     def close(self) -> None:
         self.connected = False
@@ -233,6 +398,7 @@ def _fake_controllers(
                 float(row["spawn_ned"]["y_m"]),
                 float(row["spawn_ned"]["z_m"]),
             ),
+            row["spawn_ned"],
             events,
         )
         for row in manifest["vehicles"]
@@ -251,6 +417,11 @@ def test_run_patrol_reports_ack_waypoints_altitude_and_separation() -> None:
     )
 
     assert report["status"] == "PASS"
+    assert report["frame"] == "scene_ned"
+    assert report["frames"] == {
+        "task_and_safety": "scene_ned",
+        "px4_setpoint_and_telemetry": "vehicle_local_ned",
+    }
     assert report["separation"]["threshold_met"] is True
     assert report["separation"]["minimum_distance_m"] >= 7.0
     assert all(patrol.ack_accepted(row["arm_ack"]) for row in report["vehicles"])
@@ -259,6 +430,12 @@ def test_run_patrol_reports_ack_waypoints_altitude_and_separation() -> None:
     assert [row["max_altitude_m"] for row in report["vehicles"]] == [8.0, 10.0, 12.0]
     assert all(len(row["waypoints"]) == 3 for row in report["vehicles"])
     assert [len(row["entry_waypoints"]) for row in report["vehicles"]] == [2, 1, 2]
+    assert all(
+        row["final_position"]["scene_position"]["frame"] == "scene_ned"
+        and row["final_position"]["vehicle_local_position"]["frame"]
+        == "vehicle_local_ned"
+        for row in report["vehicles"]
+    )
     assert events[:3] == ["takeoff:UAV-01", "takeoff:UAV-02", "takeoff:UAV-03"]
     assert all(event.startswith("wait_altitude:") for event in events[3:6])
 

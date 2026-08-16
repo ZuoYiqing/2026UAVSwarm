@@ -88,10 +88,31 @@ def _mavlink_probe(manifest: dict[str, Any]):  # type: ignore[no-untyped-def]
     return probe
 
 
+def _runtime_telemetry(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contract_version": "1.0",
+        "vehicles": [
+            {
+                "node_id": vehicle["node_id"],
+                "system_id": vehicle["system_id"],
+                "component_id": vehicle["component_id"],
+                "heartbeat_fresh": True,
+                "telemetry_fresh": True,
+                "last_seen": "2026-08-16T00:00:00+00:00",
+                "reason": "ok",
+                "status": "connected",
+            }
+            for vehicle in manifest["vehicles"]
+        ],
+    }
+
+
 def _collect(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
+    mode: str = "standalone",
+    runtime_telemetry: dict[str, Any] | None = None,
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
 ) -> dict[str, Any]:
@@ -104,6 +125,8 @@ def _collect(
         manifest,
         timeout_s=0.1,
         stability_window_s=10.0,
+        mode=mode,
+        runtime_telemetry=runtime_telemetry,
         mavlink_probe=mavlink_probe or _mavlink_probe(manifest),
         clock_probe=lambda world, timeout: {
             "clock_advancing": True,
@@ -123,6 +146,7 @@ def test_health_requires_clock_models_identity_and_continuous_three_node_streams
     payload = _collect(tmp_path, monkeypatch)
 
     assert payload["status"] == "ready"
+    assert payload["mode"] == "standalone"
     assert payload["server_running"] is True
     assert payload["clock_advancing"] is True
     assert payload["world"] == "simple_recon_v0_1"
@@ -131,6 +155,54 @@ def test_health_requires_clock_models_identity_and_continuous_three_node_streams
     assert all(row["heartbeat_fresh"] for row in payload["vehicles"])
     assert all(row["telemetry_fresh"] for row in payload["vehicles"])
     assert all(row["process_identity_valid"] for row in payload["vehicles"])
+
+
+def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+
+    def forbidden_probe(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("integrated health must not open a MAVLink endpoint")
+
+    payload = _collect(
+        tmp_path,
+        monkeypatch,
+        mode="integrated",
+        runtime_telemetry=_runtime_telemetry(manifest),
+        mavlink_probe=forbidden_probe,
+    )
+
+    assert payload["status"] == "ready"
+    assert payload["mode"] == "integrated"
+    assert payload["evidence"]["telemetry_source"] == "runtime"
+    assert payload["evidence"]["runtime_telemetry_contract_version"] == "1.0"
+    assert all(
+        row["evidence"]["telemetry_source"] == "runtime"
+        and row["evidence"]["telemetry"]["source"] == "runtime"
+        for row in payload["vehicles"]
+    )
+
+
+def test_integrated_health_fails_closed_when_runtime_omits_one_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    runtime_telemetry = _runtime_telemetry(manifest)
+    runtime_telemetry["vehicles"] = runtime_telemetry["vehicles"][:2]
+
+    payload = _collect(
+        tmp_path,
+        monkeypatch,
+        mode="integrated",
+        runtime_telemetry=runtime_telemetry,
+        mavlink_probe=lambda *args: pytest.fail("MAVLink probe was called"),
+    )
+
+    assert payload["ready"] is False
+    assert "runtime_telemetry_missing" in payload["vehicles"][2]["reason"]
 
 
 def test_health_rejects_one_px4_stream_reused_as_another_node(
@@ -247,4 +319,48 @@ def test_health_cli_persists_latest_machine_readable_snapshot(
     )
 
     assert health_three_uav.main(["--output", str(output_path)]) == 0
+    assert json.loads(output_path.read_text(encoding="utf-8")) == payload
+
+
+def test_integrated_health_cli_never_checks_or_binds_standalone_endpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "health" / "integrated.json"
+    telemetry_path = tmp_path / "runtime-telemetry.json"
+    telemetry_path.write_text(
+        json.dumps({"contract_version": "1.0", "vehicles": []}),
+        encoding="utf-8",
+    )
+    payload = {
+        "contract_version": "1.0",
+        "mode": "integrated",
+        "status": "ready",
+        "ready": True,
+        "vehicles": [],
+    }
+    monkeypatch.setattr(health_three_uav, "load_manifest", lambda path: {})
+    monkeypatch.setattr(
+        health_three_uav,
+        "require_standalone_endpoints",
+        lambda manifest: pytest.fail("integrated mode checked a MAVLink endpoint"),
+    )
+
+    def collect(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["mode"] == "integrated"
+        assert kwargs["runtime_telemetry"]["contract_version"] == "1.0"
+        return payload
+
+    monkeypatch.setattr(health_three_uav, "collect_health", collect)
+
+    assert health_three_uav.main(
+        [
+            "--mode",
+            "integrated",
+            "--runtime-telemetry",
+            str(telemetry_path),
+            "--output",
+            str(output_path),
+        ]
+    ) == 0
     assert json.loads(output_path.read_text(encoding="utf-8")) == payload

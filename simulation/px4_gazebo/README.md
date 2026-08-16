@@ -47,6 +47,18 @@ separation, lands/disarms every aircraft, and writes JSON evidence. Stop
 Runtime before either standalone validator; integrated actions remain owned by
 Runtime and Policy Gate.
 
+Patrol geometry, obstacle checks, no-fly checks and separation use the shared
+`scene_ned` frame. Each public waypoint is transformed into the target
+aircraft's `vehicle_local_ned` frame before `SET_POSITION_TARGET_LOCAL_NED` is
+sent. Raw PX4 `LOCAL_POSITION_NED` is transformed back into `scene_ned` before
+any cross-vehicle calculation. Spawn translation and yaw rotation are both
+part of this transform.
+
+Health has two explicit modes. `--mode standalone` directly probes MAVLink and
+requires Runtime to be stopped. `--mode integrated --runtime-telemetry <json>`
+never opens ports 14540-14542; it combines Gazebo/process evidence with the
+node telemetry status supplied by Runtime.
+
 Use `--gui` instead of `--headless` when WSLg and Gazebo GUI are available.
 Override the external PX4 checkout without editing the manifest:
 

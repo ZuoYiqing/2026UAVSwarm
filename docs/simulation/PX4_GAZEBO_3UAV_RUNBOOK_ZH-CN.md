@@ -67,10 +67,30 @@ Harness 只读共享配置并校验漂移，不会自动覆盖。发现差异时
 ## 4. 坐标系
 
 - Gazebo world：ENU / Z-up；
-- 场景与巡检配置：local NED；
-- PX4 `LOCAL_POSITION_NED`：NED，`z_down` 为正向下；
-- 高度：`altitude_m = max(0, -z_m)`；
-- Runtime / Cesium：消费 NED，并结合唯一 WGS84 origin 转换。
+- 场景、障碍物、禁飞区、巡检航线和机间距离：共享 `scene_ned`；
+- PX4 `LOCAL_POSITION_NED` 和 `SET_POSITION_TARGET_LOCAL_NED`：每机独立 `vehicle_local_ned`；
+- 两个 NED frame 均为 `z_down`，但原点和朝向可以不同；
+- 高度相对本机 spawn：`altitude_m = max(0, -vehicle_local_z_m)`；
+- Runtime / Cesium：消费 `scene_ned`，并结合唯一 WGS84 origin 转换。
+
+设本机 spawn 在 `scene_ned` 中为平移 `t_spawn`，spawn yaw 为 `yaw`：
+
+```text
+scene_xy = t_spawn_xy + R(yaw) * vehicle_local_xy
+scene_z  = t_spawn_z  + vehicle_local_z
+
+vehicle_local_xy = R(-yaw) * (scene_xy - t_spawn_xy)
+vehicle_local_z  = scene_z - t_spawn_z
+```
+
+当 spawn yaw 为 0 时，退化为：
+
+```text
+vehicle_local_ned = scene_ned - vehicle_spawn_ned
+scene_ned = vehicle_local_ned + vehicle_spawn_ned
+```
+
+公共任务航点只有在发送给对应 PX4 前才转换为 `vehicle_local_ned`。PX4 原始位置在做航点误差、障碍物、禁飞区、机间距离和报告计算前，必须先转换回 `scene_ned`。
 
 位置转换：
 
@@ -155,8 +175,13 @@ bash simulation/px4_gazebo/scripts/start_three_uav.sh --gui
 
 ## 8. 持续健康检查
 
+### 8.1 Standalone 模式
+
+调用方：仿真验收人员。Runtime、QGroundControl、MAVProxy 和其他 receiver 必须停止。
+
 ```bash
 python3 simulation/px4_gazebo/scripts/health_three_uav.py \
+  --mode standalone \
   --stability-window 10 \
   --pretty
 ```
@@ -174,11 +199,59 @@ PASS 同时要求：
 - observed system_id 分别为 1、2、3，且全局唯一；
 - component_id 均为 1。
 
+### 8.2 Integrated 模式
+
+调用方：Runtime 或系统集成层。Runtime 已独占 `14540/14541/14542` 时，Simulation 不再打开、探测或绑定这些 MAVLink endpoint，只检查 Gazebo world、clock、models 和 Process Identity，并合并 Runtime 提供的节点 telemetry 状态。
+
+Python 调用边界：
+
+```python
+collect_health(
+    manifest,
+    timeout_s=5.0,
+    mode="integrated",
+    runtime_telemetry=runtime_snapshot,
+)
+```
+
+CLI 可读取 Runtime 导出的短期 JSON 快照：
+
+```bash
+python3 simulation/px4_gazebo/scripts/health_three_uav.py \
+  --mode integrated \
+  --runtime-telemetry /path/to/runtime-three-uav-telemetry.json \
+  --pretty
+```
+
+Runtime telemetry 最小契约：
+
+```json
+{
+  "contract_version": "1.0",
+  "vehicles": [
+    {
+      "node_id": "UAV-01",
+      "system_id": 1,
+      "component_id": 1,
+      "heartbeat_fresh": true,
+      "telemetry_fresh": true,
+      "last_seen": "<UTC timestamp>",
+      "reason": "ok"
+    }
+  ]
+}
+```
+
+缺少任一节点、身份不符或 Runtime 标记 stale 时，integrated health fail closed。该模式不会调用 direct MAVLink probe。
+
+### 8.3 统一输出
+
 机器可读输出的稳定字段：
 
 ```json
 {
   "simulator": "gazebo",
+  "mode": "standalone",
   "status": "ready",
   "server_running": true,
   "clock_advancing": true,
@@ -209,7 +282,7 @@ PASS 同时要求：
 .runtime/px4_gazebo/health/latest.json
 ```
 
-Runtime 负责人可读取该短期快照接入 `/api/simulation/status`；Runtime 持有 endpoint 后不要重新启动 health probe。
+Runtime 负责人可将 integrated 结果接入 `/api/simulation/status`。Runtime 持有 endpoint 后不得运行 standalone health。
 
 ## 9. 旧隔离回归
 
@@ -241,7 +314,7 @@ runtime_session_active:endpoint_in_use
 scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json
 ```
 
-| node_id | 通道 | 高度 | NED y | 航点数 |
+| node_id | 通道 | 高度 | scene_ned y | 航点数 |
 | --- | --- | ---: | ---: | ---: |
 | UAV-01 | west | 8 m | -20 m | 3 |
 | UAV-02 | central | 10 m | 0 m | 3 |
@@ -253,7 +326,7 @@ scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json
 2. UAV-01、02、03 顺序错峰 ARM；
 3. UAV-01、02、03 顺序错峰 TAKEOFF；
 4. 观察各自 85% 高度阈值；
-5. 以 10 Hz 持续发送 `SET_POSITION_TARGET_LOCAL_NED`，观察 OFFBOARD；
+5. 将 `scene_ned` 航点转换为各机 `vehicle_local_ned`，以 10 Hz 发送 `SET_POSITION_TARGET_LOCAL_NED` 并观察 OFFBOARD；
 6. 按 UAV-01、02、03 顺序进入各自走廊，其他飞机持续悬停；
 7. 完成走廊进入后，三条分离航线并发执行，每机至少 3 个巡检航点；
 8. 每个航点要求 3D 误差不超过 2 m，并连续保持 5 个新遥测样本；
@@ -270,17 +343,18 @@ scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json
 
 ```text
 1. 启动 PX4/Gazebo Harness
-2. 独立运行 health，等待命令退出
+2. 独立运行 standalone health，等待命令退出
 3. 启动 Runtime，使 Runtime 独占三个 MAVLink endpoint
-4. 启动主前端和 Cesium 前端
-5. 所有动作经 Runtime -> Policy Gate -> MAVLink session
-6. 先停止前端，再停止 Runtime
-7. 最后停止 Harness
+4. Runtime 将三机 telemetry 状态传给 integrated health
+5. 启动主前端和 Cesium 前端
+6. 所有动作经 Runtime -> Policy Gate -> MAVLink session
+7. 先停止前端，再停止 Runtime
+8. 最后停止 Harness
 ```
 
 Integrated mode 不运行 `validate_three_uav.py` 或 `patrol_three_uav.py`，否则会争抢 endpoint。
 
-健康 JSON 后续可由 Runtime 负责人接入 `/api/simulation/status`；Simulation 不直接修改 Runtime route。
+健康 JSON 后续可由 Runtime 负责人接入 `/api/simulation/status`；Simulation 不直接修改 Runtime route。integrated health 只消费 Runtime 已持有会话产生的状态，不建立第二套 receiver。
 
 ## 12. 安全停止和残留检查
 

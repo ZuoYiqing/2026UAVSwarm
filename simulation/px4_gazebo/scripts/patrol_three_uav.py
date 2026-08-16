@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest,
             timeout_s=args.health_timeout,
             stability_window_s=args.health_stability_window,
+            mode="standalone",
         )
         if not health["ready"]:
             raise patrol.PatrolError("three_uav_health_not_ready")
