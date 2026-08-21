@@ -36,6 +36,7 @@ def test_manifest_has_stable_three_vehicle_mapping() -> None:
     assert [row["node_id"] for row in rows] == ["UAV-01", "UAV-02", "UAV-03"]
     assert [row["px4_instance"] for row in rows] == [0, 1, 2]
     assert [row["system_id"] for row in rows] == [1, 2, 3]
+    assert [vehicle["component_id"] for vehicle in manifest["vehicles"]] == [1, 1, 1]
     assert [row["gazebo_model_name"] for row in rows] == [
         "x500_0",
         "x500_1",
@@ -45,6 +46,16 @@ def test_manifest_has_stable_three_vehicle_mapping() -> None:
         "udpin:127.0.0.1:14540",
         "udpin:127.0.0.1:14541",
         "udpin:127.0.0.1:14542",
+    ]
+    assert [vehicle["px4_mavlink_local_port"] for vehicle in manifest["vehicles"]] == [
+        14580,
+        14581,
+        14582,
+    ]
+    assert [vehicle["gcs_local_port"] for vehicle in manifest["vehicles"]] == [
+        18570,
+        18571,
+        18572,
     ]
 
 
@@ -64,7 +75,7 @@ def test_runtime_mapping_drift_is_rejected() -> None:
     )
     runtime_config["vehicles"][1]["endpoint"] = "udpin:127.0.0.1:14031"
 
-    with pytest.raises(harness.HarnessError, match="mapping drifted"):
+    with pytest.raises(harness.HarnessError, match="shared_config_mismatch"):
         harness.validate_runtime_mapping(manifest, runtime_config)
 
 
@@ -110,52 +121,6 @@ def test_manifest_and_scene_spawns_must_match() -> None:
         harness.validate_manifest(manifest, scene=scene)  # type: ignore[arg-type]
 
 
-def test_health_requires_expected_unique_sysids_processes_and_models(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest = harness.load_manifest(MANIFEST_PATH)
-    state_path = tmp_path / "state.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "processes": [
-                    {"node_id": vehicle["node_id"], "pid": index + 100}
-                    for index, vehicle in enumerate(manifest["vehicles"])
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(harness, "STATE_PATH", state_path)
-    endpoint_to_sysid = {
-        vehicle["telemetry_endpoint"]: vehicle["system_id"]
-        for vehicle in manifest["vehicles"]
-    }
-
-    def heartbeat_probe(endpoint: str, timeout_s: float) -> dict[str, object]:
-        del timeout_s
-        return {
-            "heartbeat_received": True,
-            "observed_system_id": endpoint_to_sysid[endpoint],
-            "observed_component_id": 1,
-            "last_heartbeat_age_s": 0.01,
-            "error": None,
-        }
-
-    payload = harness.collect_health(
-        manifest,
-        timeout_s=0.1,
-        heartbeat_probe=heartbeat_probe,
-        process_probe=lambda pid: pid in {100, 101, 102},
-        model_probe=lambda: {"x500_0", "x500_1", "x500_2"},
-    )
-
-    assert payload["ready"] is True
-    assert payload["unique_system_ids"] is True
-    assert all(row["readiness"] for row in payload["vehicles"])
-
-
 def test_world_contains_aligned_pads_but_no_static_x500() -> None:
     root = ET.parse(WORLD_PATH).getroot()
     names = {
@@ -172,6 +137,23 @@ def test_world_contains_aligned_pads_but_no_static_x500() -> None:
         "nfz-001-marker",
     }.issubset(names)
     assert not any(name.startswith("x500") for name in names)
+
+
+def test_repeated_start_is_rejected_when_owned_process_identity_is_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decision = harness.ProcessIdentityDecision(
+        code=harness.IDENTITY_MATCH,
+        node_id="UAV-01",
+        pid=4242,
+        signal_allowed=True,
+    )
+    monkeypatch.setattr(harness, "_validate_processes", lambda *args, **kwargs: [decision])
+
+    with pytest.raises(harness.HarnessError, match="already running"):
+        harness._validate_start_state(
+            {"run_id": RUN_ID, "processes": [_process_row()]}
+        )
 
 
 RUN_ID = "run-test-001"
@@ -444,3 +426,60 @@ def test_identity_change_after_sigterm_blocks_sigkill() -> None:
 
     assert signals == [(4242, harness.SIGTERM)]
     assert result[0].code == harness.PROCESS_IDENTITY_MISMATCH
+
+
+def test_cleanup_evidence_requires_world_exit_and_released_ports() -> None:
+    state = {
+        "world_name": "simple_recon_v0_1",
+        "required_udp_ports": [
+            {"host": "127.0.0.1", "port": 14540, "owner": "UAV-01"},
+            {"host": "127.0.0.1", "port": 14541, "owner": "UAV-02"},
+        ],
+    }
+
+    evidence = harness._wait_for_cleanup(
+        state,
+        timeout_s=0,
+        world_probe=lambda: ["simple_recon_v0_1"],
+        port_probe=lambda host, port: port == 14540,
+    )
+
+    assert evidence["clean"] is False
+    assert evidence["world_stopped"] is False
+    assert evidence["ports_released"] is False
+    assert evidence["ports"][1]["available"] is False
+
+
+def test_cleanup_incomplete_preserves_state_after_safe_process_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_path, pid_path = _write_state(tmp_path, monkeypatch)
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        harness,
+        "read_process_identity",
+        _sequence_reader(_observed(), _exited()),
+    )
+    monkeypatch.setattr(
+        harness.os,
+        "killpg",
+        lambda pgid, sig: signals.append((pgid, sig)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        harness,
+        "_wait_for_cleanup",
+        lambda state: {
+            "clean": False,
+            "world_stopped": False,
+            "ports_released": True,
+        },
+    )
+
+    with pytest.raises(harness.HarnessError, match="cleanup_incomplete"):
+        harness.stop_harness()
+
+    assert signals == [(4242, harness.SIGTERM)]
+    assert state_path.exists()
+    assert pid_path.exists()

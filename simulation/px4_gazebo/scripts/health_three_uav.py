@@ -10,20 +10,84 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
-from harness import DEFAULT_MANIFEST_PATH, HarnessError, collect_health, load_manifest
+from harness import DEFAULT_MANIFEST_PATH, RUNTIME_ROOT, HarnessError, load_manifest
+from health import DEFAULT_STABILITY_WINDOW_S, HEALTH_MODES, collect_health
+from patrol import PatrolError, require_standalone_endpoints
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--mode",
+        choices=sorted(HEALTH_MODES),
+        default="standalone",
+        help="standalone probes MAVLink; integrated consumes Runtime telemetry",
+    )
+    parser.add_argument(
+        "--runtime-telemetry",
+        type=Path,
+        help="Runtime-owned node telemetry JSON, required in integrated mode",
+    )
+    parser.add_argument(
+        "--stability-window",
+        type=float,
+        default=DEFAULT_STABILITY_WINDOW_S,
+        help="Seconds of continuous fresh heartbeat evidence required per UAV",
+    )
     parser.add_argument("--pretty", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=RUNTIME_ROOT / "health" / "latest.json",
+        help="Path for the latest machine-readable health evidence",
+    )
+    args = parser.parse_args(argv)
+    exit_code = 0
     try:
-        payload = collect_health(load_manifest(args.config), timeout_s=args.timeout)
-    except HarnessError as exc:
-        print(json.dumps({"status": "error", "error": str(exc)}, indent=2))
-        return 2
+        manifest = load_manifest(args.config)
+        runtime_telemetry = None
+        if args.mode == "integrated":
+            if args.runtime_telemetry is None:
+                raise HarnessError(
+                    "integrated health requires --runtime-telemetry"
+                )
+            runtime_telemetry = json.loads(
+                args.runtime_telemetry.read_text(encoding="utf-8")
+            )
+            if not isinstance(runtime_telemetry, dict):
+                raise HarnessError("Runtime telemetry root must be a JSON object")
+        else:
+            require_standalone_endpoints(manifest)
+        payload = collect_health(
+            manifest,
+            timeout_s=args.timeout,
+            stability_window_s=args.stability_window,
+            mode=args.mode,
+            runtime_telemetry=runtime_telemetry,
+        )
+        if args.mode == "standalone":
+            require_standalone_endpoints(manifest)
+    except (HarnessError, PatrolError, OSError, json.JSONDecodeError) as exc:
+        payload = {
+            "contract_version": "1.0",
+            "mode": args.mode,
+            "status": "error",
+            "ready": False,
+            "reason": (
+                "endpoint_in_use"
+                if "endpoint_in_use" in str(exc)
+                else "health_error"
+            ),
+            "error": str(exc),
+        }
+        exit_code = 2
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     print(
         json.dumps(
             payload,
@@ -31,6 +95,8 @@ def main() -> int:
             ensure_ascii=False,
         )
     )
+    if exit_code:
+        return exit_code
     return 0 if payload["ready"] else 1
 
 

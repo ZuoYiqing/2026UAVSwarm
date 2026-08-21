@@ -21,10 +21,11 @@ from harness import (
     DEFAULT_MANIFEST_PATH,
     HarnessError,
     RUNTIME_ROOT,
-    collect_health,
     load_manifest,
     utc_now,
 )
+from health import collect_health
+from patrol import PatrolError, require_standalone_endpoints
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
 
@@ -266,8 +267,10 @@ def main() -> int:
 
     try:
         manifest = load_manifest(args.config)
-        health = collect_health(manifest, timeout_s=5.0)
-    except HarnessError as exc:
+        require_standalone_endpoints(manifest)
+        health = collect_health(manifest, timeout_s=5.0, mode="standalone")
+        require_standalone_endpoints(manifest)
+    except (HarnessError, PatrolError) as exc:
         print(json.dumps({"status": "ERROR", "error": str(exc)}, indent=2))
         return 2
     if not health["ready"]:
