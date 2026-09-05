@@ -3,52 +3,116 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="2026UAVSwarm 多源无人平台三维仿真场景"
-    />
+    <meta name="description" content="2026UAVSwarm 多源无人平台三维仿真场景" />
     <title>UAVSwarm 三维仿真</title>
   </head>
   <body>
     <main class="simulation-shell">
-      <div id="cesium-container" aria-label="无人系统园区三维仿真地图"></div>
+      <div id="cesium-container" aria-label="青岚市三维仿真地图"></div>
 
       <header class="scene-header">
         <div class="scene-identity">
           <span class="brand-mark" aria-hidden="true"></span>
           <div>
             <strong>MISSION TWIN</strong>
-            <span>多源无人平台三维仿真</span>
+            <span>城市低空态势 / 三维仿真</span>
           </div>
         </div>
         <div class="runtime-state">
-          <span id="status-dot" class="status-dot" data-state="connecting" aria-hidden="true"></span>
+          <span
+            id="status-dot"
+            class="status-dot"
+            data-state="connecting"
+            aria-hidden="true"
+          ></span>
           <span id="scene-status">正在初始化场景</span>
           <span class="state-divider" aria-hidden="true"></span>
-          <span id="source-status">LOCAL DEMO</span>
+          <span id="source-status">LIVE</span>
         </div>
       </header>
 
       <aside class="layer-panel" aria-label="场景控制">
+        <div class="panel-heading">
+          <span class="eyebrow">SCENE EXPLORER</span
+          ><span class="synthetic-badge">合成场景</span>
+        </div>
+        <h1 id="scene-title">青岚市</h1>
+        <p id="city-statistics" class="scene-statistics">正在构建城市</p>
         <label for="scene-select">场景数据</label>
         <select id="scene-select">
+          <option value="city">青岚市 · 城市与山林</option>
           <option value="campus">无人系统测试园区 · Local</option>
           <option value="1.1">3D Tiles 1.1 · Metadata</option>
           <option value="1.0">3D Tiles 1.0 · Discrete LOD</option>
         </select>
 
+        <div id="city-tools">
+          <div class="section-label">分区视角</div>
+          <div class="view-grid" role="group" aria-label="分区视角">
+            <button
+              type="button"
+              data-view="city"
+              class="active"
+              aria-pressed="true"
+            >
+              <i data-lucide="map"></i>城市总览
+            </button>
+            <button type="button" data-view="campus" aria-pressed="false">
+              <i data-lucide="crosshair"></i>测试园区
+            </button>
+            <button type="button" data-view="downtown" aria-pressed="false">
+              <i data-lucide="building-2"></i>商务区
+            </button>
+            <button type="button" data-view="river" aria-pressed="false">
+              <i data-lucide="route"></i>滨河立交
+            </button>
+            <button type="button" data-view="hills" aria-pressed="false">
+              <i data-lucide="mountain"></i>西岭山林
+            </button>
+          </div>
+          <details class="map-layers">
+            <summary><i data-lucide="layers"></i>地图图层</summary>
+            <label class="switch-row"
+              ><span>建筑群</span
+              ><input type="checkbox" data-city-layer="buildings" checked
+            /></label>
+            <label class="switch-row"
+              ><span>道路与桥梁</span
+              ><input type="checkbox" data-city-layer="transport" checked
+            /></label>
+            <label class="switch-row"
+              ><span>绿植与山林</span
+              ><input type="checkbox" data-city-layer="vegetation" checked
+            /></label>
+            <label class="switch-row"
+              ><span>分区地名</span
+              ><input type="checkbox" data-city-layer="labels" checked
+            /></label>
+            <label class="switch-row"
+              ><span>日照阴影</span><input id="shadows-toggle" type="checkbox"
+            /></label>
+          </details>
+        </div>
+
         <div class="source-block">
           <div>
             <span>载具数据源</span>
-            <strong id="source-kind" data-kind="demo">LOCAL DEMO</strong>
+            <strong id="source-kind" data-kind="unknown">RUNTIME API</strong>
           </div>
           <span id="vehicle-summary">0 个节点</span>
-          <span id="source-connection" data-state="connecting">正在连接 Runtime</span>
+          <span id="source-connection" data-state="connecting"
+            >正在连接 Runtime</span
+          >
           <span id="source-updated">最后更新：--</span>
         </div>
 
         <div class="mode-switch" role="group" aria-label="载具数据模式">
-          <button id="live-button" class="active" type="button" title="使用 Runtime 或主控制台实时快照">
+          <button
+            id="live-button"
+            class="active"
+            type="button"
+            title="使用 Runtime 或主控制台实时快照"
+          >
             LIVE
           </button>
           <button id="demo-button" type="button" title="使用浏览器本地演示数据">
@@ -61,10 +125,10 @@
 
         <div class="button-row">
           <button id="home-button" type="button" title="返回任务园区视角">
-            园区
+            <i data-lucide="home"></i> 园区
           </button>
           <button id="follow-button" type="button" title="跟随当前载具">
-            跟随
+            <i data-lucide="crosshair"></i> 跟随
           </button>
         </div>
 
@@ -119,8 +183,50 @@
         </dl>
       </section>
 
+      <nav class="map-actions" aria-label="地图操作">
+        <button
+          id="north-button"
+          type="button"
+          aria-label="朝北俯视"
+          title="朝北俯视"
+        >
+          <i data-lucide="compass"></i><span>N</span>
+        </button>
+        <button
+          id="zoom-in"
+          type="button"
+          aria-label="放大地图"
+          title="放大地图"
+        >
+          <i data-lucide="plus"></i>
+        </button>
+        <button
+          id="zoom-out"
+          type="button"
+          aria-label="缩小地图"
+          title="缩小地图"
+        >
+          <i data-lucide="minus"></i>
+        </button>
+      </nav>
+      <div class="map-caption">
+        <span class="map-caption-dot"></span
+        ><span id="map-location">城市总览</span
+        ><span class="map-caption-coordinate">116.3913° E / 39.9075° N</span>
+      </div>
+      <nav class="mobile-panels" aria-label="地图面板">
+        <button type="button" data-panel="scene" aria-expanded="false">
+          <i data-lucide="layers"></i>场景
+        </button>
+        <button type="button" data-panel="telemetry" aria-expanded="false">
+          <i data-lucide="radio"></i>遥测
+        </button>
+      </nav>
+
       <footer class="playback-bar">
-        <button id="play-button" type="button" title="暂停本地演示">暂停</button>
+        <button id="play-button" type="button" title="暂停本地演示">
+          暂停
+        </button>
         <div class="timeline-track" aria-hidden="true">
           <span id="timeline-progress"></span>
         </div>
