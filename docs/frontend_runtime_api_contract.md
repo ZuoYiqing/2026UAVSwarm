@@ -41,7 +41,9 @@ GET http://127.0.0.1:8765/api/health
 | Runtime API availability | `GET /api/health`; a failed health check is reported as Runtime unavailable |
 | Check Backend | `POST /api/backend/check` |
 | Smoke Takeoff | `POST /api/actions/smoke-takeoff` |
+| Operational Takeoff | `POST /api/actions/takeoff` |
 | Land | `POST /api/actions/land` |
+| Action Lifecycle | `GET /api/actions/{action_id}` and `GET /api/actions/lifecycle?n=20` |
 | Telemetry 显示 | `GET /api/telemetry/latest` and `GET /api/vehicle-snapshot` are implemented polling APIs |
 | Action Result JSON | action route response |
 | 最近动作记录 | `GET /api/replay?n=20` |
@@ -140,11 +142,13 @@ Gazebo Transport, or DDS connections in the browser:
 | `GET /api/agent/status` | directly stored Template Planner/lifecycle state | `latest_plan: null`, no fabricated metrics |
 | `GET /api/simulation/status` | independent Gazebo evidence only | `status: unknown`, `evidence: []` |
 
-PX4 heartbeat proves PX4/MAVLink reachability, not Gazebo health. Until Runtime
-owns a Gazebo clock/world/model probe, simulation status remains unknown. The
-Registry defaults to the manifest endpoints `14540/14541/14542`. Each node has
-one shared MAVLink session/RX owner; command ACK and telemetry are dispatched
-inside Runtime instead of using competing receivers.
+PX4 heartbeat proves PX4/MAVLink reachability, not Gazebo health. Simulation may
+publish versioned integrated evidence to `POST /api/simulation/evidence`; Runtime
+then exposes it through `GET /api/simulation/status` only for the supplied TTL.
+Missing or stale evidence is `unknown`, never `ready`. The Registry defaults to
+the manifest endpoints `14540/14541/14542`. Each node has one shared MAVLink
+session/RX owner; command ACK and telemetry are dispatched inside Runtime instead
+of using competing receivers.
 
 ## 12. Multi-Vehicle Runtime v0.1.1 Hardening
 
@@ -154,3 +158,37 @@ browser labels. Full snapshots retain stale nodes and use authoritative scenario
 poses for never-observed nodes; only unregister removes a node. Snapshot tests
 load the frontend-owned JSON Schema directly when that main-branch artifact is
 available and never modify or duplicate it.
+
+## 13. Operational action and scene contract v1
+
+`POST /api/actions/takeoff` and `POST /api/actions/land` are the operational
+SITL routes. Both operator requests (`command_source: ground_station`) and future
+Agent requests (`command_source: agent`) enter the same Policy Gate and node-bound
+adapter path. Callers should send stable `request_id`, `trace_id`, and
+`idempotency_key` values and treat Runtime as the authoritative owner of action
+state.
+
+Lifecycle status values are `requested`, `policy_rejected`, `accepted`,
+`executing`, `succeeded`, `failed`, and `timed_out`. A MAVLink ACK is preserved in
+`ack_evidence`, but ACK acceptance does not mean that an action succeeded.
+Operational takeoff requires fresh post-command altitude samples inside the
+target tolerance for the requested stability window. LAND requires fresh
+`EXTENDED_SYS_STATE=ON_GROUND` plus a disarmed HEARTBEAT; missing evidence ends as
+unknown/incomplete and ultimately `timed_out`.
+
+The compatibility `smoke-takeoff` route remains available, including its optional
+auto-land behavior and loose threshold. Its result must not be displayed as
+operational takeoff completion.
+
+`POST /api/coordinates/calibration` accepts Simulation-owned, versioned
+`vehicle_local_ned` to `scene_ned` translation evidence. Runtime applies the
+translation once. Until status is `calibrated`, origin continuity is `verified`,
+axis alignment is `ned_aligned`, and evidence is fresh,
+`spatial.public_position_usable` is false. Consumers may inspect
+`spatial.raw_vehicle_local_pose` for diagnostics but must not use it for common
+scene distance, obstacle, or geofence calculations.
+
+The executable payload fixture and full compatibility/error contract are in
+`docs/fixtures/runtime_control_contract_v1.json` and
+`docs/runtime_control_execution_contract_v1.md`. `GOTO`, `HOLD`, and
+`RETURN_HOME` remain proposals and are not exposed by the production allowlist.

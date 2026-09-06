@@ -1,0 +1,236 @@
+{
+  "contract_version": "1.0",
+  "operational_takeoff_request": {
+    "node_id": "UAV-02",
+    "backend_enabled": true,
+    "transport_endpoint": "udpin:127.0.0.1:14541",
+    "altitude_m": 3.0,
+    "altitude_tolerance_m": 0.3,
+    "stable_duration_ms": 1000,
+    "command_timeout_ms": 10000,
+    "observe_timeout_ms": 25000,
+    "request_id": "req-console-uav02-001",
+    "trace_id": "trace-console-uav02-001",
+    "idempotency_key": "console-uav02-takeoff-001",
+    "command_source": "ground_station"
+  },
+  "land_request": {
+    "node_id": "UAV-02",
+    "backend_enabled": true,
+    "transport_endpoint": "udpin:127.0.0.1:14541",
+    "command_timeout_ms": 10000,
+    "observe_timeout_ms": 25000,
+    "request_id": "req-console-uav02-002",
+    "trace_id": "trace-console-uav02-002",
+    "idempotency_key": "console-uav02-land-001",
+    "command_source": "ground_station"
+  },
+  "action_lifecycle_example": {
+    "contract_version": "1.1",
+    "action_id": "act_example_uav02",
+    "request_id": "req-console-uav02-001",
+    "trace_id": "trace-console-uav02-001",
+    "idempotency_key": "console-uav02-takeoff-001",
+    "node_id": "UAV-02",
+    "system_id": 2,
+    "component_id": 1,
+    "action_type": "takeoff",
+    "backend": "px4_sitl",
+    "backend_mode": "sitl",
+    "endpoint": "udpin:127.0.0.1:14541",
+    "source": "ground_station",
+    "status": "succeeded",
+    "result": "pass",
+    "code": "px4_sitl_action_pass",
+    "ack_evidence": [
+      {
+        "stage": "takeoff",
+        "command": 22,
+        "result": 0,
+        "result_name": "MAV_RESULT_ACCEPTED",
+        "timeout": false,
+        "timestamp": "2026-09-06T10:00:01Z",
+        "action_id": "act_example_uav02",
+        "request_id": "req-console-uav02-001",
+        "trace_id": "trace-console-uav02-001",
+        "node_id": "UAV-02",
+        "action": "takeoff"
+      }
+    ],
+    "completion_state": "succeeded",
+    "completion_evidence": {
+      "status": "succeeded",
+      "telemetry_state": "fresh",
+      "target_altitude_m": 3.0,
+      "tolerance_m": 0.3,
+      "stable_duration_ms": 1000,
+      "sample_count": 12,
+      "first_sample_timestamp": "2026-09-06T10:00:02Z",
+      "last_sample_timestamp": "2026-09-06T10:00:03Z",
+      "completion_reached": true
+    },
+    "timestamps": {
+      "requested_at": "2026-09-06T10:00:00Z",
+      "accepted_at": "2026-09-06T10:00:00Z",
+      "executing_at": "2026-09-06T10:00:00Z",
+      "succeeded_at": "2026-09-06T10:00:03Z"
+    }
+  },
+  "land_lifecycle_example": {
+    "contract_version": "1.1",
+    "action_id": "act_example_land_uav02",
+    "request_id": "req-console-uav02-002",
+    "trace_id": "trace-console-uav02-002",
+    "idempotency_key": "console-uav02-land-001",
+    "node_id": "UAV-02",
+    "system_id": 2,
+    "component_id": 1,
+    "action_type": "land",
+    "backend": "px4_sitl",
+    "backend_mode": "sitl",
+    "endpoint": "udpin:127.0.0.1:14541",
+    "source": "ground_station",
+    "status": "succeeded",
+    "result": "pass",
+    "code": "px4_sitl_action_pass",
+    "ack_evidence": [
+      {
+        "stage": "land",
+        "command": 21,
+        "result": 0,
+        "result_name": "MAV_RESULT_ACCEPTED",
+        "timeout": false,
+        "timestamp": "2026-09-06T10:01:01Z",
+        "action_id": "act_example_land_uav02",
+        "request_id": "req-console-uav02-002",
+        "trace_id": "trace-console-uav02-002",
+        "node_id": "UAV-02",
+        "action": "land"
+      }
+    ],
+    "completion_state": "succeeded",
+    "completion_evidence": {
+      "status": "succeeded",
+      "telemetry_state": "fresh",
+      "landed_state": 1,
+      "landed_state_name": "on_ground",
+      "armed": false,
+      "landed_sample_timestamp": "2026-09-06T10:01:08Z",
+      "armed_sample_timestamp": "2026-09-06T10:01:08Z",
+      "landed_sample_age_ms": 40,
+      "armed_sample_age_ms": 35,
+      "freshness_window_ms": 2000,
+      "completion_reached": true
+    }
+  },
+  "coordinate_calibration_request": {
+    "contract_version": "1.0",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "node_id": "UAV-02",
+    "status": "calibrated",
+    "calibration_version": "cal-uav02-001",
+    "local_origin_id": "px4-ekf-origin-uav02-001",
+    "origin_continuity": "verified",
+    "axis_alignment": "ned_aligned",
+    "scene_origin": {
+      "kind": "gazebo_world_ned",
+      "north_m": 0.0,
+      "east_m": 0.0,
+      "down_m": 0.0
+    },
+    "altitude_reference": "scene_origin_z_down",
+    "translation_scene_ned_m": {
+      "north": 0.0,
+      "east": 8.0,
+      "down": 0.0
+    },
+    "source_timestamp": "2026-09-06T10:00:00Z",
+    "valid_for_ms": 5000,
+    "evidence_source": "simulation_integrated_health"
+  },
+  "simulation_evidence_request": {
+    "contract_version": "1.0",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "source_timestamp": "2026-09-06T10:00:00Z",
+    "valid_for_ms": 3000,
+    "clock_advancing": true,
+    "world": {
+      "name": "simple_recon_v0_1",
+      "status": "ready"
+    },
+    "models": [
+      {"node_id": "UAV-01", "name": "x500_0", "status": "ready"},
+      {"node_id": "UAV-02", "name": "x500_1", "status": "ready"},
+      {"node_id": "UAV-03", "name": "x500_2", "status": "ready"}
+    ],
+    "evidence_source": "simulation_integrated_health"
+  },
+  "simulation_status_response_example": {
+    "version": "1.0",
+    "simulator": "gazebo",
+    "status": "ready",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "source_timestamp": "2026-09-06T10:00:00Z",
+    "evidence_age_ms": 20,
+    "evidence_valid_for_ms": 3000,
+    "evidence_fresh": true,
+    "evidence_source": "simulation_integrated_health",
+    "clock_advancing": true,
+    "world": {
+      "name": "simple_recon_v0_1",
+      "status": "ready"
+    },
+    "models": [
+      {"node_id": "UAV-01", "name": "x500_0", "status": "ready"},
+      {"node_id": "UAV-02", "name": "x500_1", "status": "ready"},
+      {"node_id": "UAV-03", "name": "x500_2", "status": "ready"}
+    ],
+    "reason": null,
+    "source": "runtime_state_store"
+  },
+  "vehicle_snapshot_spatial_example": {
+    "id": "UAV-02",
+    "pose_source": "runtime_scene_calibration",
+    "pose": {
+      "frame": "NED",
+      "position_m": {"x": 1.0, "y": 10.0, "z": -3.0}
+    },
+    "spatial": {
+      "contract_version": "1.0",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "public_frame": "scene_ned",
+      "local_frame": "vehicle_local_ned",
+      "units": "m",
+      "z_convention": "positive_down",
+      "calibration_status": "calibrated",
+      "public_position_usable": true,
+      "local_origin_id": "px4-ekf-origin-uav02-001",
+      "source_timestamp": "2026-09-06T10:00:02Z",
+      "sample_timestamp": "2026-09-06T10:00:02Z",
+      "calibration_source_timestamp": "2026-09-06T10:00:00Z",
+      "sample_age_ms": 20,
+      "calibration_age_ms": 20,
+      "calibration_valid_for_ms": 5000,
+      "stale": false,
+      "scene_pose": {
+        "frame": "scene_ned",
+        "position_m": {"x": 1.0, "y": 10.0, "z": -3.0}
+      },
+      "raw_vehicle_local_pose": {
+        "frame": "vehicle_local_ned",
+        "position_m": {"x": 1.0, "y": 2.0, "z": -3.0}
+      }
+    }
+  },
+  "waypoint_execution_proposal": {
+    "implemented": false,
+    "proposed_route": "/api/actions/goto",
+    "frame": "scene_ned",
+    "actions": ["goto", "hold", "return_home"],
+    "note": "Proposal only; the current production allowlist does not expose these routes."
+  }
+}

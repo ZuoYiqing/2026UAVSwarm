@@ -82,6 +82,20 @@ def _float(value: Any, default: float, *, field: str, minimum_exclusive: float, 
     return parsed
 
 
+def _optional_identifier(value: Any, *, field: str) -> str | None:
+    if value is None:
+        return None
+    parsed = str(value).strip()
+    if not parsed or len(parsed) > 128 or any(char.isspace() for char in parsed):
+        raise RequestValidationError(
+            "invalid_parameter",
+            field,
+            f"{field} must be a non-empty, whitespace-free string of at most 128 characters",
+            value=value,
+        )
+    return parsed
+
+
 @dataclass(slots=True)
 class BackendRequest:
     node_id: str | None = None
@@ -96,6 +110,10 @@ class BackendRequest:
     observe_timeout_ms: int = 25000
     timeout_ms: int = 3000
     retry_count: int = 0
+    request_id: str | None = None
+    trace_id: str | None = None
+    idempotency_key: str | None = None
+    command_source: str = "ground_station"
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> "BackendRequest":
@@ -105,6 +123,15 @@ class BackendRequest:
             raise RequestValidationError("unsupported_backend", "backend", "HTTP bridge v0.1 only supports px4_sitl", value=backend, supported=["px4_sitl"])
         if backend_mode != "sitl":
             raise RequestValidationError("unsupported_backend_mode", "backend_mode", "HTTP bridge v0.1 only supports sitl", value=backend_mode, supported=["sitl"])
+        command_source = str(payload.get("command_source", "ground_station") or "ground_station")
+        if command_source not in {"ground_station", "agent"}:
+            raise RequestValidationError(
+                "invalid_command_source",
+                "command_source",
+                "command_source must be ground_station or agent",
+                value=command_source,
+                supported=["ground_station", "agent"],
+            )
         return cls(
             node_id=str(payload["node_id"]) if payload.get("node_id") else None,
             system_id=(
@@ -128,6 +155,10 @@ class BackendRequest:
             observe_timeout_ms=_int(payload.get("observe_timeout_ms"), 25000, field="observe_timeout_ms", minimum=1000, maximum=120000),
             timeout_ms=_int(payload.get("timeout_ms"), 3000, field="timeout_ms", minimum=1000, maximum=120000),
             retry_count=_int(payload.get("retry_count"), 0, field="retry_count", minimum=0, maximum=10),
+            request_id=_optional_identifier(payload.get("request_id"), field="request_id"),
+            trace_id=_optional_identifier(payload.get("trace_id"), field="trace_id"),
+            idempotency_key=_optional_identifier(payload.get("idempotency_key"), field="idempotency_key"),
+            command_source=command_source,
         )
 
     def to_mavlink_config(self) -> MavlinkBackendConfig:
@@ -159,6 +190,50 @@ class SmokeTakeoffRequest(BackendRequest):
             altitude_m=_float(payload.get("altitude_m"), 3.0, field="altitude_m", minimum_exclusive=0, maximum=120),
             threshold_ratio=_float(payload.get("threshold_ratio"), 0.70, field="threshold_ratio", minimum_exclusive=0, maximum=1),
             auto_land=_bool(payload.get("auto_land"), True, field="auto_land"),
+        )
+
+
+@dataclass(slots=True)
+class TakeoffRequest(BackendRequest):
+    altitude_m: float = 3.0
+    altitude_tolerance_m: float = 0.3
+    stable_duration_ms: int = 1000
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "TakeoffRequest":
+        base = BackendRequest.from_json(payload)
+        altitude_m = _float(
+            payload.get("altitude_m"),
+            3.0,
+            field="altitude_m",
+            minimum_exclusive=0,
+            maximum=120,
+        )
+        altitude_tolerance_m = _float(
+            payload.get("altitude_tolerance_m"),
+            0.3,
+            field="altitude_tolerance_m",
+            minimum_exclusive=0,
+            maximum=10,
+        )
+        if altitude_tolerance_m >= altitude_m:
+            raise RequestValidationError(
+                "invalid_parameter",
+                "altitude_tolerance_m",
+                "altitude_tolerance_m must be less than altitude_m",
+                value=altitude_tolerance_m,
+            )
+        return cls(
+            **asdict(base),
+            altitude_m=altitude_m,
+            altitude_tolerance_m=altitude_tolerance_m,
+            stable_duration_ms=_int(
+                payload.get("stable_duration_ms"),
+                1000,
+                field="stable_duration_ms",
+                minimum=100,
+                maximum=30000,
+            ),
         )
 
 

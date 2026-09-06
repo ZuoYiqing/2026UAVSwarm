@@ -10,6 +10,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
@@ -41,6 +42,7 @@ def ack_dict(command: int | str, result: int | None, *, timeout: bool = False) -
         "result": result,
         "result_name": mav_result_name(result),
         "timeout": bool(timeout),
+        "timestamp": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -92,7 +94,9 @@ class MavlinkBackendSession:
         default_factory=lambda: threading.Condition(threading.RLock())
     )
     _rx_sequence: int = 0
-    _local_positions: list[tuple[int, float]] = field(default_factory=list)
+    _local_positions: list[tuple[int, float, float, str]] = field(default_factory=list)
+    _armed_states: list[tuple[int, bool, float, str]] = field(default_factory=list)
+    _landed_states: list[tuple[int, int, float, str]] = field(default_factory=list)
     _subscribers: dict[int, Callable[[Any], None]] = field(default_factory=dict)
     _next_subscriber_id: int = 1
     _ack_generations: dict[int, int] = field(default_factory=dict)
@@ -283,8 +287,24 @@ class MavlinkBackendSession:
                         generation,
                         int(getattr(message, "result", -1)),
                     )
+            received_monotonic = time.monotonic()
+            received_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            if kind == "HEARTBEAT":
+                armed_flag = self._mavlink_const("MAV_MODE_FLAG_SAFETY_ARMED", 128)
+                base_mode = int(getattr(message, "base_mode", 0) or 0)
+                self._armed_states.append((sequence, bool(base_mode & armed_flag), received_monotonic, received_timestamp))
+                if len(self._armed_states) > 1024:
+                    del self._armed_states[:-512]
+            elif kind == "EXTENDED_SYS_STATE":
+                self._landed_states.append(
+                    (sequence, int(getattr(message, "landed_state", 0) or 0), received_monotonic, received_timestamp)
+                )
+                if len(self._landed_states) > 1024:
+                    del self._landed_states[:-512]
             elif kind == "LOCAL_POSITION_NED":
-                self._local_positions.append((sequence, float(getattr(message, "z", 0.0))))
+                self._local_positions.append(
+                    (sequence, float(getattr(message, "z", 0.0)), received_monotonic, received_timestamp)
+                )
                 if len(self._local_positions) > 1024:
                     del self._local_positions[:-512]
             callbacks = list(self._subscribers.values())
@@ -454,6 +474,20 @@ class MavlinkBackendSession:
         ack["command_name"] = "MAV_CMD_SET_MESSAGE_INTERVAL"
         return ack
 
+    def request_landing_state_stream(self, *, rate_hz: float, timeout_s: float) -> dict[str, Any]:
+        """Request EXTENDED_SYS_STATE on the already-owned vehicle session."""
+        command = self._mavlink_const("MAV_CMD_SET_MESSAGE_INTERVAL", 511)
+        msg_id = self._mavlink_const("MAVLINK_MSG_ID_EXTENDED_SYS_STATE", 245)
+        interval_us = int(1_000_000 / max(rate_hz, 0.1))
+        ack = self._send_and_wait_ack(
+            command,
+            [float(msg_id), float(interval_us), 0.0, 0.0, 0.0, 0.0, 0.0],
+            timeout_s=timeout_s,
+        )
+        ack["command_name"] = "MAV_CMD_SET_MESSAGE_INTERVAL"
+        ack["message_name"] = "EXTENDED_SYS_STATE"
+        return ack
+
     def arm(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_COMPONENT_ARM_DISARM", 400)
         ack = self._send_and_wait_ack(command, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], timeout_s=timeout_s)
@@ -464,7 +498,7 @@ class MavlinkBackendSession:
         command = self._mavlink_const("MAV_CMD_NAV_TAKEOFF", 22)
         with self.command_lock:
             self.start_receive_loop()
-            observation_cursor = self.local_position_cursor()
+            observation_cursor = self.observation_cursor()
             generation = self._begin_ack_wait(command)
             self.send_command_long(
                 command,
@@ -477,12 +511,23 @@ class MavlinkBackendSession:
             )
         ack["command_name"] = "MAV_CMD_NAV_TAKEOFF"
         ack["local_position_cursor"] = observation_cursor
+        ack["observation_cursor"] = observation_cursor
         return ack
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_LAND", 21)
-        ack = self._send_and_wait_ack(command, [0.0] * 7, timeout_s=timeout_s)
+        with self.command_lock:
+            self.start_receive_loop()
+            observation_cursor = self.observation_cursor()
+            generation = self._begin_ack_wait(command)
+            self.send_command_long(command, [0.0] * 7)
+            ack = self.wait_command_ack(
+                command,
+                timeout_s=timeout_s,
+                generation=generation,
+            )
         ack["command_name"] = "MAV_CMD_NAV_LAND"
+        ack["observation_cursor"] = observation_cursor
         return ack
 
     def observe_local_position_altitude(
@@ -491,6 +536,7 @@ class MavlinkBackendSession:
         timeout_s: float,
         threshold_altitude_m: float | None = None,
         after_sequence: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         if self.connection is None:
             raise RuntimeError("connection_required")
@@ -503,7 +549,9 @@ class MavlinkBackendSession:
         seen_sequence = int(after_sequence)
         with self._rx_condition:
             while time.monotonic() < deadline:
-                fresh = [(seq, z) for seq, z in self._local_positions if seq > seen_sequence]
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                fresh = [(seq, z) for seq, z, _received, _timestamp in self._local_positions if seq > seen_sequence]
                 for sequence, z in fresh:
                     seen_sequence = max(seen_sequence, sequence)
                     samples.append(z)
@@ -528,9 +576,198 @@ class MavlinkBackendSession:
                 if threshold_altitude_m is not None
                 else None
             ),
+            "cancelled": bool(cancel_event is not None and cancel_event.is_set()),
+        }
+
+    def observe_takeoff_completion(
+        self,
+        *,
+        timeout_s: float,
+        target_altitude_m: float,
+        tolerance_m: float,
+        stable_duration_s: float,
+        after_sequence: int,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Require fresh, in-tolerance LOCAL_POSITION_NED samples over a hold window."""
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+        self.start_receive_loop()
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        seen_sequence = int(after_sequence)
+        samples: list[float] = []
+        sample_timestamps: list[str] = []
+        stable_since: float | None = None
+        stable_sample_count = 0
+        completed = False
+        cancelled = False
+        lower = float(target_altitude_m) - float(tolerance_m)
+        upper = float(target_altitude_m) + float(tolerance_m)
+        with self._rx_condition:
+            while time.monotonic() < deadline:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                fresh = [row for row in self._local_positions if row[0] > seen_sequence]
+                for sequence, z, received_at, received_timestamp in fresh:
+                    seen_sequence = max(seen_sequence, sequence)
+                    altitude = ned_down_z_to_altitude_m(z)
+                    samples.append(altitude)
+                    sample_timestamps.append(received_timestamp)
+                    if lower <= altitude <= upper:
+                        if stable_since is None:
+                            stable_since = received_at
+                            stable_sample_count = 1
+                        else:
+                            stable_sample_count += 1
+                        if (
+                            stable_sample_count >= 2
+                            and received_at - stable_since >= max(stable_duration_s, 0.0)
+                        ) or stable_duration_s <= 0:
+                            completed = True
+                            break
+                    else:
+                        stable_since = None
+                        stable_sample_count = 0
+                if completed:
+                    break
+                if not self.connected and self.last_receive_error:
+                    break
+                self._rx_condition.wait(timeout=max(min(deadline - time.monotonic(), 0.25), 0.01))
+        return {
+            "status": "cancelled" if cancelled else "succeeded" if completed else "timed_out",
+            "observed": bool(samples),
+            "sample_count": len(samples),
+            "after_sequence": int(after_sequence),
+            "last_sequence": seen_sequence,
+            "target_altitude_m": float(target_altitude_m),
+            "tolerance_m": float(tolerance_m),
+            "stable_duration_ms": int(round(max(stable_duration_s, 0.0) * 1000)),
+            "stable_sample_count": stable_sample_count,
+            "first_altitude_m": round(samples[0], 3) if samples else None,
+            "last_altitude_m": round(samples[-1], 3) if samples else None,
+            "max_altitude_m": round(max(samples), 3) if samples else None,
+            "first_sample_timestamp": sample_timestamps[0] if sample_timestamps else None,
+            "last_sample_timestamp": sample_timestamps[-1] if sample_timestamps else None,
+            "telemetry_state": "fresh" if samples else "unknown",
+            "completion_reached": completed,
+            "cancelled": cancelled,
+        }
+
+    def observe_landed_and_disarmed(
+        self,
+        *,
+        timeout_s: float,
+        after_sequence: int,
+        freshness_window_s: float = 2.0,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Require fresh ON_GROUND and disarmed evidence after the LAND command cursor."""
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+        self.start_receive_loop()
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        seen_sequence = int(after_sequence)
+        armed: bool | None = None
+        armed_sequence: int | None = None
+        landed_state: int | None = None
+        landed_sequence: int | None = None
+        armed_timestamp: str | None = None
+        landed_timestamp: str | None = None
+        armed_received_at: float | None = None
+        landed_received_at: float | None = None
+        cancelled = False
+        on_ground = self._mavlink_const("MAV_LANDED_STATE_ON_GROUND", 1)
+        with self._rx_condition:
+            while time.monotonic() < deadline:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                for sequence, value, received_at, received_timestamp in self._armed_states:
+                    if sequence > seen_sequence and (armed_sequence is None or sequence > armed_sequence):
+                        armed = value
+                        armed_sequence = sequence
+                        armed_timestamp = received_timestamp
+                        armed_received_at = received_at
+                for sequence, value, received_at, received_timestamp in self._landed_states:
+                    if sequence > seen_sequence and (landed_sequence is None or sequence > landed_sequence):
+                        landed_state = value
+                        landed_sequence = sequence
+                        landed_timestamp = received_timestamp
+                        landed_received_at = received_at
+                newest = [value for value in (armed_sequence, landed_sequence) if value is not None]
+                if newest:
+                    seen_sequence = max(seen_sequence, *newest)
+                now = time.monotonic()
+                samples_fresh = (
+                    armed_received_at is not None
+                    and landed_received_at is not None
+                    and now - armed_received_at <= max(freshness_window_s, 0.0)
+                    and now - landed_received_at <= max(freshness_window_s, 0.0)
+                )
+                if armed is False and landed_state == on_ground and samples_fresh:
+                    break
+                if not self.connected and self.last_receive_error:
+                    break
+                self._rx_condition.wait(timeout=max(min(deadline - time.monotonic(), 0.25), 0.01))
+        completed_at = time.monotonic()
+        armed_age_ms = (
+            max(0, int(round((completed_at - armed_received_at) * 1000)))
+            if armed_received_at is not None
+            else None
+        )
+        landed_age_ms = (
+            max(0, int(round((completed_at - landed_received_at) * 1000)))
+            if landed_received_at is not None
+            else None
+        )
+        freshness_window_ms = int(round(max(freshness_window_s, 0.0) * 1000))
+        samples_fresh = (
+            armed_age_ms is not None
+            and landed_age_ms is not None
+            and armed_age_ms <= freshness_window_ms
+            and landed_age_ms <= freshness_window_ms
+        )
+        complete = armed is False and landed_state == on_ground and samples_fresh
+        evidence_count = int(armed is not None) + int(landed_state is not None)
+        any_sample_stale = (
+            (armed_age_ms is not None and armed_age_ms > freshness_window_ms)
+            or (landed_age_ms is not None and landed_age_ms > freshness_window_ms)
+        )
+        evidence_state = (
+            "fresh"
+            if complete
+            else "stale"
+            if any_sample_stale
+            else "incomplete"
+            if evidence_count
+            else "unknown"
+        )
+        return {
+            "status": "cancelled" if cancelled else "succeeded" if complete else "timed_out",
+            "after_sequence": int(after_sequence),
+            "last_sequence": seen_sequence,
+            "telemetry_state": evidence_state,
+            "landed_state": landed_state,
+            "landed_state_name": "on_ground" if landed_state == on_ground else "unknown" if landed_state is None else "not_on_ground",
+            "landed_sequence": landed_sequence,
+            "armed": armed,
+            "armed_sequence": armed_sequence,
+            "armed_sample_timestamp": armed_timestamp,
+            "landed_sample_timestamp": landed_timestamp,
+            "armed_sample_age_ms": armed_age_ms,
+            "landed_sample_age_ms": landed_age_ms,
+            "freshness_window_ms": freshness_window_ms,
+            "completion_reached": complete,
+            "cancelled": cancelled,
         }
 
     def local_position_cursor(self) -> int:
         """Return the RX sequence after which a new observation may consume samples."""
+        with self._rx_condition:
+            return self._rx_sequence
+
+    def observation_cursor(self) -> int:
+        """Return the per-session RX cursor used by all completion evidence."""
         with self._rx_condition:
             return self._rx_sequence
