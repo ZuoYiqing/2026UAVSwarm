@@ -1,17 +1,14 @@
-"""PX4 SITL backend placeholder for future real integration.
+"""PX4 SITL command backend using a Registry-owned persistent MAVLink session.
 
-This module intentionally does NOT import real MAVLink/PX4 dependencies.
-It exists to reserve the replacement slot for the first real backend.
-
-v1 target (future):
-- one backend implementation (`px4_sitl_backend`)
-- one action first (`takeoff`)
-- one transport path first (single endpoint)
-- validate minimal end-to-end path only
+The dependency is still loaded lazily so offline/unit-test imports remain safe.
+Operational takeoff and LAND distinguish command ACK evidence from telemetry
+completion; generic mapped actions remain non-executable unless explicitly
+admitted by the Runtime control path.
 """
 from __future__ import annotations
 
 import importlib.util
+import threading
 from typing import Any
 
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig
@@ -19,16 +16,7 @@ from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession
 
 
 class Px4SitlBackend:
-    """Future real PX4 SITL backend placeholder.
-
-    Role now:
-    - Conform to `MavlinkBackend` protocol
-    - Return deterministic placeholder semantics
-
-    Role later:
-    - Replace placeholder execution with real SITL transport execution
-      while keeping adapter contract unchanged.
-    """
+    """Execute approved PX4 SITL actions over one caller-owned session."""
 
     name = "px4_sitl_backend"
 
@@ -210,6 +198,9 @@ class Px4SitlBackend:
             "arm_ack": None,
             "takeoff_ack": None,
             "land_ack": None,
+            "ack_evidence": [],
+            "completion_evidence": None,
+            "completion_state": "unknown",
             "target_altitude_m": None,
             "max_altitude_m": 0.0,
             "threshold_ratio": None,
@@ -278,6 +269,7 @@ class Px4SitlBackend:
         command_timeout_ms: int | None = None,
         observe_timeout_ms: int | None = None,
         threshold_ratio: float = 0.70,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         rejected = self._ensure_sitl_action_allowed("takeoff")
         if rejected is not None:
@@ -306,16 +298,23 @@ class Px4SitlBackend:
 
             interval_ack = self.session.request_local_position_stream(rate_hz=10.0, timeout_s=command_timeout_s)
             result["local_position_stream_ack"] = interval_ack
+            result["ack_evidence"].append({"stage": "local_position_stream", **interval_ack})
             result["local_position_stream_requested"] = not bool(interval_ack.get("timeout")) and int(interval_ack.get("result") if interval_ack.get("result") is not None else -1) == 0
 
             arm_ack = self.session.arm(timeout_s=command_timeout_s)
             result["arm_ack"] = arm_ack
+            result["ack_evidence"].append({"stage": "arm", **arm_ack})
             if bool(arm_ack.get("timeout")) or int(arm_ack.get("result") if arm_ack.get("result") is not None else -1) != 0:
                 result["failure_reason"] = "arm_rejected_or_timeout"
+                return self._finish_smoke_result(result)
+            if cancel_event is not None and cancel_event.is_set():
+                result["failure_reason"] = "action_preempted_by_land"
+                result["completion_state"] = "cancelled"
                 return self._finish_smoke_result(result)
 
             takeoff_ack = self.session.takeoff(altitude_m=target_altitude, timeout_s=command_timeout_s)
             result["takeoff_ack"] = takeoff_ack
+            result["ack_evidence"].append({"stage": "takeoff", **takeoff_ack})
             if bool(takeoff_ack.get("timeout")) or int(takeoff_ack.get("result") if takeoff_ack.get("result") is not None else -1) != 0:
                 result["failure_reason"] = "takeoff_rejected_or_timeout"
                 return self._finish_smoke_result(result)
@@ -324,17 +323,24 @@ class Px4SitlBackend:
                 timeout_s=observe_timeout_s,
                 threshold_altitude_m=threshold_altitude,
                 after_sequence=int(takeoff_ack["local_position_cursor"]),
+                cancel_event=cancel_event,
             )
             result["altitude_observation"] = observation
+            result["completion_evidence"] = observation
+            result["completion_state"] = "succeeded" if observation.get("threshold_reached") else "timed_out"
             result["max_altitude_m"] = float(observation.get("max_altitude_m", 0.0) or 0.0)
             result["threshold_reached"] = bool(observation.get("threshold_reached")) or result["max_altitude_m"] >= threshold_altitude
-            if not result["threshold_reached"]:
+            if observation.get("cancelled"):
+                result["failure_reason"] = "action_preempted_by_land"
+                result["completion_state"] = "cancelled"
+            elif not result["threshold_reached"]:
                 result["failure_reason"] = "altitude_threshold_not_reached"
 
-            if auto_land:
+            if auto_land and not observation.get("cancelled"):
                 result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
+                result["ack_evidence"].append({"stage": "land", **result["land_ack"]})
 
-            if result["threshold_reached"]:
+            if result["threshold_reached"] and not observation.get("cancelled"):
                 result["result"] = "pass"
             return self._finish_smoke_result(result)
         except TimeoutError:
@@ -347,7 +353,104 @@ class Px4SitlBackend:
             result["failure_reason"] = f"px4_action_exception:{type(exc).__name__}"
             return self._finish_smoke_result(result)
 
-    def execute_land_action(self, *, command_timeout_ms: int | None = None) -> dict[str, Any]:
+    def execute_takeoff_action(
+        self,
+        *,
+        altitude_m: float = 3.0,
+        altitude_tolerance_m: float = 0.3,
+        stable_duration_ms: int = 1000,
+        command_timeout_ms: int | None = None,
+        observe_timeout_ms: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Operational takeoff: ACK admission plus fresh, stable altitude evidence."""
+        rejected = self._ensure_sitl_action_allowed("takeoff")
+        if rejected is not None:
+            return rejected
+        rejected = self._ensure_persistent_session_ready("takeoff")
+        if rejected is not None:
+            return rejected
+        command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
+        observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
+        result = self._base_action_result("takeoff")
+        result.update({
+            "target_altitude_m": float(altitude_m),
+            "altitude_tolerance_m": float(altitude_tolerance_m),
+            "stable_duration_ms": int(stable_duration_ms),
+            "auto_land": False,
+            "completion_mode": "operational_stable_altitude",
+        })
+        try:
+            result["heartbeat_connected"] = True
+            result["gcs_heartbeat_started"] = True
+            interval_ack = self.session.request_local_position_stream(
+                rate_hz=10.0,
+                timeout_s=command_timeout_s,
+            )
+            result["local_position_stream_ack"] = interval_ack
+            result["ack_evidence"].append({"stage": "local_position_stream", **interval_ack})
+            result["local_position_stream_requested"] = self._ack_accepted(interval_ack)
+            if not result["local_position_stream_requested"]:
+                result["failure_reason"] = "local_position_stream_rejected_or_timeout"
+                result["completion_state"] = "timed_out" if interval_ack.get("timeout") else "failed"
+                return self._finish_smoke_result(result)
+            if cancel_event is not None and cancel_event.is_set():
+                result["failure_reason"] = "action_preempted_by_land"
+                result["completion_state"] = "cancelled"
+                return self._finish_smoke_result(result)
+            arm_ack = self.session.arm(timeout_s=command_timeout_s)
+            result["arm_ack"] = arm_ack
+            result["ack_evidence"].append({"stage": "arm", **arm_ack})
+            if not self._ack_accepted(arm_ack):
+                result["failure_reason"] = "arm_rejected_or_timeout"
+                result["completion_state"] = "timed_out" if arm_ack.get("timeout") else "failed"
+                return self._finish_smoke_result(result)
+            if cancel_event is not None and cancel_event.is_set():
+                result["failure_reason"] = "action_preempted_by_land"
+                result["completion_state"] = "cancelled"
+                return self._finish_smoke_result(result)
+            takeoff_ack = self.session.takeoff(
+                altitude_m=float(altitude_m),
+                timeout_s=command_timeout_s,
+            )
+            result["takeoff_ack"] = takeoff_ack
+            result["ack_evidence"].append({"stage": "takeoff", **takeoff_ack})
+            if not self._ack_accepted(takeoff_ack):
+                result["failure_reason"] = "takeoff_rejected_or_timeout"
+                result["completion_state"] = "timed_out" if takeoff_ack.get("timeout") else "failed"
+                return self._finish_smoke_result(result)
+            observation = self.session.observe_takeoff_completion(
+                timeout_s=observe_timeout_s,
+                target_altitude_m=float(altitude_m),
+                tolerance_m=float(altitude_tolerance_m),
+                stable_duration_s=float(stable_duration_ms) / 1000.0,
+                after_sequence=int(takeoff_ack["observation_cursor"]),
+                cancel_event=cancel_event,
+            )
+            result["completion_evidence"] = observation
+            result["altitude_observation"] = observation
+            result["completion_state"] = str(observation.get("status") or "unknown")
+            result["max_altitude_m"] = float(observation.get("max_altitude_m") or 0.0)
+            result["threshold_reached"] = bool(observation.get("completion_reached"))
+            if observation.get("cancelled"):
+                result["failure_reason"] = "action_preempted_by_land"
+            elif observation.get("completion_reached"):
+                result["result"] = "pass"
+            else:
+                result["failure_reason"] = "takeoff_completion_timeout"
+            return self._finish_smoke_result(result)
+        except Exception as exc:
+            result["failure_reason"] = f"px4_action_exception:{type(exc).__name__}"
+            result["completion_state"] = "failed"
+            return self._finish_smoke_result(result)
+
+    def execute_land_action(
+        self,
+        *,
+        command_timeout_ms: int | None = None,
+        observe_timeout_ms: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         rejected = self._ensure_sitl_action_allowed("land")
         if rejected is not None:
             return rejected
@@ -355,19 +458,62 @@ class Px4SitlBackend:
         if rejected is not None:
             return rejected
         command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
+        observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
         result = self._base_action_result("land")
+        result["completion_mode"] = "landed_and_disarmed"
         try:
             result["heartbeat_connected"] = True
             result["gcs_heartbeat_started"] = True
+            # LAND has safety priority: send it before any best-effort request
+            # that could consume the command timeout budget.
             result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
-            if not bool(result["land_ack"].get("timeout")) and int(result["land_ack"].get("result") if result["land_ack"].get("result") is not None else -1) == 0:
+            result["ack_evidence"].append({"stage": "land", **result["land_ack"]})
+            if not self._ack_accepted(result["land_ack"]):
+                result["failure_reason"] = "land_rejected_or_timeout"
+                result["completion_state"] = "timed_out" if result["land_ack"].get("timeout") else "failed"
+                return self._finish_smoke_result(result)
+            try:
+                stream_ack = self.session.request_landing_state_stream(
+                    rate_hz=5.0,
+                    timeout_s=command_timeout_s,
+                )
+            except Exception as exc:
+                # Configuring evidence is best-effort for LAND. A stream setup
+                # failure must not suppress the controlled landing command.
+                stream_ack = {
+                    "command": 511,
+                    "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL",
+                    "message_name": "EXTENDED_SYS_STATE",
+                    "result": None,
+                    "result_name": "UNKNOWN",
+                    "timeout": False,
+                    "code": "landing_state_stream_exception",
+                    "error_class": type(exc).__name__,
+                }
+            result["landing_state_stream_ack"] = stream_ack
+            result["ack_evidence"].append({"stage": "landing_state_stream", **stream_ack})
+            observation = self.session.observe_landed_and_disarmed(
+                timeout_s=observe_timeout_s,
+                after_sequence=int(result["land_ack"]["observation_cursor"]),
+                cancel_event=cancel_event,
+            )
+            result["completion_evidence"] = observation
+            result["completion_state"] = str(observation.get("status") or "unknown")
+            if observation.get("completion_reached"):
                 result["result"] = "pass"
             else:
-                result["failure_reason"] = "land_rejected_or_timeout"
+                result["failure_reason"] = "landing_completion_timeout"
             return self._finish_smoke_result(result)
         except Exception as exc:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
+            result["completion_state"] = "failed"
             return self._finish_smoke_result(result)
+
+    @staticmethod
+    def _ack_accepted(ack: dict[str, Any]) -> bool:
+        return not bool(ack.get("timeout")) and int(
+            ack.get("result") if ack.get("result") is not None else -1
+        ) == 0
 
     def _finish_smoke_result(self, result: dict[str, Any]) -> dict[str, Any]:
         result.update(

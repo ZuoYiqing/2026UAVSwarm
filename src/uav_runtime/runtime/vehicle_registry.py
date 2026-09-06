@@ -82,6 +82,7 @@ class VehicleRuntimeState:
     last_telemetry_at: str | None = None
     last_action_at: str | None = None
     active_action: str | None = None
+    active_action_id: str | None = None
     fault_state: str | None = None
     last_error: str | None = None
     telemetry_freshness_ms: int | None = None
@@ -97,7 +98,9 @@ class VehicleHandle:
     telemetry: Px4TelemetrySnapshot
     runtime_state: VehicleRuntimeState
     command_lock: threading.RLock = field(default_factory=threading.RLock)
+    action_lock: threading.RLock = field(default_factory=threading.RLock)
     state_lock: threading.RLock = field(default_factory=threading.RLock)
+    action_cancel_event: threading.Event | None = None
     collector: Any = None
     telemetry_received_at: float | None = None
     start_in_progress: bool = False
@@ -424,6 +427,8 @@ class VehicleRegistry:
             handle.session.close()
         with handle.state_lock:
             handle.runtime_state.active_action = None
+            handle.runtime_state.active_action_id = None
+            handle.action_cancel_event = None
             handle.runtime_state.connected = False
             handle.runtime_state.stale = True
             handle.runtime_state.connection_status = "offline"
@@ -497,18 +502,91 @@ class VehicleRegistry:
             state.connection_status = "offline"
             state.last_error = reason
 
-    def mark_action_started(self, node_id: str, action_type: str, *, at: str | None = None) -> None:
+    def admit_action(self, node_id: str, action_type: str, action_id: str) -> dict[str, Any]:
+        """Atomically admit one per-node action; LAND may preempt a non-LAND action."""
+        handle = self.get_vehicle(node_id)
+        with handle.action_lock, handle.state_lock:
+            state = handle.runtime_state
+            if state.active_action is not None:
+                if action_type != "land" or state.active_action == "land":
+                    raise VehicleRegistryError(
+                        "node_busy",
+                        node_id=node_id,
+                        status=409,
+                        details={
+                            "active_action": state.active_action,
+                            "active_action_id": state.active_action_id,
+                        },
+                    )
+                preempted_action = state.active_action
+                preempted_action_id = state.active_action_id
+                if handle.action_cancel_event is not None:
+                    handle.action_cancel_event.set()
+            else:
+                preempted_action = None
+                preempted_action_id = None
+            cancel_event = threading.Event()
+            handle.action_cancel_event = cancel_event
+            state.active_action = action_type
+            state.active_action_id = action_id
+            state.last_action_at = _utc_now()
+            return {
+                "cancel_event": cancel_event,
+                "preempted_action": preempted_action,
+                "preempted_action_id": preempted_action_id,
+            }
+
+    def release_action(
+        self,
+        node_id: str,
+        action_id: str,
+        *,
+        error: str | None = None,
+        at: str | None = None,
+    ) -> bool:
+        """Release only the matching lease so a preempted action cannot clear LAND."""
+        handle = self.get_vehicle(node_id)
+        with handle.action_lock, handle.state_lock:
+            if handle.runtime_state.active_action_id != action_id:
+                return False
+            handle.runtime_state.active_action = None
+            handle.runtime_state.active_action_id = None
+            handle.action_cancel_event = None
+            handle.runtime_state.last_action_at = at or _utc_now()
+            handle.runtime_state.last_error = error
+            return True
+
+    def mark_action_started(
+        self,
+        node_id: str,
+        action_type: str,
+        *,
+        action_id: str | None = None,
+        at: str | None = None,
+    ) -> None:
         """Mark only the selected node busy; unrelated handles remain untouched."""
         handle = self.get_vehicle(node_id)
         with handle.state_lock:
             handle.runtime_state.active_action = action_type
+            handle.runtime_state.active_action_id = action_id
             handle.runtime_state.last_action_at = at or _utc_now()
 
-    def mark_action_finished(self, node_id: str, *, error: str | None = None, at: str | None = None) -> None:
+    def mark_action_finished(
+        self,
+        node_id: str,
+        *,
+        action_id: str | None = None,
+        error: str | None = None,
+        at: str | None = None,
+    ) -> None:
         """Clear a node action and retain its completion/error timestamp."""
         handle = self.get_vehicle(node_id)
         with handle.state_lock:
+            if action_id is not None and handle.runtime_state.active_action_id != action_id:
+                return
             handle.runtime_state.active_action = None
+            handle.runtime_state.active_action_id = None
+            handle.action_cancel_event = None
             handle.runtime_state.last_action_at = at or _utc_now()
             if error:
                 handle.runtime_state.last_error = error
