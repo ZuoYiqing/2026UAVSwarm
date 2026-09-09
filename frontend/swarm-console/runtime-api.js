@@ -2,15 +2,18 @@
  * Runtime API adapter for 2026UAVSwarm Console.
  *
  * This file is intentionally frontend-only. It defines the HTTP contract that
- * the WSL/Python runtime bridge exposes. The UI may still render local demo
- * data while the bridge is offline, but execution calls must report the real
- * connection state instead of pretending that a backend action succeeded.
+ * the WSL/Python runtime bridge exposes. LIVE mode never falls back to demo
+ * execution data. Network failures are surfaced so pending requests can be
+ * recovered through the Runtime idempotency contract.
  *
  * Expected backend shape:
  *   GET  /api/health
  *   POST /api/backend/check
- *   POST /api/actions/smoke-takeoff
+ *   POST /api/actions/takeoff
+ *   POST /api/actions/smoke-takeoff (compatibility test only)
  *   POST /api/actions/land
+ *   GET  /api/actions/{action_id}
+ *   GET  /api/actions/lifecycle?n=20
  *   POST /api/planner/plan-mission
  *   GET  /api/replay?n=20
  *   GET  /api/capabilities
@@ -35,9 +38,22 @@
     );
   }
 
+  function takeoffTimeoutMs(body = {}) {
+    const commandTimeout = Number(body.command_timeout_ms) || 10000;
+    const observeTimeout = Number(body.observe_timeout_ms) || 25000;
+    return Math.max(
+      DEFAULT_TIMEOUT_MS,
+      3 * commandTimeout + observeTimeout + ACTION_TIMEOUT_GRACE_MS
+    );
+  }
+
   function landTimeoutMs(body = {}) {
     const commandTimeout = Number(body.command_timeout_ms) || 10000;
-    return Math.max(DEFAULT_TIMEOUT_MS, commandTimeout + ACTION_TIMEOUT_GRACE_MS);
+    const observeTimeout = Number(body.observe_timeout_ms) || 25000;
+    return Math.max(
+      DEFAULT_TIMEOUT_MS,
+      commandTimeout + observeTimeout + ACTION_TIMEOUT_GRACE_MS
+    );
   }
 
   function getConfiguredBaseUrl() {
@@ -64,6 +80,7 @@
     }
 
     let response;
+    let text;
     try {
       response = await fetch(url, {
         method: options.method || "GET",
@@ -71,6 +88,8 @@
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal,
       });
+      // Keep the deadline active until the response body is fully received.
+      text = await response.text();
     } catch (cause) {
       const timedOut = cause instanceof DOMException && cause.name === "AbortError";
       const error = new Error(
@@ -86,7 +105,6 @@
       window.clearTimeout(timeoutId);
     }
 
-    const text = await response.text();
     let payload = {};
     if (text) {
       try {
@@ -118,6 +136,11 @@
       body,
       timeoutMs: smokeTakeoffTimeoutMs(body),
     }),
+    takeoff: (body) => request("/actions/takeoff", {
+      method: "POST",
+      body,
+      timeoutMs: takeoffTimeoutMs(body),
+    }),
     land: (body) => request("/actions/land", {
       method: "POST",
       body,
@@ -128,6 +151,8 @@
     capabilities: () => request("/capabilities"),
     events: (n = 50) => request(`/events?n=${encodeURIComponent(n)}`),
     recentActions: (n = 20) => request(`/actions/recent?n=${encodeURIComponent(n)}`),
+    actionLifecycle: (n = 20) => request(`/actions/lifecycle?n=${encodeURIComponent(n)}`),
+    actionStatus: (actionId) => request(`/actions/${encodeURIComponent(actionId)}`),
     policyDecisions: (n = 20) => request(`/policy/decisions?n=${encodeURIComponent(n)}`),
     skills: () => request("/skills"),
     vehicles: () => request("/vehicles"),
@@ -137,6 +162,7 @@
     agentStatus: () => request("/agent/status"),
     simulationStatus: () => request("/simulation/status"),
     smokeTakeoffTimeoutMs,
+    takeoffTimeoutMs,
     landTimeoutMs,
   };
 })(window);
