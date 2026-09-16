@@ -2,6 +2,9 @@
   "scene_id": "simple_recon_v0_1",
   "name": "Simple Recon Scenario v0.1",
   "frame": "local_ned",
+  "public_frame": "scene_ned",
+  "map_version": "simple_recon_v0_1-map-1",
+  "frame_compatibility": "frame=local_ned is retained for the v0.1 Runtime scene loader; all scenario geometry is shared scene_ned, not a vehicle EKF origin",
   "origin": {
     "lat_deg": 47.3979709,
     "lon_deg": 8.5461639,

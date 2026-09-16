@@ -69,14 +69,14 @@ def test_enu_ned_round_trip_and_positive_altitude() -> None:
     }
 
 
-def test_scene_and_vehicle_local_transform_include_spawn_rotation_and_translation() -> None:
+def test_ned_translation_ignores_vehicle_heading_and_preserves_z_offset() -> None:
     spawn = {"x_m": 100.0, "y_m": 50.0, "z_m": 2.0, "yaw_deg": 90.0}
     scene_position = patrol.PositionNED(100.0, 60.0, -8.0)
 
     vehicle_local = patrol.scene_to_vehicle_local_ned(scene_position, spawn)
 
-    assert vehicle_local.x_m == pytest.approx(10.0, abs=1e-9)
-    assert vehicle_local.y_m == pytest.approx(0.0, abs=1e-9)
+    assert vehicle_local.x_m == pytest.approx(0.0, abs=1e-9)
+    assert vehicle_local.y_m == pytest.approx(10.0, abs=1e-9)
     assert vehicle_local.z_m == pytest.approx(-10.0, abs=1e-9)
     round_trip = patrol.vehicle_local_to_scene_ned(vehicle_local, spawn)
     assert round_trip.x_m == pytest.approx(scene_position.x_m, abs=1e-9)
@@ -299,9 +299,15 @@ class _FakeController:
         self.max_altitude_m = position.altitude_m
         self.connected = False
         self.recovery_land_calls = 0
+        self.sequence = 0
 
     def position(self) -> patrol.PositionNED:
         return self._position
+
+    def position_sample(self):
+        self.sequence += 1
+        return {"position": self._position, "received_at": time.monotonic(),
+                "sequence": self.sequence, "calibration_valid": True}
 
     def vehicle_local_position(self) -> patrol.PositionNED:
         return self._vehicle_local_position

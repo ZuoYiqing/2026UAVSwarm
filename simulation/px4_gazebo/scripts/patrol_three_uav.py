@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import harness  # noqa: E402
 import health as health_service  # noqa: E402
 import patrol  # noqa: E402
+from calibration import capture_session_calibration, MotionEvidenceRecorder
 from uav_runtime.adapters.mavlink_backend_config import MavlinkBackendConfig  # noqa: E402
 from uav_runtime.adapters.mavlink_backend_session import MavlinkBackendSession  # noqa: E402
 
@@ -82,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     started_at = harness.utc_now()
     payload: dict[str, Any]
+    health = None
     try:
         manifest = harness.load_manifest(args.config)
         scene = harness.load_json(harness.resolve_repo_path(str(manifest["scene_path"])))
@@ -105,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         patrol.require_standalone_endpoints(manifest)
 
         controllers = [
-            patrol.MavlinkPatrolController(vehicle, _session(vehicle))
+            patrol.MavlinkPatrolController(vehicle, _session(vehicle),
+                calibration_provider=lambda v, s: capture_session_calibration(v, s, manifest))
             for vehicle in manifest["vehicles"]
         ]
         payload = patrol.run_patrol(
@@ -113,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             controllers,
             command_timeout_s=args.command_timeout,
             landing_timeout_s=args.landing_timeout,
+            motion_observer=MotionEvidenceRecorder(manifest, controllers),
         )
         payload["health"] = health
         payload["manifest_path"] = str(args.config.resolve())
@@ -130,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
                 else "validation_error"
             ),
             "error": f"{type(exc).__name__}: {exc}",
+            "health": health,
         }
 
     _write_report(payload, args.report_dir)

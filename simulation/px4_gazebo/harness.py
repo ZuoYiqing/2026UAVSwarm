@@ -475,7 +475,7 @@ def gazebo_models() -> set[str]:
     return {
         line.strip().lstrip("-").strip()
         for line in result.stdout.splitlines()
-        if line.strip() and not line.lower().startswith("available models")
+        if line.strip().startswith("- ")
     }
 
 
@@ -709,15 +709,20 @@ def read_process_identity(
     """Read one coherent identity snapshot from Linux procfs."""
     process_root = proc_root / str(pid)
     try:
-        first_start_time = _parse_proc_start_time(
-            (process_root / "stat").read_text(encoding="utf-8")
-        )
+        first_stat = (process_root / "stat").read_text(encoding="utf-8")
+        first_start_time = _parse_proc_start_time(first_stat)
+        if first_stat[first_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
+            return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_is_zombie_or_dead")
         cmdline = tuple(
             part.decode("utf-8", errors="surrogateescape")
             for part in (process_root / "cmdline").read_bytes().split(b"\0")
             if part
         )
         if not cmdline:
+            second_stat = (process_root / "stat").read_text(encoding="utf-8")
+            if (_parse_proc_start_time(second_stat) == first_start_time
+                    and second_stat[second_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}):
+                return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
             raise ValueError("process cmdline is empty")
         executable = os.readlink(process_root / "exe")
         cwd = os.readlink(process_root / "cwd")
@@ -1120,6 +1125,12 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
                 timeout_s=75.0 if index == 0 else 45.0,
             )
             print(f"{vehicle['node_id']} ready: pid={process.pid}")
+        try:
+            from .gazebo_evidence import capture_server_processes
+        except ImportError:
+            from gazebo_evidence import capture_server_processes
+        state["gazebo_processes"] = capture_server_processes(state)
+        _write_state(state)
         print()
         print_mapping_table(manifest)
         print(f"\nHarness state: {STATE_PATH}")
