@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mission_id",
+    "snapshot_id",
+    "scene_id",
+    "map_version",
+    "coordinate_frame",
+    "execution_authorized",
+    "status",
+    "reason_code",
+    "explanation",
+    "assignments",
+    "unassigned_tasks",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "map_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "coordinate_frame": {
+      "const": "scene_ned"
+    },
+    "execution_authorized": {
+      "const": false
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "degraded",
+        "rejected"
+      ]
+    },
+    "reason_code": {
+      "enum": [
+        "ASSIGNED",
+        "MISSION_PROPOSED",
+        "PARTIAL_MISSION",
+        "REQUEST_REJECTED",
+        "NODE_OFFLINE",
+        "TELEMETRY_STALE",
+        "BATTERY_LOW",
+        "BATTERY_UNKNOWN",
+        "NODE_BUSY",
+        "SPATIAL_UNAVAILABLE",
+        "CAPABILITY_MISSING",
+        "POLICY_DENIED",
+        "INSUFFICIENT_FLEET",
+        "NO_ELIGIBLE_VEHICLE"
+      ]
+    },
+    "explanation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "assignments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "node_id",
+          "actions",
+          "waypoint_ids",
+          "reason_code",
+          "explanation"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "node_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TAKEOFF",
+                "GOTO",
+                "OBSERVE",
+                "HOLD",
+                "RETURN_HOME",
+                "LAND"
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1
+          },
+          "waypoint_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+            },
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "reason_code": {
+            "const": "ASSIGNED"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      },
+      "maxItems": 100
+    },
+    "unassigned_tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "reason_code",
+          "explanation"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "reason_code": {
+            "enum": [
+              "ASSIGNED",
+              "MISSION_PROPOSED",
+              "PARTIAL_MISSION",
+              "REQUEST_REJECTED",
+              "NODE_OFFLINE",
+              "TELEMETRY_STALE",
+              "BATTERY_LOW",
+              "BATTERY_UNKNOWN",
+              "NODE_BUSY",
+              "SPATIAL_UNAVAILABLE",
+              "CAPABILITY_MISSING",
+              "POLICY_DENIED",
+              "INSUFFICIENT_FLEET",
+              "NO_ELIGIBLE_VEHICLE"
+            ]
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      },
+      "maxItems": 100
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "maxItems": 100
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

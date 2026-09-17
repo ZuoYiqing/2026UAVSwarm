@@ -1,0 +1,352 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mission_id",
+    "snapshot_id",
+    "source",
+    "scene_id",
+    "map_version",
+    "coordinate_frame",
+    "objective",
+    "snapshot_age_ms",
+    "snapshot_valid_for_ms",
+    "constraints",
+    "fleet",
+    "waypoints",
+    "tasks",
+    "policy_denials"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "mission_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "source": {
+      "enum": [
+        "synthetic_benchmark",
+        "normalized_runtime_snapshot"
+      ]
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "map_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "coordinate_frame": {
+      "const": "scene_ned"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "snapshot_age_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "snapshot_valid_for_ms": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_battery_pct",
+        "max_sample_age_ms",
+        "min_vehicles",
+        "allow_partial",
+        "min_altitude_m",
+        "max_altitude_m"
+      ],
+      "properties": {
+        "min_battery_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "max_sample_age_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "min_vehicles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "allow_partial": {
+          "type": "boolean"
+        },
+        "min_altitude_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_altitude_m": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "fleet": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_id",
+          "connected",
+          "stale",
+          "battery_pct",
+          "capabilities",
+          "current_assignment",
+          "spatial"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "battery_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TAKEOFF",
+                "GOTO",
+                "OBSERVE",
+                "HOLD",
+                "RETURN_HOME",
+                "LAND"
+              ]
+            },
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "current_assignment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spatial": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "frame",
+              "scene_id",
+              "map_version",
+              "public_position_usable",
+              "sample_age_ms",
+              "position_m"
+            ],
+            "properties": {
+              "frame": {
+                "enum": [
+                  "scene_ned",
+                  "vehicle_local_ned"
+                ]
+              },
+              "scene_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+              },
+              "map_version": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+              },
+              "public_position_usable": {
+                "type": "boolean"
+              },
+              "sample_age_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "position_m": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "north_m",
+                      "east_m",
+                      "down_m"
+                    ],
+                    "properties": {
+                      "north_m": {
+                        "type": "number"
+                      },
+                      "east_m": {
+                        "type": "number"
+                      },
+                      "down_m": {
+                        "type": "number"
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "maxItems": 100
+    },
+    "waypoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "waypoint_id",
+          "position_m"
+        ],
+        "properties": {
+          "waypoint_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "position_m": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "north_m",
+              "east_m",
+              "down_m"
+            ],
+            "properties": {
+              "north_m": {
+                "type": "number"
+              },
+              "east_m": {
+                "type": "number"
+              },
+              "down_m": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "maxItems": 100
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "region_id",
+          "required_actions",
+          "waypoint_ids"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "region_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          },
+          "required_actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TAKEOFF",
+                "GOTO",
+                "OBSERVE",
+                "HOLD",
+                "RETURN_HOME",
+                "LAND"
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1
+          },
+          "waypoint_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+            },
+            "maxItems": 100,
+            "uniqueItems": true
+          }
+        }
+      },
+      "maxItems": 100,
+      "minItems": 1
+    },
+    "policy_denials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_id",
+          "action",
+          "reason_code"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "HOLD",
+              "RETURN_HOME",
+              "LAND"
+            ]
+          },
+          "reason_code": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+          }
+        }
+      },
+      "maxItems": 100
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

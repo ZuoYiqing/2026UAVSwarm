@@ -1,0 +1,70 @@
+{
+  "recorded_date": "2026-09-17",
+  "base_commit": "b4e2f6e",
+  "module_version": "0.1.0",
+  "python_version": "3.11.7",
+  "unit_tests": {
+    "command": ".venv/Scripts/python.exe -m unittest discover -s tests -v",
+    "total": 19,
+    "passed": 19,
+    "elapsed_s": 1.078
+  },
+  "scaffold": {
+    "command": ".venv/Scripts/python.exe -m uavswarm_llm_lab benchmark --output docs/scaffold_validation.json",
+    "total": 40,
+    "passed": 40,
+    "artifact": "scaffold_validation.json",
+    "sha256": "f3b70a70adcfde6d603703e957da0bd9d6b278fc67caff043108a3d30ee11d72"
+  },
+  "demos": [
+    {
+      "case": "three_uav_inspection",
+      "status": "proposed",
+      "assigned_nodes": [
+        "UAV-01",
+        "UAV-02",
+        "UAV-03"
+      ]
+    },
+    {
+      "case": "uav02_offline",
+      "status": "proposed",
+      "assigned_nodes": [
+        "UAV-01",
+        "UAV-03",
+        "UAV-01"
+      ]
+    },
+    {
+      "case": "low_battery",
+      "status": "proposed",
+      "assigned_nodes": [
+        "UAV-01",
+        "UAV-03",
+        "UAV-01"
+      ]
+    },
+    {
+      "case": "missing_goto",
+      "status": "rejected",
+      "assigned_nodes": []
+    },
+    {
+      "case": "policy_denied",
+      "status": "rejected",
+      "assigned_nodes": []
+    }
+  ],
+  "dependencies_check": "pip check: No broken requirements found.",
+  "model_executed": false,
+  "model_weights_downloaded": false,
+  "flight_execution_attempted": false,
+  "existing_tracked_files_changed": false,
+  "git_commit_created": false,
+  "limitations": [
+    "Synthetic test inputs, not live telemetry",
+    "Reference baseline does not interpret natural language",
+    "No geometry/scheduling/flight-executability proof",
+    "Model quality, latency and VRAM remain unmeasured"
+  ]
+}
