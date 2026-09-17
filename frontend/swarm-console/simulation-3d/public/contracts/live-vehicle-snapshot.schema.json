@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://uavswarm.local/contracts/live-vehicle-snapshot.schema.json",
+  "title": "Runtime public LIVE snapshot consumer profile 1.0",
+  "description": "An additive consumer profile. Legacy NED/ENU/WGS84 remain in vehicle-snapshot.schema.json. Spatial scene_ned is calibrated public position, not an alias for per-vehicle local NED. Origin matching and timestamp/TTL checks also run at consumption time.",
+  "allOf": [{"$ref": "vehicle-snapshot.schema.json"}],
+  "type": "object",
+  "required": ["full_state", "scene_id", "coordinate_contract"],
+  "properties": {
+    "full_state": {"const": true},
+    "scene_id": {"type": "string", "minLength": 1},
+    "coordinate_contract": {
+      "type": "object",
+      "required": ["version", "public_frame", "local_frame", "units", "z_convention", "altitude_reference", "transform_owner", "calibration_producer"],
+      "properties": {
+        "version": {"const": "1.0"}, "public_frame": {"const": "scene_ned"}, "local_frame": {"const": "vehicle_local_ned"},
+        "units": {"const": "m"}, "z_convention": {"const": "positive_down"}, "altitude_reference": {"const": "scene_origin_z_down"},
+        "transform_owner": {"const": "runtime"}, "calibration_producer": {"const": "simulation"}
+      },
+      "not": {"required": ["frame_transform"]}
+    },
+    "vehicles": {"type": "array", "items": {"type": "object", "required": ["spatial"], "properties": {"spatial": {"$ref": "#/$defs/spatial"}}}}
+  },
+  "$defs": {
+    "nonempty": {"type": "string", "minLength": 1},
+    "spatial": {
+      "type": "object", "required": ["contract_version", "public_position_usable"],
+      "properties": {
+        "contract_version": {"const": "1.0"}, "public_position_usable": {"type": "boolean"}
+      },
+      "if": {"properties": {"public_position_usable": {"const": true}}},
+      "then": {
+        "required": ["scene_id", "map_version", "scene_origin", "units", "z_convention", "altitude_reference", "public_frame", "local_frame", "scene_pose", "axis_alignment", "attitude_convention", "origin_continuity", "local_origin_id", "calibration_version", "calibration_status", "sample_timestamp", "sample_age_ms", "calibration_source_timestamp", "calibration_age_ms", "calibration_valid_for_ms", "stale"],
+        "properties": {
+          "scene_id": {"$ref": "#/$defs/nonempty"}, "map_version": {"$ref": "#/$defs/nonempty"},
+          "units": {"const": "m"}, "z_convention": {"const": "positive_down"}, "altitude_reference": {"const": "scene_origin_z_down"},
+          "public_frame": {"const": "scene_ned"}, "local_frame": {"const": "vehicle_local_ned"},
+          "axis_alignment": {"const": "ned_aligned"}, "attitude_convention": {"const": "roll_pitch_yaw_deg_ned_frd"},
+          "origin_continuity": {"const": "verified"}, "local_origin_id": {"$ref": "#/$defs/nonempty"},
+          "calibration_version": {"$ref": "#/$defs/nonempty"}, "calibration_status": {"const": "calibrated"},
+          "sample_timestamp": {"type": "string", "format": "date-time"}, "sample_age_ms": {"type": "number", "minimum": 0},
+          "calibration_source_timestamp": {"type": "string", "format": "date-time"}, "calibration_age_ms": {"type": "number", "minimum": 0},
+          "calibration_valid_for_ms": {"type": "number", "exclusiveMinimum": 0}, "stale": {"type": "boolean"},
+          "scene_origin": {"type": "object", "required": ["kind", "north_m", "east_m", "down_m"], "properties": {
+            "kind": {"$ref": "#/$defs/nonempty"}, "north_m": {"type": "number"}, "east_m": {"type": "number"}, "down_m": {"type": "number"}
+          }},
+          "scene_pose": {"type": "object", "required": ["frame", "position_m"], "properties": {
+            "frame": {"const": "scene_ned"},
+            "position_m": {"type": "object", "required": ["x", "y", "z"], "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}},
+            "attitude_deg": {"type": "object", "required": ["roll", "pitch", "yaw"], "properties": {"roll": {"type": "number"}, "pitch": {"type": "number"}, "yaw": {"type": "number"}}}
+          }}
+        },
+        "not": {"required": ["frame_transform"]}
+      }
+    }
+  }
+}

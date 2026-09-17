@@ -42,9 +42,13 @@
         <select id="scene-select">
           <option value="city">青岚市 · 城市与山林</option>
           <option value="campus">无人系统测试园区 · Local</option>
+          <option value="recon">simple_recon · 后端任务坐标</option>
           <option value="1.1">3D Tiles 1.1 · Metadata</option>
           <option value="1.0">3D Tiles 1.0 · Discrete LOD</option>
         </select>
+
+        <p id="map-datum" class="scene-statistics">青岚市 · 仅展示 · 未导入 Gazebo</p>
+        <div id="scene-alignment" class="alignment-status" role="status">场景未对齐 · 等待公共坐标证据</div>
 
         <div id="city-tools">
           <div class="section-label">分区视角</div>
@@ -133,7 +137,7 @@
         </div>
 
         <label class="switch-row">
-          <span>历史航迹</span>
+          <span>遥测历史航迹 · 实线</span>
           <input id="route-toggle" type="checkbox" checked />
         </label>
         <label class="switch-row">
@@ -161,7 +165,7 @@
             <dd id="telemetry-lon">--</dd>
           </div>
           <div>
-            <dt>高度</dt>
+            <dt>场景相对高 / m</dt>
             <dd id="telemetry-alt">--</dd>
           </div>
           <div>
@@ -180,6 +184,8 @@
             <dt>Agent</dt>
             <dd id="telemetry-agent">--</dd>
           </div>
+          <div><dt>样本年龄</dt><dd id="telemetry-age">--</dd></div>
+          <div class="agent-row"><dt>坐标状态</dt><dd id="telemetry-alignment">--</dd></div>
         </dl>
       </section>
 

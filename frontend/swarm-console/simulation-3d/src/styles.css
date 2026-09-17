@@ -487,6 +487,17 @@ button:disabled {
 }
 
 /* Map controls remain compact; the scene owns the viewport. */
+.alignment-status {
+  border-left: 3px solid #d9a15d;
+  padding: 7px 9px;
+  background: #493d2838;
+  color: #f0c38a;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.alignment-status[data-state="demo"], .alignment-status[data-state="aligned"] { color: #bcccaa; border-color: #92ad72; }
+#telemetry-alignment { white-space: normal; overflow-wrap: anywhere; }
 :root {
   letter-spacing: 0;
 }

@@ -137,7 +137,13 @@ function colorForVehicle(vehicle) {
 }
 
 function hasFreshPose(vehicle) {
-  return vehicle.connected && !vehicle.telemetry.stale;
+  return vehicle.connected && !vehicle.telemetry.stale && vehicle.positionUsable !== false;
+}
+
+function orientationAt(position, vehicle) {
+  if (!position || vehicle.attitudeKnown === false) return undefined;
+  return Transforms.headingPitchRollQuaternion(position, new HeadingPitchRoll(
+    CesiumMath.toRadians(vehicle.attitude.yawDeg), CesiumMath.toRadians(vehicle.attitude.pitchDeg), CesiumMath.toRadians(vehicle.attitude.rollDeg)));
 }
 
 export class VehicleLayer {
@@ -180,15 +186,14 @@ export class VehicleLayer {
     const colorCss = colorForVehicle(vehicle);
     const color = Color.fromCssColorString(colorCss);
     let record = this.records.get(vehicle.id);
-    const freezePose = Boolean(record && !hasFreshPose(vehicle));
-    const worldPosition = freezePose
-      ? record.worldPosition
-      : this.positionToWorld(vehicle.position);
+    const freezePose = Boolean(record?.worldPosition && !hasFreshPose(vehicle));
+    const worldPosition = freezePose ? record.worldPosition : vehicle.positionUsable === false || !vehicle.position ? null : this.positionToWorld(vehicle.position);
 
     if (!record) {
-      const trailPositions = [worldPosition.clone()];
+      const trailPositions = worldPosition ? [worldPosition.clone()] : [];
       const routeEntity = this.viewer.entities.add({
         id: `vehicle-route:${vehicle.id}`,
+        properties: { semantic: "telemetry_trail", vehicle_id: vehicle.id },
         show: this.visible && this.routesVisible,
         polyline: {
           positions: trailPositions,
@@ -203,15 +208,8 @@ export class VehicleLayer {
       const entity = this.viewer.entities.add({
         id: `vehicle:${vehicle.id}`,
         show: this.visible,
-        position: worldPosition,
-        orientation: Transforms.headingPitchRollQuaternion(
-          worldPosition,
-          new HeadingPitchRoll(
-            CesiumMath.toRadians(vehicle.attitude.yawDeg),
-            CesiumMath.toRadians(vehicle.attitude.pitchDeg),
-            CesiumMath.toRadians(vehicle.attitude.rollDeg),
-          ),
-        ),
+        position: worldPosition || undefined,
+        orientation: orientationAt(worldPosition, vehicle),
         billboard: new BillboardGraphics({
           image: createMarker(vehicle.vehicleType, colorCss),
           scale: 0.42,
@@ -254,26 +252,19 @@ export class VehicleLayer {
         record.entity.billboard.image = createMarker(vehicle.vehicleType, colorCss);
         record.markerKey = markerKey;
       }
-      if (!freezePose) {
+      if (!freezePose && worldPosition) {
         record.worldPosition = worldPosition;
         record.entity.position = worldPosition;
-        record.entity.orientation = Transforms.headingPitchRollQuaternion(
-          worldPosition,
-          new HeadingPitchRoll(
-            CesiumMath.toRadians(vehicle.attitude.yawDeg),
-            CesiumMath.toRadians(vehicle.attitude.pitchDeg),
-            CesiumMath.toRadians(vehicle.attitude.rollDeg),
-          ),
-        );
+        record.entity.orientation = orientationAt(worldPosition, vehicle);
         record.entity.billboard.rotation = -CesiumMath.toRadians(
           vehicle.attitude.yawDeg,
         );
         if (
-          timestampMs - record.lastTrailTimestampMs >= 450 &&
+          !record.trailPositions.length || (timestampMs - record.lastTrailTimestampMs >= 450 &&
           Cartesian3.distance(
             record.trailPositions[record.trailPositions.length - 1],
             worldPosition,
-          ) >= 1
+          ) >= 1)
         ) {
           record.trailPositions.push(worldPosition.clone());
           if (record.trailPositions.length > 160) {
@@ -285,7 +276,8 @@ export class VehicleLayer {
       }
     }
 
-    record.entity.show = this.visible;
+    record.receivedAtMs = Date.now();
+    record.entity.show = this.visible && Boolean(record.worldPosition);
     record.routeEntity.show = this.visible && this.routesVisible;
     record.entity.label.show = this.labelsVisible;
     this.#applyRecordState(record);
@@ -322,14 +314,13 @@ export class VehicleLayer {
   }
 
   #applyRecordState(record, selected = record.vehicle.id === this.selectedVehicleId) {
-    const stale =
-      this.dataStale ||
-      record.vehicle.telemetry.stale ||
-      !record.vehicle.connected;
+    const stale = this.isRecordStale(record);
     record.entity.billboard.color = stale
       ? Color.WHITE.withAlpha(0.48)
       : Color.WHITE;
-    record.entity.label.text = stale
+    record.entity.label.text = record.vehicle.alignment?.aligned === false
+      ? `${record.vehicle.displayName} · 场景未对齐`
+      : stale
       ? `${record.vehicle.displayName} · STALE`
       : record.vehicle.displayName;
     record.entity.label.fillColor = stale
@@ -356,7 +347,7 @@ export class VehicleLayer {
   setVisible(visible) {
     this.visible = visible;
     for (const record of this.records.values()) {
-      record.entity.show = visible;
+      record.entity.show = visible && Boolean(record.worldPosition);
       record.routeEntity.show = visible && this.routesVisible;
     }
   }
@@ -376,7 +367,13 @@ export class VehicleLayer {
   isRecordStale(record) {
     return Boolean(
       record &&
-      (this.dataStale || record.vehicle.telemetry.stale || !record.vehicle.connected),
+      (this.dataStale || record.vehicle.telemetry.stale || !record.vehicle.connected || record.vehicle.positionUsable === false ||
+        (record.vehicle.publicValidUntilMs != null && Date.now() > record.vehicle.publicValidUntilMs) ||
+        (record.vehicle.telemetry.ageMs != null && record.vehicle.telemetry.ageMs + Date.now() - record.receivedAtMs > 3000)),
     );
+  }
+
+  refreshFreshness() {
+    for (const record of this.records.values()) this.#applyRecordState(record);
   }
 }

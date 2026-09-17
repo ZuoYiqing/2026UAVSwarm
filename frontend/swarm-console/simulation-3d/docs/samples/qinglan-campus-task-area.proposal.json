@@ -1,0 +1,565 @@
+{
+  "format": "uavswarm-task-area-proposal",
+  "format_version": "0.1",
+  "status": "pending_simulation_confirmation",
+  "scene_id": "qinglan_city_v1",
+  "map_version": "qinglan-city-1",
+  "task_area_id": "qinglan-campus-east-260",
+  "scene_origin": {
+    "kind": "synthetic_enu_anchor",
+    "north_m": 0,
+    "east_m": 0,
+    "down_m": 0
+  },
+  "local_enu_origin_m": [
+    0,
+    0,
+    0
+  ],
+  "render_anchor": {
+    "longitude": 116.3913,
+    "latitude": 39.9075,
+    "altitude": 0
+  },
+  "units": "m",
+  "frame": "ENU",
+  "axis_convention": {
+    "x": "east",
+    "y": "north",
+    "z": "up",
+    "yaw_zero": "east",
+    "yaw_positive": "counterclockwise"
+  },
+  "ground_z_m": 0,
+  "altitude_reference": "local_scene_ground",
+  "boundary_enu_m": [
+    [
+      -100,
+      -115
+    ],
+    [
+      160,
+      -115
+    ],
+    [
+      160,
+      145
+    ],
+    [
+      -100,
+      145
+    ]
+  ],
+  "extent_m": {
+    "east": 260,
+    "north": 260
+  },
+  "physics_status": "not_imported",
+  "source_commit": "96e029c",
+  "coverage": {
+    "complete_city": false,
+    "complete_physical_map": false,
+    "scope": "selected campus buildings, control tower and clipped roads",
+    "omitted": [
+      "city blocks outside the campus",
+      "bridges",
+      "hills",
+      "campus trees",
+      "solar arrays",
+      "fences",
+      "landing-pad artwork",
+      "apron surface",
+      "facade and roof details except conservative building collision envelope"
+    ],
+    "excluded_objects": [
+      {
+        "id": "qinglan-campus-building-02",
+        "reason": "outside_or_crosses_export_boundary"
+      },
+      {
+        "id": "qinglan-campus-building-05",
+        "reason": "outside_or_crosses_export_boundary"
+      },
+      {
+        "id": "qinglan-campus-building-07",
+        "reason": "outside_or_crosses_export_boundary"
+      },
+      {
+        "id": "qinglan-campus-building-08",
+        "reason": "outside_or_crosses_export_boundary"
+      },
+      {
+        "id": "qinglan-campus-building-11",
+        "reason": "outside_or_crosses_export_boundary"
+      },
+      {
+        "id": "qinglan-campus-runway",
+        "reason": "outside_export_boundary"
+      }
+    ]
+  },
+  "objects": [
+    {
+      "id": "qinglan-campus-building-01",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          -44.75,
+          56.25
+        ],
+        [
+          24.75,
+          56.25
+        ],
+        [
+          24.75,
+          93.75
+        ],
+        [
+          -44.75,
+          93.75
+        ]
+      ],
+      "base_enu_m": [
+        -10,
+        75,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 68,
+        "depth": 36,
+        "height": 22
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          -10,
+          75,
+          11.65
+        ],
+        "size_m": [
+          69.5,
+          37.5,
+          23.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-01"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-building-03",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          44.25,
+          62.25
+        ],
+        [
+          95.75,
+          62.25
+        ],
+        [
+          95.75,
+          93.75
+        ],
+        [
+          44.25,
+          93.75
+        ]
+      ],
+      "base_enu_m": [
+        70,
+        78,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 50,
+        "depth": 30,
+        "height": 18
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          70,
+          78,
+          9.65
+        ],
+        "size_m": [
+          51.5,
+          31.5,
+          19.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-03"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-building-04",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          47.25,
+          112.25
+        ],
+        [
+          92.75,
+          112.25
+        ],
+        [
+          92.75,
+          137.75
+        ],
+        [
+          47.25,
+          137.75
+        ]
+      ],
+      "base_enu_m": [
+        70,
+        125,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 44,
+        "depth": 24,
+        "height": 12
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          70,
+          125,
+          6.65
+        ],
+        "size_m": [
+          45.5,
+          25.5,
+          13.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-04"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-building-06",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          -21.75,
+          116.25
+        ],
+        [
+          21.75,
+          116.25
+        ],
+        [
+          21.75,
+          139.75
+        ],
+        [
+          -21.75,
+          139.75
+        ]
+      ],
+      "base_enu_m": [
+        0,
+        128,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 42,
+        "depth": 22,
+        "height": 12
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          0,
+          128,
+          6.65
+        ],
+        "size_m": [
+          43.5,
+          23.5,
+          13.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-06"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-building-09",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          12.25,
+          -101.75
+        ],
+        [
+          71.75,
+          -101.75
+        ],
+        [
+          71.75,
+          -62.25
+        ],
+        [
+          12.25,
+          -62.25
+        ]
+      ],
+      "base_enu_m": [
+        42,
+        -82,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 58,
+        "depth": 38,
+        "height": 14
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          42,
+          -82,
+          7.65
+        ],
+        "size_m": [
+          59.5,
+          39.5,
+          15.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-09"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-building-10",
+      "kind": "building",
+      "footprint_enu_m": [
+        [
+          94.25,
+          -108.75
+        ],
+        [
+          157.75,
+          -108.75
+        ],
+        [
+          157.75,
+          -65.25
+        ],
+        [
+          94.25,
+          -65.25
+        ]
+      ],
+      "base_enu_m": [
+        126,
+        -87,
+        0.3
+      ],
+      "dimensions_m": {
+        "width": 62,
+        "depth": 42,
+        "height": 12
+      },
+      "yaw_enu_deg": 0,
+      "collision_suggestion": {
+        "shape": "box",
+        "center_enu_m": [
+          126,
+          -87,
+          6.65
+        ],
+        "size_m": [
+          63.5,
+          43.5,
+          13.3
+        ]
+      },
+      "visual_asset": {
+        "source": "src/campus-layout.js",
+        "object_id": "qinglan-campus-building-10"
+      },
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-control-tower",
+      "kind": "tower",
+      "base_enu_m": [
+        14,
+        18,
+        0
+      ],
+      "collision_suggestion": {
+        "shape": "cylinder",
+        "center_enu_m": [
+          14,
+          18,
+          24
+        ],
+        "radius_m": 11,
+        "height_m": 48
+      },
+      "visual_asset": {
+        "source": "src/city-geometry.js",
+        "section": "campus control tower"
+      },
+      "physics_status": "not_imported"
+    }
+  ],
+  "roads": [
+    {
+      "id": "qinglan-campus-road-ew",
+      "footprint_enu_m": [
+        [
+          -100,
+          -32
+        ],
+        [
+          160,
+          -32
+        ],
+        [
+          160,
+          -18
+        ],
+        [
+          -100,
+          -18
+        ]
+      ],
+      "clipped": true,
+      "surface_z_m": 0.35,
+      "collision_suggestion": "ground_surface_only",
+      "physics_status": "not_imported"
+    },
+    {
+      "id": "qinglan-campus-road-ns",
+      "footprint_enu_m": [
+        [
+          106,
+          -115
+        ],
+        [
+          118,
+          -115
+        ],
+        [
+          118,
+          144.5
+        ],
+        [
+          106,
+          144.5
+        ]
+      ],
+      "clipped": true,
+      "surface_z_m": 0.35,
+      "collision_suggestion": "ground_surface_only",
+      "physics_status": "not_imported"
+    }
+  ],
+  "takeoff_candidates": [
+    {
+      "id": "takeoff-candidate-1",
+      "suggested_node_id": "UAV-01",
+      "position_enu_m": [
+        0,
+        0,
+        0
+      ],
+      "protected_radius_m": 3,
+      "status": "proposal_only",
+      "visual_pad": false
+    },
+    {
+      "id": "takeoff-candidate-2",
+      "suggested_node_id": "UAV-02",
+      "position_enu_m": [
+        8,
+        0,
+        0
+      ],
+      "protected_radius_m": 3,
+      "status": "proposal_only",
+      "visual_pad": false
+    },
+    {
+      "id": "takeoff-candidate-3",
+      "suggested_node_id": "UAV-03",
+      "position_enu_m": [
+        -8,
+        0,
+        0
+      ],
+      "protected_radius_m": 3,
+      "status": "proposal_only",
+      "visual_pad": false
+    }
+  ],
+  "inspection_candidates": [
+    {
+      "id": "inspect-main-south",
+      "position_enu_m": [
+        -10,
+        45,
+        5
+      ],
+      "status": "proposal_only"
+    },
+    {
+      "id": "inspect-east-lab",
+      "position_enu_m": [
+        95,
+        45,
+        5
+      ],
+      "status": "proposal_only"
+    }
+  ],
+  "no_fly_candidates": [
+    {
+      "id": "nfz-control-tower",
+      "shape": "cylinder",
+      "center_enu_m": [
+        14,
+        18,
+        0
+      ],
+      "radius_m": 14,
+      "min_up_m": 0,
+      "max_up_m": 55,
+      "status": "proposal_only"
+    }
+  ],
+  "handoff": {
+    "owner": "Simulation",
+    "accepted": false,
+    "sdf_world": null,
+    "existing_simple_recon_modified": false,
+    "note": "Not a calibrated transform to simple_recon_v0_1. Simulation must review takeoff protection, build collision assets and publish a new scene/map calibration before LIVE alignment."
+  }
+}

@@ -137,7 +137,7 @@
         },
         "pose": {
           "type": "object",
-          "required": ["position_m"],
+          "anyOf": [{"required": ["position_m"]}, {"required": ["position"]}],
           "properties": {
             "frame": {
               "enum": ["ENU", "NED", "WGS84"]

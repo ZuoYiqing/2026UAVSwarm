@@ -9,6 +9,7 @@ import {
   Vector3,
 } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { CAMPUS_BUILDINGS, CAMPUS_ROADS } from "./campus-layout.js";
 import {
   CITY,
   bridgeDeckHeight,
@@ -532,9 +533,7 @@ export function buildCityGeometry() {
 
   // The mission campus uses the same ENU origin, with no changes to vehicle poses.
   box("terrain", "#b1b9b0", 0, 0, -0.25, 420, 310, 0.35);
-  box("transport", P.road, 0, -25, 0.2, 405, 14, 0.15);
-  box("transport", P.road, 0, -145, 0.2, 294, 19, 0.15);
-  box("transport", P.road, 112, 12, 0.2, 12, 265, 0.15);
+  for (const road of CAMPUS_ROADS) box("transport", P.road, road.x, road.y, 0.2, road.width, road.depth, 0.15);
   for (let x = -180; x < 195; x += 22)
     box("transport", P.line, x, -25, 0.4, 9, 0.35, 0.03);
   for (let x = -126; x <= 126; x += 22)
@@ -542,19 +541,7 @@ export function buildCityGeometry() {
   for (const end of [-130, 130])
     for (let y = -151; y <= -139; y += 3)
       box("transport", P.line, end, y, 0.4, 12, 1, 0.03);
-  const campusBuildings = [
-    [-10, 75, 68, 36, 22],
-    [-88, 85, 48, 30, 16],
-    [70, 78, 50, 30, 18],
-    [70, 125, 44, 24, 12],
-    [-80, 130, 52, 26, 14],
-    [0, 128, 42, 22, 12],
-    [-142, 24, 72, 42, 16],
-    [-142, 74, 72, 34, 13],
-    [42, -82, 58, 38, 14],
-    [126, -87, 62, 42, 12],
-    [156, 15, 44, 28, 10],
-  ];
+  const campusBuildings = CAMPUS_BUILDINGS.map(building => building.dimensions);
   for (const [x, y, w, d, h] of campusBuildings) {
     box("buildings", P.wall[2], x, y, 0.3, w, d, h);
     box("buildings", P.roof, x, y, h + 0.3, w + 1.5, d + 1.5, 1);
