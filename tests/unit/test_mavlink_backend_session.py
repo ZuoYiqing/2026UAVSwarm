@@ -1,4 +1,4 @@
-"""MAVLink backend session placeholder tests."""
+"""Persistent MAVLink backend session and completion-evidence tests."""
 from __future__ import annotations
 
 import threading
@@ -149,6 +149,22 @@ class _FakeAckMsg:
         return "COMMAND_ACK"
 
 
+class _FakeHeartbeatMsg:
+    def __init__(self, *, armed: bool) -> None:
+        self.base_mode = 128 if armed else 0
+
+    def get_type(self) -> str:
+        return "HEARTBEAT"
+
+
+class _FakeExtendedStateMsg:
+    def __init__(self, landed_state: int) -> None:
+        self.landed_state = landed_state
+
+    def get_type(self) -> str:
+        return "EXTENDED_SYS_STATE"
+
+
 class _FakeSequenceConnection(_FakeConnection):
     def __init__(self, zs: list[float], *, ack_once: bool = False) -> None:
         super().__init__()
@@ -186,6 +202,25 @@ class _AckWindowConnection(_FakeSequenceConnection):
         if self.mav.commands and not self._ack_sent:
             self._ack_sent = True
             return _FakeAckMsg()
+        time.sleep(min(timeout, 0.005))
+        return None
+
+
+class _LandAckWindowConnection(_FakeSequenceConnection):
+    """Emit landed/disarmed evidence after LAND send and before its ACK."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self._events = [
+            _FakeExtendedStateMsg(1),
+            _FakeHeartbeatMsg(armed=False),
+            _FakeAckMsg(command=21),
+        ]
+
+    def recv_match(self, type, blocking: bool, timeout: float):
+        del type, blocking
+        if self.mav.commands and self.mav.commands[-1][0] == 21 and self._events:
+            return self._events.pop(0)
         time.sleep(min(timeout, 0.005))
         return None
 
@@ -256,6 +291,7 @@ def test_takeoff_ack_wait_window_samples_are_observed_after_command_cursor() -> 
     )
 
     assert takeoff_ack["result"] == 0
+    assert takeoff_ack["timestamp"].endswith("Z")
     assert observation["sample_count"] == 1
     assert observation["max_altitude_m"] == 2.5
     assert observation["threshold_reached"] is True
@@ -382,6 +418,153 @@ def test_three_sessions_keep_receive_owners_and_dispatch_isolated() -> None:
     assert sum(session.receive_owner_count() for session in sessions) == 3
     for session in sessions:
         session.close()
+
+
+def test_operational_takeoff_requires_fresh_samples_stable_for_hold_window() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    cursor = session.observation_cursor()
+    result: dict[str, object] = {}
+
+    def observe() -> None:
+        result.update(session.observe_takeoff_completion(
+            timeout_s=0.5,
+            target_altitude_m=3.0,
+            tolerance_m=0.2,
+            stable_duration_s=0.03,
+            after_sequence=cursor,
+        ))
+
+    thread = threading.Thread(target=observe)
+    thread.start()
+    session.dispatch_message(_FakeLocalPositionMsg(-3.0))
+    time.sleep(0.04)
+    session.dispatch_message(_FakeLocalPositionMsg(-3.1))
+    thread.join(timeout=1)
+
+    assert result["status"] == "succeeded"
+    assert result["completion_reached"] is True
+    assert result["stable_sample_count"] == 2
+    assert str(result["first_sample_timestamp"]).endswith("Z")
+    assert str(result["last_sample_timestamp"]).endswith("Z")
+    session.close()
+
+
+def test_land_ack_wait_window_evidence_is_observed_after_command_cursor() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl",
+        backend_enabled=True,
+        transport_endpoint="udp:1",
+    )
+    session.connection = _LandAckWindowConnection()
+    session.connected = True
+    session._mavutil = type("FakeMavutil", (), {"mavlink": object()})()
+
+    land_ack = session.land(timeout_s=0.2)
+    observation = session.observe_landed_and_disarmed(
+        timeout_s=0.1,
+        after_sequence=land_ack["observation_cursor"],
+    )
+
+    assert land_ack["result"] == 0
+    assert observation["completion_reached"] is True
+    assert observation["landed_state_name"] == "on_ground"
+    assert observation["armed"] is False
+    session.close()
+
+
+def test_operational_takeoff_ack_height_without_stable_hold_times_out() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    cursor = session.observation_cursor()
+    session.dispatch_message(_FakeLocalPositionMsg(-3.0))
+
+    observation = session.observe_takeoff_completion(
+        timeout_s=0.02,
+        target_altitude_m=3.0,
+        tolerance_m=0.2,
+        stable_duration_s=0.01,
+        after_sequence=cursor,
+    )
+
+    assert observation["status"] == "timed_out"
+    assert observation["sample_count"] == 1
+    assert observation["completion_reached"] is False
+    session.close()
+
+
+def test_old_landed_and_disarmed_cache_is_not_new_land_completion_evidence() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    session.dispatch_message(_FakeExtendedStateMsg(1))
+    session.dispatch_message(_FakeHeartbeatMsg(armed=False))
+    cursor = session.observation_cursor()
+
+    observation = session.observe_landed_and_disarmed(
+        timeout_s=0.02,
+        after_sequence=cursor,
+    )
+
+    assert observation["status"] == "timed_out"
+    assert observation["telemetry_state"] == "unknown"
+    assert observation["completion_reached"] is False
+    session.close()
+
+
+def test_fresh_landed_without_disarm_is_incomplete_not_success() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    cursor = session.observation_cursor()
+    session.dispatch_message(_FakeExtendedStateMsg(1))
+    session.dispatch_message(_FakeHeartbeatMsg(armed=True))
+
+    observation = session.observe_landed_and_disarmed(
+        timeout_s=0.02,
+        after_sequence=cursor,
+    )
+
+    assert observation["status"] == "timed_out"
+    assert observation["telemetry_state"] == "incomplete"
+    assert observation["landed_state_name"] == "on_ground"
+    assert observation["armed"] is True
+    assert observation["completion_reached"] is False
+    session.close()
+
+
+def test_land_completion_rejects_post_command_but_expired_samples() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    cursor = session.observation_cursor()
+    session.dispatch_message(_FakeExtendedStateMsg(1))
+    time.sleep(0.02)
+    session.dispatch_message(_FakeHeartbeatMsg(armed=False))
+
+    observation = session.observe_landed_and_disarmed(
+        timeout_s=0.02,
+        after_sequence=cursor,
+        freshness_window_s=0.01,
+    )
+
+    assert observation["status"] == "timed_out"
+    assert observation["telemetry_state"] == "stale"
+    assert observation["landed_sample_age_ms"] > observation["freshness_window_ms"]
+    assert observation["completion_reached"] is False
+    session.close()
 
 
 def test_wrong_source_identity_is_not_dispatched_to_node_subscribers() -> None:

@@ -23,15 +23,30 @@ class Px4RuntimeActionAdapter:
         action = str(command.get("command") or "")
         arguments = dict(command.get("arguments") or {})
         if action == "takeoff":
-            raw = self.backend.execute_takeoff_smoke(
-                altitude_m=float(arguments.get("altitude_m", 3.0)),
-                auto_land=bool(arguments.get("auto_land", True)),
+            if arguments.get("completion_mode") == "operational_stable_altitude":
+                raw = self.backend.execute_takeoff_action(
+                    altitude_m=float(arguments.get("altitude_m", 3.0)),
+                    altitude_tolerance_m=float(arguments.get("altitude_tolerance_m", 0.3)),
+                    stable_duration_ms=int(arguments.get("stable_duration_ms", 1000)),
+                    command_timeout_ms=arguments.get("command_timeout_ms"),
+                    observe_timeout_ms=arguments.get("observe_timeout_ms"),
+                    cancel_event=arguments.get("_cancel_event"),
+                )
+            else:
+                raw = self.backend.execute_takeoff_smoke(
+                    altitude_m=float(arguments.get("altitude_m", 3.0)),
+                    auto_land=bool(arguments.get("auto_land", True)),
+                    command_timeout_ms=arguments.get("command_timeout_ms"),
+                    observe_timeout_ms=arguments.get("observe_timeout_ms"),
+                    threshold_ratio=float(arguments.get("threshold_ratio", 0.70)),
+                    cancel_event=arguments.get("_cancel_event"),
+                )
+        elif action == "land":
+            raw = self.backend.execute_land_action(
                 command_timeout_ms=arguments.get("command_timeout_ms"),
                 observe_timeout_ms=arguments.get("observe_timeout_ms"),
-                threshold_ratio=float(arguments.get("threshold_ratio", 0.70)),
+                cancel_event=arguments.get("_cancel_event"),
             )
-        elif action == "land":
-            raw = self.backend.execute_land_action(command_timeout_ms=arguments.get("command_timeout_ms"))
         else:
             raw = {"action": action, "result": "fail", "failure_reason": "unsupported_px4_runtime_action"}
         passed = raw.get("result") == "pass"

@@ -324,6 +324,8 @@ class RuntimeOrchestrator:
         policy_decision_event = {
             "type": "policy_decision_event",
             "request_id": request_id,
+            "action_id": req.action_id,
+            "trace_id": req.trace_id,
             "mission_id": req.mission_id,
             "node_id": req.node_id,
             "action_type": req.action_type,

@@ -225,18 +225,29 @@ class _FakePx4ActionSession:
     def request_local_position_stream(self, *, rate_hz: float, timeout_s: float) -> dict:
         return {"command": 511, "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
 
+    def request_landing_state_stream(self, *, rate_hz: float, timeout_s: float) -> dict:
+        return {"command": 511, "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL", "message_name": "EXTENDED_SYS_STATE", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+
     def arm(self, *, timeout_s: float) -> dict:
         return {"command": 400, "command_name": "MAV_CMD_COMPONENT_ARM_DISARM", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
 
     def takeoff(self, *, altitude_m: float, timeout_s: float) -> dict:
-        return {"command": 22, "command_name": "MAV_CMD_NAV_TAKEOFF", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False, "local_position_cursor": 17}
+        return {"command": 22, "command_name": "MAV_CMD_NAV_TAKEOFF", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False, "local_position_cursor": 17, "observation_cursor": 17}
 
     def land(self, *, timeout_s: float) -> dict:
-        return {"command": 21, "command_name": "MAV_CMD_NAV_LAND", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False}
+        return {"command": 21, "command_name": "MAV_CMD_NAV_LAND", "result": 0, "result_name": "MAV_RESULT_ACCEPTED", "timeout": False, "observation_cursor": 19}
 
-    def observe_local_position_altitude(self, *, timeout_s: float, threshold_altitude_m: float | None = None, after_sequence: int | None = None) -> dict:
+    def observe_local_position_altitude(self, *, timeout_s: float, threshold_altitude_m: float | None = None, after_sequence: int | None = None, cancel_event=None) -> dict:
         assert after_sequence == 17
         return {"observed": True, "samples": 3, "sample_count": 3, "first_z": 0.0, "last_z": -2.13, "min_z": -2.13, "max_z": 0.0, "max_altitude_m": 2.13, "threshold_altitude_m": threshold_altitude_m, "threshold_reached": True}
+
+    def observe_takeoff_completion(self, *, timeout_s: float, target_altitude_m: float, tolerance_m: float, stable_duration_s: float, after_sequence: int, cancel_event=None) -> dict:
+        assert after_sequence == 17
+        return {"status": "succeeded", "telemetry_state": "fresh", "sample_count": 4, "target_altitude_m": target_altitude_m, "tolerance_m": tolerance_m, "stable_duration_ms": int(stable_duration_s * 1000), "max_altitude_m": target_altitude_m, "completion_reached": True, "cancelled": False}
+
+    def observe_landed_and_disarmed(self, *, timeout_s: float, after_sequence: int, cancel_event=None) -> dict:
+        assert after_sequence == 19
+        return {"status": "succeeded", "telemetry_state": "fresh", "landed_state": 1, "landed_state_name": "on_ground", "armed": False, "completion_reached": True, "cancelled": False}
 
 
 def test_px4_sitl_takeoff_smoke_rejects_non_sitl_mode(monkeypatch) -> None:
@@ -285,3 +296,87 @@ def test_takeoff_and_land_actions_never_stop_persistent_heartbeat(monkeypatch) -
     assert session.connected is True
     assert session.receive_thread_alive() is True
     assert session.heartbeat_thread_alive() is True
+
+
+def test_operational_takeoff_ack_is_not_success_without_stable_altitude(monkeypatch) -> None:
+    class IncompleteTakeoffSession(_FakePx4ActionSession):
+        def observe_takeoff_completion(self, **kwargs) -> dict:
+            return {"status": "timed_out", "telemetry_state": "fresh", "sample_count": 2, "max_altitude_m": 1.0, "completion_reached": False, "cancelled": False}
+
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, IncompleteTakeoffSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_takeoff_action(altitude_m=3.0, altitude_tolerance_m=0.2, stable_duration_ms=500)
+
+    assert result["takeoff_ack"]["result"] == 0
+    assert result["result"] == "fail"
+    assert result["completion_state"] == "timed_out"
+    assert result["failure_reason"] == "takeoff_completion_timeout"
+
+
+def test_operational_takeoff_does_not_arm_without_position_stream_ack(monkeypatch) -> None:
+    class RejectedStreamSession(_FakePx4ActionSession):
+        def request_local_position_stream(self, **kwargs) -> dict:
+            del kwargs
+            return {"command": 511, "result": 1, "timeout": False}
+
+        def arm(self, **kwargs) -> dict:
+            del kwargs
+            raise AssertionError("arm must not be sent without completion telemetry")
+
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, RejectedStreamSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_takeoff_action()
+
+    assert result["result"] == "fail"
+    assert result["completion_state"] == "failed"
+    assert result["failure_reason"] == "local_position_stream_rejected_or_timeout"
+
+
+def test_operational_land_ack_is_not_success_without_landed_and_disarmed(monkeypatch) -> None:
+    class IncompleteLandSession(_FakePx4ActionSession):
+        def observe_landed_and_disarmed(self, **kwargs) -> dict:
+            return {"status": "timed_out", "telemetry_state": "incomplete", "landed_state": 1, "landed_state_name": "on_ground", "armed": True, "completion_reached": False, "cancelled": False}
+
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, IncompleteLandSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_land_action()
+
+    assert result["land_ack"]["result"] == 0
+    assert result["result"] == "fail"
+    assert result["completion_state"] == "timed_out"
+    assert result["completion_evidence"]["telemetry_state"] == "incomplete"
+    assert result["failure_reason"] == "landing_completion_timeout"
+
+
+def test_operational_land_is_sent_when_landing_stream_setup_raises(monkeypatch) -> None:
+    class StreamFailureSession(_FakePx4ActionSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.order: list[str] = []
+
+        def request_landing_state_stream(self, **kwargs) -> dict:
+            del kwargs
+            self.order.append("stream")
+            raise RuntimeError("stream setup unavailable")
+
+        def land(self, **kwargs) -> dict:
+            del kwargs
+            self.order.append("land")
+            return super().land(timeout_s=1.0)
+
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    session = StreamFailureSession()
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_land_action()
+
+    assert session.order == ["land", "stream"]
+    assert result["result"] == "pass"
+    assert result["landing_state_stream_ack"]["code"] == "landing_state_stream_exception"

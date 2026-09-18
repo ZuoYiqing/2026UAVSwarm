@@ -16,7 +16,14 @@ from uuid import uuid4
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
 from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
-from uav_runtime.http.schemas import BackendRequest, LandRequest, PlanMissionRequest, RequestValidationError, SmokeTakeoffRequest
+from uav_runtime.http.schemas import (
+    BackendRequest,
+    LandRequest,
+    PlanMissionRequest,
+    RequestValidationError,
+    SmokeTakeoffRequest,
+    TakeoffRequest,
+)
 from uav_runtime.http.contracts import (
     capability_to_skill_manifest,
     event_to_action_result_view,
@@ -29,7 +36,7 @@ from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last
-from uav_runtime.http.state_store import RuntimeStateStore
+from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
@@ -111,13 +118,24 @@ def _resolve_vehicle(req: BackendRequest, *, require_online: bool = False) -> tu
     )
 
 
-def _policy_checked_sitl_action(req: BackendRequest, handle: VehicleHandle, *, action: str, skill_group: str = "flight_core") -> tuple[str, dict[str, Any], RuntimeOrchestrator, ActionRequest]:
+def _policy_checked_sitl_action(
+    req: BackendRequest,
+    handle: VehicleHandle,
+    *,
+    action: str,
+    action_id: str | None = None,
+    skill_group: str = "flight_core",
+) -> tuple[str, dict[str, Any], RuntimeOrchestrator, ActionRequest]:
     cfg = handle.config.to_mavlink_config()
     rt = RuntimeOrchestrator(audit_path=AUDIT_PATH, adapter_name="mavlink", mavlink_backend_config=cfg)
     action_req = ActionRequest(
         action=action,
         params={},
-        source=CommandSource.SELF_LOCAL,
+        source=(
+            CommandSource.GROUND_STATION
+            if req.command_source == "ground_station"
+            else CommandSource.SELF_LOCAL
+        ),
         scope=AuthorityScope.SELF_ONLY,
         mission_id=f"mission-http-{action}",
         action_type=action,
@@ -129,10 +147,16 @@ def _policy_checked_sitl_action(req: BackendRequest, handle: VehicleHandle, *, a
         node_id=handle.config.node_id,
         backend_mode=handle.config.backend_mode,
         connection_state=handle.runtime_state.connection_status,
+        request_id=req.request_id or "",
+        action_id=action_id or "",
+        trace_id=req.trace_id or "",
+        idempotency_key=req.idempotency_key,
     )
     request_event = {
         "type": "action_request", "timestamp": _utc_now(), "node_id": handle.config.node_id,
         "mission_id": action_req.mission_id, "action_type": action,
+        "action_id": action_id, "request_id": action_req.request_id,
+        "trace_id": req.trace_id, "command_source": req.command_source,
         "backend": handle.config.backend, "backend_mode": handle.config.backend_mode,
         "endpoint": handle.config.endpoint, "system_id": handle.config.system_id,
         "component_id": handle.config.component_id,
@@ -145,21 +169,136 @@ def _policy_checked_sitl_action(req: BackendRequest, handle: VehicleHandle, *, a
     return decision_code, policy_event, rt, action_req
 
 
-def _finish_adapter_execution_exception(
+def _request_fingerprint(req: BackendRequest, *, action: str, smoke: bool) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "action": action,
+        "node_id": req.node_id,
+        "system_id": req.system_id,
+        "component_id": req.component_id,
+        "command_source": req.command_source,
+        "smoke": smoke,
+    }
+    for name in (
+        "altitude_m",
+        "auto_land",
+        "threshold_ratio",
+        "altitude_tolerance_m",
+        "stable_duration_ms",
+        "command_timeout_ms",
+        "observe_timeout_ms",
+    ):
+        if hasattr(req, name):
+            fields[name] = getattr(req, name)
+    return fields
+
+
+def _idempotent_response(action: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **action,
+        "idempotent_replay": True,
+        "_http_status": 202 if action.get("status") in {"requested", "accepted", "executing"} else 200,
+    }
+
+
+def _finalize_action(
     *,
     action_id: str,
-    action: str,
+    out: dict[str, Any],
     handle: VehicleHandle,
-    selection: str,
-) -> None:
-    failure = {
+    rt: RuntimeOrchestrator,
+    cfg: Any,
+    event_type: str,
+) -> dict[str, Any]:
+    correlated_ack_evidence = []
+    for ack in out.get("ack_evidence") or []:
+        correlated_ack_evidence.append({
+            **ack,
+            "timestamp": ack.get("timestamp") or _utc_now(),
+            "action": out.get("action"),
+            "action_id": action_id,
+            "request_id": out.get("request_id"),
+            "trace_id": out.get("trace_id"),
+            "node_id": handle.config.node_id,
+        })
+    out["ack_evidence"] = correlated_ack_evidence
+    current = RUNTIME_STATE_STORE.action(action_id)
+    if current.get("status") in {"policy_rejected", "succeeded", "failed", "timed_out"}:
+        current = RUNTIME_STATE_STORE.attach_terminal_evidence(
+            action_id,
+            ack_evidence=correlated_ack_evidence,
+            completion_evidence=out.get("completion_evidence"),
+            completion_state=out.get("completion_state"),
+        )
+        # A concurrent LAND preemption (or any other terminal transition) is
+        # authoritative over a late result from the superseded adapter call.
+        out = {**out, **current, "lifecycle_status": current["status"]}
+        VEHICLE_REGISTRY.release_action(
+            handle.config.node_id,
+            action_id,
+            error=out.get("failure_reason"),
+        )
+        for audit_type in (event_type, "action_result"):
+            event = _action_audit_event(audit_type, out, cfg, handle.config.node_id)
+            rt.audit.append(event)
+            RUNTIME_STATE_STORE.record_event(event)
+        return out
+    failure_reason = str(out.get("failure_reason") or "")
+    completion_state = str(out.get("completion_state") or "")
+    if out.get("result") == "pass":
+        lifecycle_status = "succeeded"
+    elif completion_state == "timed_out" or "timeout" in failure_reason:
+        lifecycle_status = "timed_out"
+    else:
+        lifecycle_status = "failed"
+    out["status"] = lifecycle_status
+    out["lifecycle_status"] = lifecycle_status
+    if lifecycle_status != "succeeded" and out.get("code") in {None, "", "px4_sitl_action_failed"}:
+        out["code"] = failure_reason or "action_failed"
+    RUNTIME_STATE_STORE.finish_action(action_id, out)
+    VEHICLE_REGISTRY.release_action(
+        handle.config.node_id,
+        action_id,
+        error=out.get("failure_reason"),
+    )
+    for audit_type in (event_type, "action_result"):
+        event = _action_audit_event(audit_type, out, cfg, handle.config.node_id)
+        rt.audit.append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+    return out
+
+
+def _execute_flight_action(
+    req: BackendRequest,
+    *,
+    action: str,
+    smoke: bool = False,
+) -> dict[str, Any]:
+    handle, selection = _resolve_vehicle(req, require_online=True)
+    cfg = handle.config.to_mavlink_config()
+    action_record, created = RUNTIME_STATE_STORE.request_action(
+        action,
+        backend=handle.config.backend,
+        backend_mode=handle.config.backend_mode,
+        node_id=handle.config.node_id,
+        system_id=handle.config.system_id,
+        component_id=handle.config.component_id,
+        request_id=req.request_id,
+        trace_id=req.trace_id,
+        idempotency_key=req.idempotency_key,
+        request_fingerprint=_request_fingerprint(req, action=action, smoke=smoke),
+        source=req.command_source,
+    )
+    if not created:
+        return _idempotent_response(action_record)
+    action_id = str(action_record["action_id"])
+    req.request_id = str(action_record["request_id"])
+    req.trace_id = str(action_record["trace_id"])
+    req.idempotency_key = str(action_record["idempotency_key"])
+    identity = {
         "action_id": action_id,
-        "action": action,
-        "result": "fail",
-        "accepted": False,
-        "status": "failed",
-        "failure_reason": "adapter_execution_exception",
-        "code": "adapter_execution_exception",
+        "request_id": req.request_id,
+        "trace_id": req.trace_id,
+        "idempotency_key": req.idempotency_key,
         "node_id": handle.config.node_id,
         "resolved_node_id": handle.config.node_id,
         "node_selection": selection,
@@ -168,190 +307,231 @@ def _finish_adapter_execution_exception(
         "endpoint": handle.config.endpoint,
         "system_id": handle.config.system_id,
         "component_id": handle.config.component_id,
+        "command_source": req.command_source,
     }
-    RUNTIME_STATE_STORE.finish_action(action_id, failure)
-    RUNTIME_STATE_STORE.record_event(
-        {
-            "type": "action_result",
-            "timestamp": _utc_now(),
-            **failure,
+    try:
+        decision_code, policy_event, rt, action_req = _policy_checked_sitl_action(
+            req,
+            handle,
+            action=action,
+            action_id=action_id,
+        )
+    except Exception as exc:
+        failure = {
+            **identity,
+            "action": action,
+            "result": "fail",
+            "accepted": False,
+            "execution_admitted": False,
+            "lifecycle_status": "failed",
+            "failure_reason": "policy_evaluation_exception",
+            "code": "policy_evaluation_exception",
+            "error_class": type(exc).__name__,
+            "ack_evidence": [],
+            "completion_evidence": None,
         }
+        RUNTIME_STATE_STORE.finish_action(action_id, failure)
+        RUNTIME_STATE_STORE.record_event(
+            _action_audit_event("action_result", failure, cfg, handle.config.node_id)
+        )
+        raise
+    if decision_code != "allow":
+        out = {
+            **identity,
+            "action": action,
+            "result": "fail",
+            "accepted": False,
+            "execution_admitted": False,
+            "status": "policy_rejected",
+            "lifecycle_status": "policy_rejected",
+            "failure_reason": f"policy_{decision_code}",
+            "code": f"policy_{decision_code}",
+            "policy_decision": policy_event,
+            "ack_evidence": [],
+            "completion_evidence": None,
+        }
+        RUNTIME_STATE_STORE.transition_action(action_id, "policy_rejected", **out)
+        event = _action_audit_event("action_result", out, cfg, handle.config.node_id)
+        rt.audit.append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+        return out
+
+    RUNTIME_STATE_STORE.transition_action(
+        action_id,
+        "accepted",
+        policy_decision=policy_event,
+        execution_admitted=True,
     )
-    VEHICLE_REGISTRY.mark_action_finished(
-        handle.config.node_id,
-        error="adapter_execution_exception",
+    try:
+        admission = VEHICLE_REGISTRY.admit_action(handle.config.node_id, action, action_id)
+    except VehicleRegistryError as exc:
+        out = {
+            **identity,
+            "action": action,
+            "result": "fail",
+            "accepted": False,
+            "execution_admitted": False,
+            "failure_reason": exc.code,
+            "code": exc.code,
+            "policy_decision": policy_event,
+            "details": exc.details,
+            "ack_evidence": [],
+            "completion_evidence": None,
+            "lifecycle_status": "failed",
+        }
+        RUNTIME_STATE_STORE.finish_action(action_id, out)
+        out["status"] = "failed"
+        out["_http_status"] = exc.status
+        event = _action_audit_event("action_result", out, cfg, handle.config.node_id)
+        rt.audit.append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+        return out
+    preempted_action_id = admission.get("preempted_action_id")
+    if preempted_action_id:
+        try:
+            RUNTIME_STATE_STORE.finish_action(
+                str(preempted_action_id),
+                {
+                    "action": admission.get("preempted_action"),
+                    "result": "fail",
+                    "failure_reason": "action_preempted_by_land",
+                    "code": "action_preempted_by_land",
+                    "preempted_by_action_id": action_id,
+                    "lifecycle_status": "failed",
+                },
+            )
+            preempted = RUNTIME_STATE_STORE.action(str(preempted_action_id))
+        except ActionLifecycleError as exc:
+            # Registry admission is the safety authority. An orphaned old lease
+            # must not prevent a controlled LAND from continuing.
+            RUNTIME_STATE_STORE.record_event({
+                "type": "action_preemption_orphan",
+                "timestamp": _utc_now(),
+                "node_id": handle.config.node_id,
+                "action_id": preempted_action_id,
+                "preempted_by_action_id": action_id,
+                "code": exc.code,
+            })
+        else:
+            event = _action_audit_event(
+                "action_preempted",
+                preempted,
+                cfg,
+                handle.config.node_id,
+            )
+            rt.audit.append(event)
+            RUNTIME_STATE_STORE.record_event(event)
+    cancel_event = admission["cancel_event"]
+    RUNTIME_STATE_STORE.transition_action(action_id, "executing")
+    try:
+        backend = Px4SitlBackend(cfg, handle.session)
+        rt.gateway.register(Px4RuntimeActionAdapter(backend))
+        started_event = {
+            **_adapter_event("adapter_execution_started", handle, action),
+            "action_id": action_id,
+            "request_id": req.request_id,
+            "trace_id": req.trace_id,
+        }
+        rt.audit.append(started_event)
+        RUNTIME_STATE_STORE.record_event(started_event)
+        if action == "takeoff" and smoke:
+            assert isinstance(req, SmokeTakeoffRequest)
+            action_req.params = {
+                "altitude_m": req.altitude_m,
+                "auto_land": req.auto_land,
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "threshold_ratio": req.threshold_ratio,
+                "_cancel_event": cancel_event,
+            }
+        elif action == "takeoff":
+            assert isinstance(req, TakeoffRequest)
+            action_req.params = {
+                "altitude_m": req.altitude_m,
+                "altitude_tolerance_m": req.altitude_tolerance_m,
+                "stable_duration_ms": req.stable_duration_ms,
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "completion_mode": "operational_stable_altitude",
+                "_cancel_event": cancel_event,
+            }
+        else:
+            action_req.params = {
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "_cancel_event": cancel_event,
+            }
+        gateway_result = rt.gateway.execute("mavlink", action_req)
+        out = dict(gateway_result.get("raw_result") or {
+            "action": action,
+            "result": "fail",
+            "failure_reason": gateway_result.get("code") or "adapter_execution_failed",
+            "accepted": False,
+            "code": gateway_result.get("code") or "adapter_execution_failed",
+            "error_class": gateway_result.get("error_class"),
+        })
+        out.setdefault("accepted", gateway_result.get("accepted", False))
+        out.setdefault("code", gateway_result.get("code"))
+        out.update(identity)
+        out["execution_admitted"] = True
+        out["policy_decision"] = policy_event
+        result_event = {
+            **_adapter_event("adapter_execution_result", handle, action, result=out),
+            "action_id": action_id,
+            "request_id": req.request_id,
+            "trace_id": req.trace_id,
+        }
+        rt.audit.append(result_event)
+        RUNTIME_STATE_STORE.record_event(result_event)
+    except Exception as exc:
+        out = {
+            **identity,
+            "action": action,
+            "result": "fail",
+            "accepted": False,
+            "execution_admitted": True,
+            "status": "failed",
+            "lifecycle_status": "failed",
+            "failure_reason": "adapter_execution_exception",
+            "code": "adapter_execution_exception",
+            "error_class": type(exc).__name__,
+            "policy_decision": policy_event,
+            "ack_evidence": [],
+            "completion_evidence": None,
+        }
+        RUNTIME_STATE_STORE.finish_action(action_id, out)
+        VEHICLE_REGISTRY.release_action(
+            handle.config.node_id,
+            action_id,
+            error="adapter_execution_exception",
+        )
+        event = _action_audit_event("action_result", out, cfg, handle.config.node_id)
+        rt.audit.append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+        raise
+    return _finalize_action(
+        action_id=action_id,
+        out=out,
+        handle=handle,
+        rt=rt,
+        cfg=cfg,
+        event_type="http_smoke_takeoff" if smoke else f"http_{action}",
     )
 
 
 def smoke_takeoff(payload: dict[str, Any]) -> dict[str, Any]:
-    """SITL-only bridge for the existing smoke-takeoff runtime capability.
+    """Compatibility smoke route; its loose threshold is not operational success."""
+    return _execute_flight_action(SmokeTakeoffRequest.from_json(payload), action="takeoff", smoke=True)
 
-    This route intentionally performs a Policy Gate check first and then uses
-    Px4SitlBackend's own SITL-only preflight guard.  It never exposes a browser
-    parameter that can invoke arbitrary CLI/shell behavior.
-    """
-    req = SmokeTakeoffRequest.from_json(payload)
-    handle, selection = _resolve_vehicle(req, require_online=True)
-    cfg = handle.config.to_mavlink_config()
-    decision_code, policy_event, rt, action_req = _policy_checked_sitl_action(req, handle, action="takeoff")
-    action_id = RUNTIME_STATE_STORE.begin_action("takeoff", backend=handle.config.backend, backend_mode=handle.config.backend_mode, node_id=handle.config.node_id)
-    try:
-        VEHICLE_REGISTRY.mark_action_started(handle.config.node_id, "takeoff")
-    except Exception:
-        _finish_adapter_execution_exception(
-            action_id=action_id,
-            action="takeoff",
-            handle=handle,
-            selection=selection,
-        )
-        raise
-    if req.backend_mode != "sitl":
-        out = {"action": "takeoff", "backend": req.backend, "backend_mode": req.backend_mode,
-               "endpoint": req.transport_endpoint, "policy_decision": policy_event,
-               "result": "fail", "failure_reason": "sitl_only_required"}
-    elif decision_code != "allow":
-        out = {
-            "action": "takeoff",
-            "backend": req.backend,
-            "backend_mode": cfg.backend_mode,
-            "endpoint": cfg.transport_endpoint,
-            "policy_decision": policy_event,
-            "result": "fail",
-            "failure_reason": f"policy_{decision_code}",
-        }
-    else:
-        try:
-            backend = Px4SitlBackend(cfg, handle.session)
-            rt.gateway.register(Px4RuntimeActionAdapter(backend))
-            started_event = _adapter_event("adapter_execution_started", handle, "takeoff")
-            rt.audit.append(started_event)
-            RUNTIME_STATE_STORE.record_event(started_event)
-            with handle.command_lock:
-                action_req.params = {
-                    "altitude_m": req.altitude_m, "auto_land": req.auto_land,
-                    "command_timeout_ms": req.command_timeout_ms,
-                    "observe_timeout_ms": req.observe_timeout_ms,
-                    "threshold_ratio": req.threshold_ratio,
-                }
-                gateway_result = rt.gateway.execute("mavlink", action_req)
-                out = dict(gateway_result.get("raw_result") or {
-                    "action": "takeoff", "result": "fail",
-                    "failure_reason": gateway_result.get("code") or "adapter_execution_failed",
-                    "accepted": False, "status": "failed",
-                    "code": gateway_result.get("code") or "adapter_execution_failed",
-                    "error_class": gateway_result.get("error_class"),
-                })
-                out.setdefault("accepted", gateway_result.get("accepted", False))
-                out.setdefault("status", "accepted" if gateway_result.get("accepted") else "failed")
-                out.setdefault("code", gateway_result.get("code"))
-            out["policy_decision"] = policy_event
-            result_event = _adapter_event("adapter_execution_result", handle, "takeoff", result=out)
-            rt.audit.append(result_event)
-            RUNTIME_STATE_STORE.record_event(result_event)
-        except Exception:
-            _finish_adapter_execution_exception(
-                action_id=action_id,
-                action="takeoff",
-                handle=handle,
-                selection=selection,
-            )
-            raise
-    out.update({"action_id": action_id,
-                "node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id,
-                "node_selection": selection, "backend": handle.config.backend,
-                "backend_mode": handle.config.backend_mode, "endpoint": handle.config.endpoint,
-                "system_id": handle.config.system_id, "component_id": handle.config.component_id})
-    RUNTIME_STATE_STORE.finish_action(action_id, out)
-    VEHICLE_REGISTRY.mark_action_finished(handle.config.node_id, error=out.get("failure_reason"))
-    rt.audit.append(_action_audit_event("http_smoke_takeoff", out, cfg, handle.config.node_id))
-    RUNTIME_STATE_STORE.record_event(_action_audit_event("http_smoke_takeoff", out, cfg, handle.config.node_id))
-    action_result_event = _action_audit_event("action_result", out, cfg, handle.config.node_id)
-    rt.audit.append(action_result_event)
-    RUNTIME_STATE_STORE.record_event(action_result_event)
-    return out
+
+def takeoff(payload: dict[str, Any]) -> dict[str, Any]:
+    """Operator/Agent takeoff using stable target-altitude completion evidence."""
+    return _execute_flight_action(TakeoffRequest.from_json(payload), action="takeoff")
 
 
 def land(payload: dict[str, Any]) -> dict[str, Any]:
-    """SITL-only land bridge for local development.
-
-    LAND is exposed only through the same Policy Gate + Px4SitlBackend SITL guard
-    used by smoke-takeoff.  Non-SITL requests are rejected before any real command
-    path can run.
-    """
-    req = LandRequest.from_json(payload)
-    handle, selection = _resolve_vehicle(req, require_online=True)
-    cfg = handle.config.to_mavlink_config()
-    decision_code, policy_event, rt, action_req = _policy_checked_sitl_action(req, handle, action="land")
-    action_id = RUNTIME_STATE_STORE.begin_action("land", backend=handle.config.backend, backend_mode=handle.config.backend_mode, node_id=handle.config.node_id)
-    try:
-        VEHICLE_REGISTRY.mark_action_started(handle.config.node_id, "land")
-    except Exception:
-        _finish_adapter_execution_exception(
-            action_id=action_id,
-            action="land",
-            handle=handle,
-            selection=selection,
-        )
-        raise
-    if req.backend_mode != "sitl":
-        out = {"action": "land", "backend": req.backend, "backend_mode": req.backend_mode,
-               "endpoint": req.transport_endpoint, "policy_decision": policy_event,
-               "result": "fail", "failure_reason": "sitl_only_required"}
-    elif decision_code != "allow":
-        out = {
-            "action": "land",
-            "backend": req.backend,
-            "backend_mode": cfg.backend_mode,
-            "endpoint": cfg.transport_endpoint,
-            "policy_decision": policy_event,
-            "result": "fail",
-            "failure_reason": f"policy_{decision_code}",
-        }
-    else:
-        try:
-            backend = Px4SitlBackend(cfg, handle.session)
-            rt.gateway.register(Px4RuntimeActionAdapter(backend))
-            started_event = _adapter_event("adapter_execution_started", handle, "land")
-            rt.audit.append(started_event)
-            RUNTIME_STATE_STORE.record_event(started_event)
-            with handle.command_lock:
-                action_req.params = {"command_timeout_ms": req.command_timeout_ms}
-                gateway_result = rt.gateway.execute("mavlink", action_req)
-                out = dict(gateway_result.get("raw_result") or {
-                    "action": "land", "result": "fail",
-                    "failure_reason": gateway_result.get("code") or "adapter_execution_failed",
-                    "accepted": False, "status": "failed",
-                    "code": gateway_result.get("code") or "adapter_execution_failed",
-                    "error_class": gateway_result.get("error_class"),
-                })
-                out.setdefault("accepted", gateway_result.get("accepted", False))
-                out.setdefault("status", "accepted" if gateway_result.get("accepted") else "failed")
-                out.setdefault("code", gateway_result.get("code"))
-            out["policy_decision"] = policy_event
-            result_event = _adapter_event("adapter_execution_result", handle, "land", result=out)
-            rt.audit.append(result_event)
-            RUNTIME_STATE_STORE.record_event(result_event)
-        except Exception:
-            _finish_adapter_execution_exception(
-                action_id=action_id,
-                action="land",
-                handle=handle,
-                selection=selection,
-            )
-            raise
-    out.update({"action_id": action_id,
-                "node_id": handle.config.node_id, "resolved_node_id": handle.config.node_id,
-                "node_selection": selection, "backend": handle.config.backend,
-                "backend_mode": handle.config.backend_mode, "endpoint": handle.config.endpoint,
-                "system_id": handle.config.system_id, "component_id": handle.config.component_id})
-    RUNTIME_STATE_STORE.finish_action(action_id, out)
-    VEHICLE_REGISTRY.mark_action_finished(handle.config.node_id, error=out.get("failure_reason"))
-    rt.audit.append(_action_audit_event("http_land", out, cfg, handle.config.node_id))
-    RUNTIME_STATE_STORE.record_event(_action_audit_event("http_land", out, cfg, handle.config.node_id))
-    action_result_event = _action_audit_event("action_result", out, cfg, handle.config.node_id)
-    rt.audit.append(action_result_event)
-    RUNTIME_STATE_STORE.record_event(action_result_event)
-    return out
+    """Controlled LAND requiring fresh landed-state and disarmed evidence."""
+    return _execute_flight_action(LandRequest.from_json(payload), action="land")
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
@@ -411,6 +591,43 @@ def agent_status() -> dict[str, Any]:
 def simulation_status() -> dict[str, Any]:
     """Report Gazebo as unknown until independent simulator evidence exists."""
     return RUNTIME_STATE_STORE.simulation_status()
+
+
+def publish_simulation_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept Simulation-owned integrated health evidence; never infer it from PX4."""
+    try:
+        evidence = RUNTIME_STATE_STORE.update_simulation_evidence(payload)
+    except (TypeError, ValueError) as exc:
+        raise RequestValidationError(
+            "invalid_simulation_evidence",
+            "body",
+            str(exc),
+        ) from exc
+    return {"accepted": True, "evidence": evidence, "status": RUNTIME_STATE_STORE.simulation_status()}
+
+
+def publish_coordinate_calibration(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept Simulation-produced local-origin calibration for Runtime fusion."""
+    try:
+        calibration = RUNTIME_STATE_STORE.update_coordinate_calibration(payload)
+    except VehicleRegistryError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise RequestValidationError(
+            "invalid_coordinate_calibration",
+            "body",
+            str(exc),
+        ) from exc
+    return {"accepted": True, "calibration": calibration}
+
+
+def action_status(action_id: str) -> dict[str, Any]:
+    return RUNTIME_STATE_STORE.action(action_id)
+
+
+def action_lifecycle_recent(query: str = "") -> list[dict[str, Any]]:
+    values = parse_qs(query, keep_blank_values=True)
+    return RUNTIME_STATE_STORE.recent_actions(limit=_query_int(values, "n", 20))
 
 
 def capabilities(query: str = "") -> dict[str, Any]:
@@ -492,6 +709,8 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
         return _dispatch_known(method, normalized, path=path, payload=payload, query=query)
     except VehicleRegistryError as exc:
         return exc.status, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "vehicle_registry"}
+    except ActionLifecycleError as exc:
+        return exc.status, {"version": "1.1", "timestamp": _utc_now(), **exc.to_dict(), "source": "runtime_state_store"}
     except RequestValidationError as exc:
         return 400, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "runtime_http_bridge"}
 
@@ -502,9 +721,18 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
     if method == "POST" and normalized == "/api/backend/check":
         return 200, check_backend(payload)
     if method == "POST" and normalized == "/api/actions/smoke-takeoff":
-        return 200, smoke_takeoff(payload)
+        result = smoke_takeoff(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/actions/takeoff":
+        result = takeoff(payload)
+        return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/actions/land":
-        return 200, land(payload)
+        result = land(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/simulation/evidence":
+        return 200, publish_simulation_evidence(payload)
+    if method == "POST" and normalized == "/api/coordinates/calibration":
+        return 200, publish_coordinate_calibration(payload)
     if method == "POST" and normalized == "/api/planner/plan-mission":
         return 200, plan_mission(payload)
     if method == "GET" and normalized == "/api/replay":
@@ -515,6 +743,10 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, events(query)
     if method == "GET" and normalized == "/api/actions/recent":
         return 200, actions_recent(query)
+    if method == "GET" and normalized == "/api/actions/lifecycle":
+        return 200, action_lifecycle_recent(query)
+    if method == "GET" and normalized.startswith("/api/actions/"):
+        return 200, action_status(normalized.rsplit("/", 1)[-1])
     if method == "GET" and normalized == "/api/policy/decisions":
         return 200, policy_decisions(query)
     if method == "GET" and normalized == "/api/skills":
@@ -539,6 +771,9 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "type": event_type,
         "timestamp": _utc_now(),
         "action_id": out.get("action_id"),
+        "request_id": out.get("request_id"),
+        "trace_id": out.get("trace_id"),
+        "idempotency_key": out.get("idempotency_key"),
         "action": out.get("action"),
         "node_id": node_id,
         "backend": out.get("backend", "px4_sitl"),
@@ -551,6 +786,9 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "policy_decision": out.get("policy_decision"),
         "ack": {"arm_ack": out.get("arm_ack"), "takeoff_ack": out.get("takeoff_ack"), "land_ack": out.get("land_ack")},
         "altitude_observation": out.get("altitude_observation"),
+        "ack_evidence": out.get("ack_evidence"),
+        "completion_evidence": out.get("completion_evidence"),
+        "completion_state": out.get("completion_state"),
         "max_altitude_m": out.get("max_altitude_m"),
         "threshold_reached": out.get("threshold_reached"),
         "result": out.get("result"),

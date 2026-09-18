@@ -65,17 +65,23 @@ class FakeSession:
     def request_local_position_stream(self, **_: object) -> dict[str, object]:
         return {"result": 0, "timeout": False}
 
+    def request_landing_state_stream(self, **_: object) -> dict[str, object]:
+        return {"result": 0, "timeout": False}
+
     def arm(self, **_: object) -> dict[str, object]:
         return {"result": 0, "timeout": False}
 
     def takeoff(self, **_: object) -> dict[str, object]:
-        return {"result": 0, "timeout": False, "local_position_cursor": 0}
+        return {"result": 0, "timeout": False, "local_position_cursor": 0, "observation_cursor": 0}
 
     def observe_local_position_altitude(self, **_: object) -> dict[str, object]:
         return {"max_altitude_m": 2.0, "threshold_reached": True}
 
     def land(self, **_: object) -> dict[str, object]:
-        return {"result": 0, "timeout": False}
+        return {"result": 0, "timeout": False, "observation_cursor": 0}
+
+    def observe_landed_and_disarmed(self, **_: object) -> dict[str, object]:
+        return {"status": "succeeded", "telemetry_state": "fresh", "landed_state": 1, "armed": False, "completion_reached": True}
 
     def close(self) -> None:
         self.closed += 1
@@ -541,3 +547,36 @@ def test_dead_persistent_heartbeat_is_not_reported_online(
     assert state.last_error == (
         "gcs_heartbeat_send_failed:OSError: heartbeat tx failed"
     )
+
+
+def test_action_admission_is_per_node_and_reports_busy() -> None:
+    reg = registry()
+    for config in configs()[:2]:
+        reg.register_vehicle(config)
+
+    reg.admit_action("UAV-01", "takeoff", "act-1")
+    with pytest.raises(VehicleRegistryError) as caught:
+        reg.admit_action("UAV-01", "takeoff", "act-2")
+    other = reg.admit_action("UAV-02", "takeoff", "act-3")
+
+    assert caught.value.code == "node_busy"
+    assert caught.value.status == 409
+    assert caught.value.details == {"active_action": "takeoff", "active_action_id": "act-1"}
+    assert other["preempted_action_id"] is None
+
+
+def test_land_preempts_non_land_and_old_release_cannot_clear_land() -> None:
+    reg = registry()
+    handle = reg.register_vehicle(configs()[0])
+    takeoff = reg.admit_action("UAV-01", "takeoff", "act-takeoff")
+
+    landing = reg.admit_action("UAV-01", "land", "act-land")
+
+    assert takeoff["cancel_event"].is_set() is True
+    assert landing["preempted_action"] == "takeoff"
+    assert landing["preempted_action_id"] == "act-takeoff"
+    assert reg.release_action("UAV-01", "act-takeoff") is False
+    assert handle.runtime_state.active_action == "land"
+    assert handle.runtime_state.active_action_id == "act-land"
+    assert reg.release_action("UAV-01", "act-land") is True
+    assert handle.runtime_state.active_action is None

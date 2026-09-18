@@ -50,6 +50,8 @@ class ActionRequest:
 
     # canonical contract skeleton fields
     request_id: str = ""
+    action_id: str = ""
+    trace_id: str = ""
     mission_id: str = ""
     action_type: str = ""
     skill_group: str = "generic"
