@@ -5,7 +5,8 @@
   "description": "Standalone frontend prototype for 2026UAVSwarm Console.",
   "scripts": {
     "dev": "python -m http.server 5178 --directory .",
-    "check": "node --check runtime-api.js && node --check console-model.js && node --check app.js",
+    "dev:fixture-runtime": "node tests/fixture-runtime-server.js",
+    "check": "node --check runtime-api.js && node --check console-model.js && node --check app.js && node --check tests/fixture-runtime-server.js",
     "test": "node --test tests/*.test.js"
   }
 }
