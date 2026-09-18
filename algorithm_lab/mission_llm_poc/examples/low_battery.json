@@ -1,0 +1,171 @@
+{
+  "schema_version": "0.1",
+  "mission_id": "lab-inspection-001",
+  "snapshot_id": "synthetic-snapshot-001",
+  "source": "synthetic_benchmark",
+  "scene_id": "lab-campus",
+  "map_version": "lab-map-1",
+  "coordinate_frame": "scene_ned",
+  "objective": "使用 UAV-01、UAV-02、UAV-03 巡检园区 A/B/C，遵循给定结构化约束；不可用节点的任务可以由其他合格节点承担。",
+  "snapshot_age_ms": 0,
+  "snapshot_valid_for_ms": 120000,
+  "constraints": {
+    "min_battery_pct": 30,
+    "max_sample_age_ms": 120000,
+    "min_vehicles": 2,
+    "allow_partial": false,
+    "min_altitude_m": 3,
+    "max_altitude_m": 15
+  },
+  "fleet": [
+    {
+      "node_id": "UAV-01",
+      "connected": true,
+      "stale": false,
+      "battery_pct": 80,
+      "capabilities": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "current_assignment": null,
+      "spatial": {
+        "frame": "scene_ned",
+        "scene_id": "lab-campus",
+        "map_version": "lab-map-1",
+        "public_position_usable": true,
+        "sample_age_ms": 0,
+        "position_m": {
+          "north_m": 0,
+          "east_m": -20,
+          "down_m": 0
+        }
+      }
+    },
+    {
+      "node_id": "UAV-02",
+      "connected": true,
+      "stale": false,
+      "battery_pct": 10,
+      "capabilities": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "current_assignment": null,
+      "spatial": {
+        "frame": "scene_ned",
+        "scene_id": "lab-campus",
+        "map_version": "lab-map-1",
+        "public_position_usable": true,
+        "sample_age_ms": 0,
+        "position_m": {
+          "north_m": 0,
+          "east_m": 0,
+          "down_m": 0
+        }
+      }
+    },
+    {
+      "node_id": "UAV-03",
+      "connected": true,
+      "stale": false,
+      "battery_pct": 80,
+      "capabilities": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "current_assignment": null,
+      "spatial": {
+        "frame": "scene_ned",
+        "scene_id": "lab-campus",
+        "map_version": "lab-map-1",
+        "public_position_usable": true,
+        "sample_age_ms": 0,
+        "position_m": {
+          "north_m": 0,
+          "east_m": 20,
+          "down_m": 0
+        }
+      }
+    }
+  ],
+  "waypoints": [
+    {
+      "waypoint_id": "WP-1",
+      "position_m": {
+        "north_m": 30,
+        "east_m": -20,
+        "down_m": -8
+      }
+    },
+    {
+      "waypoint_id": "WP-2",
+      "position_m": {
+        "north_m": 30,
+        "east_m": 0,
+        "down_m": -8
+      }
+    },
+    {
+      "waypoint_id": "WP-3",
+      "position_m": {
+        "north_m": 30,
+        "east_m": 20,
+        "down_m": -8
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "TASK-1",
+      "region_id": "A",
+      "required_actions": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "waypoint_ids": [
+        "WP-1"
+      ]
+    },
+    {
+      "task_id": "TASK-2",
+      "region_id": "B",
+      "required_actions": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "waypoint_ids": [
+        "WP-2"
+      ]
+    },
+    {
+      "task_id": "TASK-3",
+      "region_id": "C",
+      "required_actions": [
+        "TAKEOFF",
+        "GOTO",
+        "OBSERVE",
+        "RETURN_HOME",
+        "LAND"
+      ],
+      "waypoint_ids": [
+        "WP-3"
+      ]
+    }
+  ],
+  "policy_denials": []
+}

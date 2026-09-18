@@ -1,0 +1,3510 @@
+{
+  "report_type": "scaffold_validation",
+  "model_executed": false,
+  "model_quality_metrics": null,
+  "created_at": "2026-09-17T12:34:12.484610+00:00",
+  "corpus_hash": "f34a9adc21abc3f556b8b2b2ebddac12fcc220eabed2fd0cbe47f2dc7367d3ed",
+  "total": 40,
+  "passed": 40,
+  "results": [
+    {
+      "case_id": "normal_three_uav",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "91842580d8fa136793bfbeae98fb42f113a55b40ecdf62a2058e87693308993c"
+    },
+    {
+      "case_id": "uav02_offline",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_stale",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_low_battery",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_unknown_battery",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_busy",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_missing_goto",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_policy_denied",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "all_goto_denied",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "8f5410f6d7cca0e332d8d98994c3893ed1c1d5a8c72554f0938aa8eb9d47b674"
+    },
+    {
+      "case_id": "only_one_available",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "8f5410f6d7cca0e332d8d98994c3893ed1c1d5a8c72554f0938aa8eb9d47b674"
+    },
+    {
+      "case_id": "all_offline",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "8f5410f6d7cca0e332d8d98994c3893ed1c1d5a8c72554f0938aa8eb9d47b674"
+    },
+    {
+      "case_id": "empty_fleet",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "8f5410f6d7cca0e332d8d98994c3893ed1c1d5a8c72554f0938aa8eb9d47b674"
+    },
+    {
+      "case_id": "uav02_local_frame",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_uncalibrated",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_old_position",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_wrong_map",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_wrong_scene",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "uav02_position_unknown",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "ceb081378ec8b2075c09f75ed404c391ea4008a8de783d40536c0c4d10e2a317"
+    },
+    {
+      "case_id": "battery_boundary",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "91842580d8fa136793bfbeae98fb42f113a55b40ecdf62a2058e87693308993c"
+    },
+    {
+      "case_id": "three_required_offline",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "INSUFFICIENT_FLEET",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "INSUFFICIENT_FLEET",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "8f5410f6d7cca0e332d8d98994c3893ed1c1d5a8c72554f0938aa8eb9d47b674"
+    },
+    {
+      "case_id": "partial_allowed",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Only explicitly allowed partial task allocation is proposed.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "PARTIAL_MISSION",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "degraded",
+        "unassigned_tasks": [
+          {
+            "explanation": "No eligible node: CAPABILITY_MISSING",
+            "reason_code": "NO_ELIGIBLE_VEHICLE",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Only explicitly allowed partial task allocation is proposed.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "PARTIAL_MISSION",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "degraded",
+        "unassigned_tasks": [
+          {
+            "explanation": "No eligible node: CAPABILITY_MISSING",
+            "reason_code": "NO_ELIGIBLE_VEHICLE",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "c6bceaa38cc20fe6938b8ed23c1499a1e39cfb6049481492117b19a3f4fb9fcf"
+    },
+    {
+      "case_id": "partial_forbidden",
+      "kind": "mission",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": true,
+      "errors": [],
+      "candidate": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "REQUEST_REJECTED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": {
+        "assignments": [],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Structured requirements cannot be satisfied by this reference allocation.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "REQUEST_REJECTED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "rejected",
+        "unassigned_tasks": [
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-1"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-2"
+          },
+          {
+            "explanation": "Mission rejected; no execution proposed.",
+            "reason_code": "REQUEST_REJECTED",
+            "task_id": "TASK-3"
+          }
+        ],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "output_hash": "83faa43ca0ffc83256239c545621a4af940d73fcf4394afebb7511d9cc957922"
+    },
+    {
+      "case_id": "expired_snapshot",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "SNAPSHOT_EXPIRED"
+      ]
+    },
+    {
+      "case_id": "duplicate_nodes",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "DUPLICATE_NODE_ID"
+      ]
+    },
+    {
+      "case_id": "unknown_task_waypoint",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "UNKNOWN_TASK_WAYPOINT:TASK-1"
+      ]
+    },
+    {
+      "case_id": "waypoint_altitude",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "WAYPOINT_ALTITUDE_OUT_OF_RANGE:WP-1"
+      ]
+    },
+    {
+      "case_id": "altitude_inverted",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "ALTITUDE_RANGE_INVALID",
+        "WAYPOINT_ALTITUDE_OUT_OF_RANGE:WP-1",
+        "WAYPOINT_ALTITUDE_OUT_OF_RANGE:WP-2",
+        "WAYPOINT_ALTITUDE_OUT_OF_RANGE:WP-3"
+      ]
+    },
+    {
+      "case_id": "unknown_policy_node",
+      "kind": "invalid_input",
+      "passed": true,
+      "errors": [
+        "UNKNOWN_POLICY_NODE:UAV-99"
+      ]
+    },
+    {
+      "case_id": "hallucinated_node",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "UNKNOWN_NODE:UAV-99"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-99",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "4c97f3d6de6adc4b6536a762da9ebf51a9128888c71292799242b3960eedf9e8"
+    },
+    {
+      "case_id": "hallucinated_action",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "OUTPUT_SCHEMA: assignments/0/actions/0: 'TELEPORT' is not one of ['TAKEOFF', 'GOTO', 'OBSERVE', 'HOLD', 'RETURN_HOME', 'LAND']"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TELEPORT"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "d67e92be1d19058d0bfe148d8c95866a9ceec92dd53e5d7b42e686c7c1425817"
+    },
+    {
+      "case_id": "hallucinated_waypoint",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "WAYPOINT_SEQUENCE_MISMATCH:TASK-1"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-99"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "283c51b310a98a58004839b65c8ca8890722b7184e7a3d1b54639d27c2b6bf87"
+    },
+    {
+      "case_id": "wrong_snapshot",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "CONTEXT_MISMATCH:snapshot_id"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "stale-snapshot",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "4ee5367c3f924789e1e0d61895bdebac1761b0f47022ffd4204ce34939ffeab6"
+    },
+    {
+      "case_id": "claims_execution",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "OUTPUT_SCHEMA: execution_authorized: False was expected"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": true,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "9bc3fe90fcbadfac73ace3d2e95de73fd143f020b2a62aad4ef4bdc9182cdb7a"
+    },
+    {
+      "case_id": "drops_task",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "MISSING_TASK"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "9eea06316b507431de982906316bcd6fc7874c7d426ebf3556cf7b5f22d2e190"
+    },
+    {
+      "case_id": "duplicates_task",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "DUPLICATE_TASK",
+        "MISSING_TASK",
+        "WAYPOINT_SEQUENCE_MISMATCH:TASK-1"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "c0f5a49ac01c880b29db5e03c5fd070e8ed8b27759978e25134d0feba6230ed2"
+    },
+    {
+      "case_id": "bad_action_order",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": true,
+      "accepted": false,
+      "errors": [
+        "ACTION_SEQUENCE_MISMATCH:TASK-1"
+      ],
+      "candidate": {
+        "assignments": [
+          {
+            "actions": [
+              "LAND",
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-01",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-1",
+            "waypoint_ids": [
+              "WP-1"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-02",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-2",
+            "waypoint_ids": [
+              "WP-2"
+            ]
+          },
+          {
+            "actions": [
+              "TAKEOFF",
+              "GOTO",
+              "OBSERVE",
+              "RETURN_HOME",
+              "LAND"
+            ],
+            "explanation": "Eligible node; lowest assigned task count, then node_id.",
+            "node_id": "UAV-03",
+            "reason_code": "ASSIGNED",
+            "task_id": "TASK-3",
+            "waypoint_ids": [
+              "WP-3"
+            ]
+          }
+        ],
+        "coordinate_frame": "scene_ned",
+        "execution_authorized": false,
+        "explanation": "Reference greedy allocation from structured tasks; objective text not interpreted.",
+        "map_version": "lab-map-1",
+        "mission_id": "lab-inspection-001",
+        "reason_code": "MISSION_PROPOSED",
+        "scene_id": "lab-campus",
+        "schema_version": "0.1",
+        "snapshot_id": "synthetic-snapshot-001",
+        "status": "proposed",
+        "unassigned_tasks": [],
+        "warnings": [
+          "PROPOSAL_ONLY: no execution authorization",
+          "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+          "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling"
+        ]
+      },
+      "accepted_proposal": null,
+      "output_hash": "88673a72873909eafbe9efd6b82d2fba3f03383f2f5d8aa25878cc8de02ee86d"
+    },
+    {
+      "case_id": "non_json",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "INVALID_JSON: Expecting value: line 1 column 1 (char 0)"
+      ],
+      "candidate": null,
+      "accepted_proposal": null,
+      "output_hash": null
+    },
+    {
+      "case_id": "duplicate_json_key",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "INVALID_JSON: duplicate JSON key: status"
+      ],
+      "candidate": null,
+      "accepted_proposal": null,
+      "output_hash": null
+    },
+    {
+      "case_id": "non_finite_json",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "INVALID_JSON: non-finite JSON number: NaN"
+      ],
+      "candidate": null,
+      "accepted_proposal": null,
+      "output_hash": null
+    },
+    {
+      "case_id": "markdown_json",
+      "kind": "validator_mutation",
+      "passed": true,
+      "schema_valid": false,
+      "accepted": false,
+      "errors": [
+        "INVALID_JSON: Expecting value: line 1 column 1 (char 0)"
+      ],
+      "candidate": null,
+      "accepted_proposal": null,
+      "output_hash": null
+    }
+  ]
+}
