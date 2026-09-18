@@ -4,6 +4,7 @@ import {
   Cesium3DTileset,
   ClockRange,
   Color,
+  DirectionalLight,
   EllipsoidTerrainProvider,
   GridImageryProvider,
   HeadingPitchRange,
@@ -18,11 +19,28 @@ import {
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import "./styles.css";
 import { createCampusScene } from "./campus-scene.js";
-import { DemoVehicleFeed } from "./demo-vehicle-feed.js";
+import { createCityScene } from "./city-scene.js";
+import { CITY_VIEWS } from "./city-layout.js";
 import {
-  VEHICLE_CONTRACT_VERSION,
-} from "./vehicle-contract.js";
+  createIcons,
+  Building2,
+  Map,
+  Layers,
+  Mountain,
+  Route,
+  Crosshair,
+  Home,
+  Plus,
+  Minus,
+  Compass,
+  Radio,
+} from "lucide";
+import { DemoVehicleFeed } from "./demo-vehicle-feed.js";
+import { VEHICLE_CONTRACT_VERSION } from "./vehicle-contract.js";
 import { VehicleLayer } from "./vehicle-layer.js";
+import { QINGLAN_SCENE, RECON_SCENE } from "./scene-alignment.js";
+import { createReferenceScene } from "./reference-scene.js";
+import { createParentMessageHandler } from "./parent-bridge.js";
 import {
   RuntimeVehicleSnapshotPoller,
   VehicleSnapshotState,
@@ -34,15 +52,28 @@ const SCENE_ANCHOR = Object.freeze({
   latitude: 39.9075,
   altitude: 0,
 });
+const DISPLAY_ONLY_SCENE = Object.freeze({});
 
 const sceneDefinitions = Object.freeze({
+  city: {
+    liveProfile: QINGLAN_SCENE,
+    label: "青岚市",
+    kind: "city",
+    showVehicles: true,
+    range: CITY_VIEWS.city.range,
+  },
   campus: {
+    liveProfile: DISPLAY_ONLY_SCENE,
     label: "任务园区",
     kind: "campus",
     showVehicles: true,
     range: 520,
   },
-  "1.1": {
+  recon: {
+    label: "后端任务坐标", kind: "reference", showVehicles: true,
+    liveProfile: RECON_SCENE, range: 330,
+  },
+  1.1: {
     label: "3D Tiles 1.1",
     kind: "tileset",
     url: "./tiles/1.1/MetadataGranularities/tileset.json",
@@ -104,21 +135,23 @@ const viewer = new Viewer("cesium-container", {
   timeline: false,
 });
 
+viewer.scene.backgroundColor = Color.fromCssColorString("#c1cbd0");
+viewer.scene.globe.baseColor = Color.fromCssColorString("#9cab91");
 viewer.imageryLayers.addImageryProvider(
   new GridImageryProvider({
-    cells: 20,
-    color: Color.fromCssColorString("#2a6974").withAlpha(0.3),
-    glowColor: Color.fromCssColorString("#071015").withAlpha(0.16),
-    backgroundColor: Color.fromCssColorString("#0a1b20"),
+    color: Color.TRANSPARENT,
+    glowColor: Color.TRANSPARENT,
+    backgroundColor: Color.fromCssColorString("#9cab91"),
   }),
 );
-viewer.scene.backgroundColor = Color.fromCssColorString("#050a0d");
-viewer.scene.globe.baseColor = Color.fromCssColorString("#0a1b20");
+viewer.scene.skyBox.show = false;
 viewer.scene.globe.showGroundAtmosphere = false;
 viewer.scene.skyAtmosphere.show = false;
 viewer.scene.fog.enabled = false;
 viewer.scene.requestRenderMode = false;
-viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
+viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+viewer.scene.screenSpaceCameraController.minimumZoomDistance = 35;
+viewer.scene.screenSpaceCameraController.maximumZoomDistance = 16000;
 
 const sceneOrigin = Cartesian3.fromDegrees(
   SCENE_ANCHOR.longitude,
@@ -126,6 +159,21 @@ const sceneOrigin = Cartesian3.fromDegrees(
   SCENE_ANCHOR.altitude,
 );
 const missionFrame = Transforms.eastNorthUpToFixedFrame(sceneOrigin);
+let vehicleFrame = missionFrame;
+const reconOrigin = Cartesian3.fromDegrees(RECON_SCENE.anchor.longitude, RECON_SCENE.anchor.latitude, RECON_SCENE.anchor.altitude);
+const reconFrame = Transforms.eastNorthUpToFixedFrame(reconOrigin);
+viewer.scene.light = new DirectionalLight({
+  direction: Cartesian3.normalize(
+    Matrix4.multiplyByPointAsVector(
+      missionFrame,
+      new Cartesian3(0.5, 0.35, -1),
+      new Cartesian3(),
+    ),
+    new Cartesian3(),
+  ),
+  intensity: 1.1,
+});
+viewer.shadowMap.enabled = false;
 
 function enuToWorld(eastM, northM, upM) {
   return Matrix4.multiplyByPoint(
@@ -143,12 +191,18 @@ function positionToWorld(position) {
       position.altitudeM,
     );
   }
-  return enuToWorld(position.eastM, position.northM, position.upM);
+  return Matrix4.multiplyByPoint(vehicleFrame, new Cartesian3(position.eastM, position.northM, position.upM), new Cartesian3());
 }
 
 const campusScene = createCampusScene(viewer, (position) =>
   enuToWorld(position[0], position[1], position[2]),
 );
+const cityScene = createCityScene(viewer, missionFrame, (p) =>
+  enuToWorld(...p),
+);
+const referenceScene = createReferenceScene(viewer, p => Matrix4.multiplyByPoint(reconFrame, new Cartesian3(...p), new Cartesian3()));
+document.querySelector("#city-statistics").textContent =
+  `${cityScene.stats.buildings} 栋建筑 · ${cityScene.stats.trees.toLocaleString()} 株乔木 · 10.08 km²`;
 const vehicleLayer = new VehicleLayer(viewer, positionToWorld);
 const demoFeed = new DemoVehicleFeed();
 const embedded = window.parent !== window;
@@ -157,7 +211,7 @@ const runtimeApiBaseUrl =
   queryParameters.get("runtimeApiBaseUrl") ||
   import.meta.env.VITE_RUNTIME_API_BASE_URL ||
   "/api";
-const snapshotState = new VehicleSnapshotState();
+const snapshotState = new VehicleSnapshotState({ scene: QINGLAN_SCENE });
 
 const startTime = JulianDate.now();
 const stopTime = JulianDate.addSeconds(
@@ -173,7 +227,9 @@ viewer.clock.multiplier = 1;
 viewer.clock.shouldAnimate = false;
 
 let activeTileset;
-let activeSceneId = "campus";
+let activeSceneId = "city";
+let activeViewId = "city";
+let sceneLoadGeneration = 0;
 let followEnabled = false;
 let lastDemoUpdateSeconds = -1;
 let latestSnapshot;
@@ -243,6 +299,8 @@ function refreshSelectedTelemetry() {
       elements.telemetryBattery,
       elements.telemetrySource,
       elements.telemetryAgent,
+      document.querySelector("#telemetry-age"),
+      document.querySelector("#telemetry-alignment"),
     ]) {
       element.textContent = "--";
     }
@@ -252,20 +310,20 @@ function refreshSelectedTelemetry() {
 
   const { vehicle, worldPosition } = record;
   const stale = vehicleLayer.isRecordStale(record);
-  const cartographic = Cartographic.fromCartesian(worldPosition);
+  const cartographic = worldPosition ? Cartographic.fromCartesian(worldPosition) : null;
   elements.selectedId.textContent = vehicle.displayName;
   elements.selectedType.textContent = typeLabel(vehicle.vehicleType);
   elements.selectedMode.textContent = stale
     ? `${vehicle.telemetry.mode} · STALE`
     : vehicle.telemetry.mode;
   elements.telemetryPanel.dataset.state = stale ? "stale" : "fresh";
-  elements.telemetryLat.textContent =
-    `${CesiumMath.toDegrees(cartographic.latitude).toFixed(6)}°`;
-  elements.telemetryLon.textContent =
-    `${CesiumMath.toDegrees(cartographic.longitude).toFixed(6)}°`;
-  elements.telemetryAlt.textContent = `${cartographic.height.toFixed(1)} m`;
-  elements.telemetrySpeed.textContent =
-    `${vehicle.velocity.groundSpeedMps.toFixed(1)} m/s`;
+  elements.telemetryLat.textContent = cartographic ? `${CesiumMath.toDegrees(cartographic.latitude).toFixed(6)}°` : "--";
+  elements.telemetryLon.textContent = cartographic ? `${CesiumMath.toDegrees(cartographic.longitude).toFixed(6)}°` : "--";
+  const height = vehicle.position?.frame === "ENU" ? vehicle.position.upM : vehicle.position?.altitudeM;
+  elements.telemetryAlt.textContent = cartographic && Number.isFinite(height) ? `${height.toFixed(1)} m` : "--";
+  document.querySelector("#telemetry-alignment").textContent = vehicle.alignment?.reason || (worldPosition ? "公共位置已校验" : "场景未对齐");
+  document.querySelector("#telemetry-age").textContent = vehicle.telemetry.ageMs == null ? "--" : `${((vehicle.telemetry.ageMs + Date.now() - record.receivedAtMs) / 1000).toFixed(1)} s`;
+  elements.telemetrySpeed.textContent = `${vehicle.velocity.groundSpeedMps.toFixed(1)} m/s`;
   elements.telemetryBattery.textContent =
     vehicle.telemetry.batteryPercent >= 0
       ? `${vehicle.telemetry.batteryPercent.toFixed(0)}%`
@@ -273,7 +331,7 @@ function refreshSelectedTelemetry() {
   elements.telemetrySource.textContent = vehicle.source.label;
   elements.telemetryAgent.textContent = vehicle.agent.id
     ? `${vehicle.agent.status} · ${vehicle.agent.id}`
-    : "unassigned";
+    : "未提供";
 }
 
 function setSelectedVehicle(vehicleId) {
@@ -282,7 +340,7 @@ function setSelectedVehicle(vehicleId) {
   refreshSelectedTelemetry();
   if (followEnabled) {
     viewer.trackedEntity =
-      vehicleLayer.getSelectedRecord()?.entity || undefined;
+      vehicleLayer.getSelectedRecord()?.worldPosition ? vehicleLayer.getSelectedRecord().entity : undefined;
   }
 }
 
@@ -319,7 +377,15 @@ function updateSourceUi(snapshot) {
 
 function refreshSourceStatus(nowMs = Date.now()) {
   const status = snapshotState.statusAt(nowMs);
-  const sourceLabel = latestSnapshot?.source.label ||
+  vehicleLayer.refreshFreshness();
+  const mismatched = vehicleLayer.getRecords().filter(record => record.vehicle.alignment?.aligned === false || (record.vehicle.publicValidUntilMs != null && nowMs > record.vehicle.publicValidUntilMs));
+  const alignmentElement = document.querySelector("#scene-alignment");
+  alignmentElement.dataset.state = status.mode === "demo" ? "demo" : mismatched.length || !latestSnapshot ? "mismatch" : "aligned";
+  alignmentElement.textContent = status.mode === "demo" ? "DEMO · 本地演示坐标" : mismatched.length
+    ? `场景未对齐 · ${mismatched[0].vehicle.alignment?.reason || "标定已过期"}`
+    : !latestSnapshot ? "场景未对齐 · 等待公共坐标证据" : vehicleLayer.getRecords().length ? "公共坐标已校验 · 物理场景未验收" : "等待载具坐标";
+  const sourceLabel =
+    latestSnapshot?.source.label ||
     (status.transport === "runtime" ? "RUNTIME API" : "MAIN CONSOLE");
 
   if (!latestSnapshot && status.mode === "live") {
@@ -337,7 +403,11 @@ function refreshSourceStatus(nowMs = Date.now()) {
         ? "LIVE · STALE"
         : status.connection === "connected"
           ? "LIVE"
-          : status.connection.toUpperCase();
+        : status.connection.toUpperCase();
+  if (status.mode === "live" && mismatched.length) {
+    elements.sourceStatus.textContent = "LIVE · 场景未对齐";
+    elements.statusDot.dataset.state = "stale";
+  }
 
   elements.liveButton.classList.toggle("active", status.mode === "live");
   elements.demoButton.classList.toggle("active", status.mode === "demo");
@@ -348,11 +418,15 @@ function refreshSourceStatus(nowMs = Date.now()) {
       : viewer.clock.shouldAnimate
         ? "暂停"
         : "播放";
-  elements.progress.classList.toggle("live", status.mode === "live" && !status.stale);
+  elements.progress.classList.toggle(
+    "live",
+    status.mode === "live" && !status.stale,
+  );
   elements.progress.classList.toggle("stale", status.stale);
 
   if (status.mode === "live") {
-    elements.progress.style.width = status.lastAcceptedAtMs === null ? "0%" : "100%";
+    elements.progress.style.width =
+      status.lastAcceptedAtMs === null ? "0%" : "100%";
     elements.missionTime.value = status.stale
       ? `STALE · ${(status.ageMs / 1000).toFixed(1)}s`
       : status.connection === "connected"
@@ -386,7 +460,7 @@ function handleRawSnapshot(rawSnapshot, transport) {
     throw error;
   }
 
-  if (transport === "parent" || transport === "bridge") {
+  if ((transport === "parent" || transport === "bridge") && (result.accepted || snapshotState.transport === transport)) {
     runtimePoller.stop();
   }
   if (result.accepted) {
@@ -429,6 +503,7 @@ function useLive() {
 }
 
 function useDemo() {
+  if (!["city", "campus"].includes(activeSceneId)) loadScene("city");
   runtimePoller.stop();
   snapshotState.activateDemo();
   viewer.clock.currentTime = startTime.clone();
@@ -455,17 +530,15 @@ function updateDemo(clock) {
   if (!result.accepted) {
     return;
   }
-  const progress = Math.max(
-    0,
-    Math.min(1, elapsed / demoFeed.durationSeconds),
-  );
+  const progress = Math.max(0, Math.min(1, elapsed / demoFeed.durationSeconds));
   elements.progress.style.width = `${progress * 100}%`;
-  elements.missionTime.value =
-    `${formatMissionTime(elapsed)} / ${formatMissionTime(demoFeed.durationSeconds)}`;
+  elements.missionTime.value = `${formatMissionTime(elapsed)} / ${formatMissionTime(demoFeed.durationSeconds)}`;
 }
 
 const runtimePoller = new RuntimeVehicleSnapshotPoller({
-  fetchSnapshot: createRuntimeSnapshotFetcher({ apiBaseUrl: runtimeApiBaseUrl }),
+  fetchSnapshot: createRuntimeSnapshotFetcher({
+    apiBaseUrl: runtimeApiBaseUrl,
+  }),
   onSnapshot: async (rawSnapshot) => {
     handleRawSnapshot(rawSnapshot, "runtime");
   },
@@ -477,18 +550,35 @@ const runtimePoller = new RuntimeVehicleSnapshotPoller({
 
 async function loadScene(sceneId) {
   const definition = sceneDefinitions[sceneId];
+  if (!definition) return;
+  vehicleFrame = definition.kind === "reference" ? reconFrame : missionFrame;
+  if (snapshotState.setScene(definition.liveProfile || DISPLAY_ONLY_SCENE)) clearDisplayedFleet("等待场景快照");
+  document.querySelector("#scene-select").value = sceneId;
+  const generation = ++sceneLoadGeneration;
   elements.status.textContent = `正在加载 ${definition.label}`;
   elements.error.hidden = true;
+  document.querySelector("#scene-title").textContent = definition.label;
+  document.querySelector("#city-statistics").hidden =
+    definition.kind !== "city";
+  document.querySelector("#map-location").textContent = definition.label;
 
   if (activeTileset) {
     viewer.scene.primitives.remove(activeTileset);
     activeTileset = undefined;
   }
   campusScene.setVisible(definition.kind === "campus");
+  cityScene.setVisible(definition.kind === "city");
+  referenceScene.setVisible(definition.kind === "reference");
+  document.querySelector("#map-datum").textContent = definition.kind === "reference"
+    ? "simple_recon_v0_1 · 局部参考面 · 未地理配准"
+    : "青岚市 · 仅展示 · 未导入 Gazebo";
+  document.querySelector(".map-caption-coordinate").textContent = definition.kind === "reference" ? "ENU / m / 场景相对高" : "116.3913° E / 39.9075° N";
+  document.querySelector("#city-tools").hidden = definition.kind !== "city";
   vehicleLayer.setVisible(definition.showVehicles);
 
-  if (definition.kind === "campus") {
+  if (["campus", "city", "reference"].includes(definition.kind)) {
     activeSceneId = sceneId;
+    activeViewId = definition.kind === "city" ? "city" : "campus";
     elements.status.textContent = `${definition.label} · READY`;
     await focusScene();
     return;
@@ -498,6 +588,10 @@ async function loadScene(sceneId) {
     const tileset = await Cesium3DTileset.fromUrl(definition.url, {
       maximumScreenSpaceError: 12,
     });
+    if (generation !== sceneLoadGeneration) {
+      tileset.destroy();
+      return;
+    }
     viewer.scene.primitives.add(tileset);
     if (definition.anchorToMission) {
       tileset.modelMatrix = Transforms.eastNorthUpToFixedFrame(sceneOrigin);
@@ -507,6 +601,7 @@ async function loadScene(sceneId) {
     elements.status.textContent = `${definition.label} · READY`;
     await focusScene();
   } catch (error) {
+    if (generation !== sceneLoadGeneration) return;
     elements.status.textContent = `${definition.label} · ERROR`;
     elements.error.textContent = `场景加载失败：${error.message}`;
     elements.error.hidden = false;
@@ -518,6 +613,15 @@ async function focusScene() {
   elements.followButton.classList.remove("active");
   viewer.trackedEntity = undefined;
   const definition = sceneDefinitions[activeSceneId];
+  if (definition.kind === "reference") {
+    viewer.camera.lookAt(reconOrigin, new HeadingPitchRange(CesiumMath.toRadians(-25), CesiumMath.toRadians(-50), definition.range));
+    return;
+  }
+
+  if (definition.kind === "city") {
+    focusCityView(activeViewId);
+    return;
+  }
 
   if (definition.kind === "campus" || definition.anchorToMission) {
     viewer.camera.lookAt(
@@ -543,17 +647,124 @@ async function focusScene() {
   }
 }
 
+function focusCityView(id) {
+  const view = CITY_VIEWS[id];
+  if (!view || activeSceneId !== "city") return;
+  activeViewId = id;
+  followEnabled = false;
+  elements.followButton.classList.remove("active");
+  viewer.trackedEntity = undefined;
+  viewer.camera.lookAt(
+    enuToWorld(...view.target),
+    new HeadingPitchRange(
+      CesiumMath.toRadians(view.heading),
+      CesiumMath.toRadians(view.pitch),
+      view.range,
+    ),
+  );
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === id);
+    button.setAttribute("aria-pressed", String(button.dataset.view === id));
+  });
+  document.querySelector("#map-location").textContent = view.label;
+  viewer.scene.requestRender();
+}
+
+createIcons({
+  icons: {
+    Building2,
+    Map,
+    Layers,
+    Mountain,
+    Route,
+    Crosshair,
+    Home,
+    Plus,
+    Minus,
+    Compass,
+    Radio,
+  },
+});
+document
+  .querySelectorAll("[data-view]")
+  .forEach((button) =>
+    button.addEventListener("click", () => focusCityView(button.dataset.view)),
+  );
+document
+  .querySelectorAll("[data-city-layer]")
+  .forEach((input) =>
+    input.addEventListener("change", () =>
+      cityScene.setLayer(input.dataset.cityLayer, input.checked),
+    ),
+  );
+document
+  .querySelector("#shadows-toggle")
+  .addEventListener("change", (event) => {
+    viewer.shadowMap.enabled = event.target.checked;
+    viewer.scene.requestRender();
+  });
+document
+  .querySelector("#zoom-in")
+  .addEventListener("click", () =>
+    viewer.camera.zoomIn(
+      Math.max(20, viewer.camera.positionCartographic.height * 0.22),
+    ),
+  );
+document
+  .querySelector("#zoom-out")
+  .addEventListener("click", () =>
+    viewer.camera.zoomOut(
+      Math.max(20, viewer.camera.positionCartographic.height * 0.22),
+    ),
+  );
+document.querySelector("#north-button").addEventListener("click", () => {
+  followEnabled = false;
+  elements.followButton.classList.remove("active");
+  viewer.trackedEntity = undefined;
+  if (activeSceneId === "city") {
+    const view = CITY_VIEWS[activeViewId];
+    viewer.camera.lookAt(
+      enuToWorld(...view.target),
+      new HeadingPitchRange(0, CesiumMath.toRadians(-65), view.range),
+    );
+  } else {
+    viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+    viewer.camera.setView({
+      orientation: { heading: 0, pitch: CesiumMath.toRadians(-65), roll: 0 },
+    });
+  }
+});
+document.querySelectorAll("button[data-panel]").forEach((button) =>
+  button.addEventListener("click", () => {
+    const shell = document.querySelector(".simulation-shell");
+    const key = button.dataset.panel;
+    const open = shell.dataset.panel === key;
+    shell.dataset.panel = open ? "" : key;
+    document
+      .querySelectorAll("button[data-panel]")
+      .forEach((control) =>
+        control.setAttribute(
+          "aria-expanded",
+          String(!open && control.dataset.panel === key),
+        ),
+      );
+  }),
+);
+
 document
   .querySelector("#scene-select")
   .addEventListener("change", (event) => loadScene(event.target.value));
 
-document.querySelector("#home-button").addEventListener("click", focusScene);
+document.querySelector("#home-button").addEventListener("click", () => {
+  if (activeSceneId === "city") focusCityView("campus");
+  else focusScene();
+});
 
 elements.followButton.addEventListener("click", () => {
   followEnabled = !followEnabled;
   elements.followButton.classList.toggle("active", followEnabled);
   viewer.trackedEntity = followEnabled
-    ? vehicleLayer.getSelectedRecord()?.entity
+    ? (vehicleLayer.getSelectedRecord()?.worldPosition ? vehicleLayer.getSelectedRecord().entity : undefined)
     : undefined;
 });
 
@@ -577,7 +788,9 @@ elements.playButton.addEventListener("click", () => {
     return;
   }
   viewer.clock.shouldAnimate = !viewer.clock.shouldAnimate;
-  elements.playButton.textContent = viewer.clock.shouldAnimate ? "暂停" : "播放";
+  elements.playButton.textContent = viewer.clock.shouldAnimate
+    ? "暂停"
+    : "播放";
   elements.playButton.title = viewer.clock.shouldAnimate
     ? "暂停本地演示"
     : "播放本地演示";
@@ -617,6 +830,7 @@ const bridge = Object.freeze({
       source: latestSnapshot?.source || null,
       vehicleCount: vehicleLayer.getRecords().length,
       selectedVehicleId: vehicleLayer.selectedVehicleId,
+      alignment: vehicleLayer.getRecords().map(record => ({ id: record.vehicle.id, aligned: record.vehicle.alignment?.aligned ?? snapshotState.mode === "demo", reason: record.vehicle.alignment?.reason || "", position: record.worldPosition ? record.vehicle.position : null, trailLength: record.trailPositions.length })),
     };
   },
 });
@@ -629,25 +843,13 @@ const allowedMessageOrigins = new Set([
   "http://127.0.0.1:5173",
   "http://localhost:5173",
 ]);
-window.addEventListener("message", (event) => {
-  if (!allowedMessageOrigins.has(event.origin)) {
-    return;
-  }
-  if (event.data?.type === "uav-swarm/vehicle-snapshot") {
-    try {
-      applyExternalSnapshot(event.data.payload, "parent");
-    } catch (error) {
-      elements.error.textContent = `载具快照无效：${error.message}`;
-      elements.error.hidden = false;
-    }
-  }
-  if (event.data?.type === "uav-swarm/use-demo") {
-    useDemo();
-  }
-  if (event.data?.type === "uav-swarm/use-live") {
-    useLive();
-  }
-});
+window.addEventListener("message", createParentMessageHandler({
+  parentWindow: window.parent, selfWindow: window, allowedOrigins: allowedMessageOrigins,
+  expectedOrigin: document.referrer ? new URL(document.referrer).origin : null,
+  onSnapshot: payload => applyExternalSnapshot(payload, "parent"),
+  onMode: mode => mode === "demo" ? useDemo() : useLive(),
+  onError: error => { elements.error.textContent = `载具快照无效：${error.message}`; elements.error.hidden = false; },
+}));
 
 if (window.parent !== window) {
   const parentOrigin = document.referrer

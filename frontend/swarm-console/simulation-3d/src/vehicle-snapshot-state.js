@@ -2,6 +2,7 @@ import {
   VEHICLE_CONTRACT_VERSION,
   normalizeVehicleSnapshot,
 } from "./vehicle-contract.js";
+import { projectPublicVehicle } from "./scene-alignment.js";
 
 export const DEFAULT_STALE_AFTER_MS = 3_000;
 
@@ -17,7 +18,7 @@ function transportPriority(transport) {
 }
 
 function hasFreshPose(vehicle) {
-  return vehicle.connected && !vehicle.telemetry.stale;
+  return vehicle.connected && !vehicle.telemetry.stale && vehicle.positionUsable !== false;
 }
 
 function preserveTrustedPose(vehicle, previousVehicle) {
@@ -32,7 +33,8 @@ function preserveTrustedPose(vehicle, previousVehicle) {
 }
 
 export class VehicleSnapshotState {
-  constructor({ staleAfterMs = DEFAULT_STALE_AFTER_MS, now = Date.now } = {}) {
+  constructor({ staleAfterMs = DEFAULT_STALE_AFTER_MS, now = Date.now, scene = null } = {}) {
+    this.scene = scene;
     this.staleAfterMs = staleAfterMs;
     this.now = now;
     this.mode = "live";
@@ -71,6 +73,10 @@ export class VehicleSnapshotState {
 
   ingest(rawSnapshot, { transport = "runtime", receivedAtMs = this.now() } = {}) {
     const snapshot = normalizeVehicleSnapshot(rawSnapshot);
+    if (this.scene && transport !== "demo") {
+      if (rawSnapshot.full_state !== true) throw new Error("LIVE requires full_state: true.");
+      if (snapshot.timestampMs > receivedAtMs + 5000 || snapshot.timestampMs < 0) throw new Error("LIVE timestamp is outside the accepted clock range.");
+    }
     const incomingPriority = transportPriority(transport);
     if (incomingPriority < 0) {
       throw new Error(`Unsupported snapshot transport: ${transport}`);
@@ -80,24 +86,17 @@ export class VehicleSnapshotState {
       return { accepted: false, reason: "demo-disabled", snapshot };
     }
 
-    if (transport !== "demo" && this.mode === "demo") {
-      this.activateLive(transport, receivedAtMs);
-    } else if (
+    if (
       this.mode === "live" &&
       incomingPriority < transportPriority(this.transport)
     ) {
       return { accepted: false, reason: "transport-suppressed", snapshot };
-    } else if (
-      this.mode === "live" &&
-      incomingPriority > transportPriority(this.transport)
-    ) {
-      this.transport = transport;
     }
 
     this.lastContactAtMs = receivedAtMs;
     this.lastError = "";
 
-    if (this.lastTimestampMs !== null) {
+    if (this.lastTimestampMs !== null && !(this.mode === "demo" && transport !== "demo")) {
       if (snapshot.timestampMs < this.lastTimestampMs) {
         return { accepted: false, reason: "out-of-order", snapshot };
       }
@@ -106,13 +105,18 @@ export class VehicleSnapshotState {
       }
     }
 
+    if (transport !== "demo" && this.mode === "demo") this.activateLive(transport, receivedAtMs);
+    else if (incomingPriority > transportPriority(this.transport)) this.transport = transport;
+
     const previousVehicles = new Map(this.vehicles);
     const previousIds = new Set(previousVehicles.keys());
     const added = [];
     const updated = [];
     const removed = [];
     const appliedVehicles = snapshot.vehicles.map((vehicle) =>
-      preserveTrustedPose(vehicle, previousVehicles.get(vehicle.id)),
+      preserveTrustedPose(this.scene && transport !== "demo"
+        ? projectPublicVehicle(vehicle, snapshot, this.scene, receivedAtMs, this.staleAfterMs)
+        : vehicle, previousVehicles.get(vehicle.id)),
     );
 
     if (snapshot.fullState) {
@@ -212,6 +216,15 @@ export class VehicleSnapshotState {
   getVehicle(vehicleId) {
     return this.vehicles.get(vehicleId);
   }
+
+  setScene(scene) {
+    if (this.scene === scene) return false;
+    this.scene = scene;
+    this.vehicles.clear();
+    this.lastSnapshot = null;
+    this.lastAcceptedAtMs = null;
+    return true;
+  }
 }
 
 export class RuntimeVehicleSnapshotPoller {
@@ -259,11 +272,14 @@ export class RuntimeVehicleSnapshotPoller {
       return { polled: false, reason: "in-flight" };
     }
     this.inFlight = true;
+    const generation = this.generation;
     try {
       const snapshot = await this.fetchSnapshot();
+      if (generation !== this.generation) return { polled: true, ok: false, reason: "cancelled" };
       await this.onSnapshot(snapshot);
       return { polled: true, ok: true };
     } catch (error) {
+      if (generation !== this.generation) return { polled: true, ok: false, reason: "cancelled" };
       await this.onError(error);
       return { polled: true, ok: false, error };
     } finally {

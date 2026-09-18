@@ -188,6 +188,7 @@ function normalizeVehicle(rawVehicle, snapshot) {
     },
     color: rawVehicle.color ? String(rawVehicle.color) : "",
     poseSource: String(rawVehicle.pose_source || ""),
+    spatial: rawVehicle.spatial ? structuredClone(rawVehicle.spatial) : null,
   };
 }
 
@@ -240,6 +241,8 @@ export function normalizeVehicleSnapshot(rawSnapshot) {
     fullState: rawSnapshot.full_state !== false,
     source: normalizeSource(rawSnapshot.source),
     frame: rawSnapshot.frame || { type: "ENU" },
+    sceneId: rawSnapshot.scene_id || null,
+    coordinateContract: rawSnapshot.coordinate_contract ? structuredClone(rawSnapshot.coordinate_contract) : null,
     vehicles,
   };
 }
