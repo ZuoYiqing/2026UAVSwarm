@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,13 +46,17 @@ def _state(manifest: dict[str, Any]) -> dict[str, Any]:
                 "process_identity": identity.to_dict(),
             }
         )
-    return {"version": "1.2", "run_id": RUN_ID, "processes": processes}
+    server = copy.deepcopy(processes[0])
+    server.update(kind="gazebo", pid=5500)
+    server["process_identity"].update(pid=5500, executable="/usr/bin/ruby",
+                                    cmdline=["gz", "sim", "simple_recon_v0_1.sdf"])
+    return {"version": "1.2", "run_id": RUN_ID, "processes": processes, "gazebo_processes": [server]}
 
 
 def _identity_reader(state: dict[str, Any]):  # type: ignore[no-untyped-def]
     identities = {
         int(row["pid"]): harness.ProcessIdentity.from_dict(row["process_identity"])
-        for row in state["processes"]
+        for row in state["processes"] + state.get("gazebo_processes", [])
     }
 
     def read(pid: int) -> harness.ProcessIdentityReadResult:
@@ -77,6 +82,7 @@ def _mavlink_probe(manifest: dict[str, Any]):  # type: ignore[no-untyped-def]
             "observed_system_ids": [vehicle["system_id"]],
             "observed_component_ids": [vehicle["component_id"]],
             "last_seen": "2026-08-16T00:00:00+00:00",
+            "heartbeat_timestamp": harness.utc_now(), "position_timestamp": harness.utc_now(),
             "reason": "ok",
             "evidence": {
                 "heartbeat_count": 12,
@@ -89,16 +95,21 @@ def _mavlink_probe(manifest: dict[str, Any]):  # type: ignore[no-untyped-def]
 
 
 def _runtime_telemetry(manifest: dict[str, Any]) -> dict[str, Any]:
+    now = harness.utc_now()
     return {
         "contract_version": "1.0",
+        "scene_id": manifest["scene_id"], "run_id": RUN_ID,
+        "source_timestamp": now, "valid_for_ms": 5000,
         "vehicles": [
             {
                 "node_id": vehicle["node_id"],
                 "system_id": vehicle["system_id"],
                 "component_id": vehicle["component_id"],
+                "endpoint": vehicle["command_endpoint"],
+                "heartbeat_timestamp": now, "position_timestamp": now,
                 "heartbeat_fresh": True,
                 "telemetry_fresh": True,
-                "last_seen": "2026-08-16T00:00:00+00:00",
+                "last_seen": now,
                 "reason": "ok",
                 "status": "connected",
             }
@@ -115,6 +126,7 @@ def _collect(
     runtime_telemetry: dict[str, Any] | None = None,
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
+    overrides=None,
 ) -> dict[str, Any]:
     manifest = harness.load_manifest(MANIFEST_PATH)
     state = _state(manifest)
@@ -128,13 +140,13 @@ def _collect(
         mode=mode,
         runtime_telemetry=runtime_telemetry,
         mavlink_probe=mavlink_probe or _mavlink_probe(manifest),
-        clock_probe=lambda world, timeout: {
+        clock_probe=(overrides or {}).get("clock_probe", lambda world, timeout, **kwargs: {
             "clock_advancing": True,
             "reason": "ok",
             "evidence": {"world": world, "timeout": timeout},
-        },
-        model_probe=lambda: {"x500_0", "x500_1", "x500_2"},
-        world_probe=lambda: ["simple_recon_v0_1"],
+        }),
+        model_probe=(overrides or {}).get("model_probe", lambda: {"x500_0", "x500_1", "x500_2"}),
+        world_probe=(overrides or {}).get("world_probe", lambda: ["simple_recon_v0_1"]),
         identity_reader=identity_reader or _identity_reader(state),
     )
 
@@ -320,6 +332,38 @@ def test_health_cli_persists_latest_machine_readable_snapshot(
 
     assert health_three_uav.main(["--output", str(output_path)]) == 0
     assert json.loads(output_path.read_text(encoding="utf-8")) == payload
+
+
+@pytest.mark.parametrize("failure", ["world", "model", "clock"])
+def test_integrated_simulation_failure_blocks_readiness(tmp_path, monkeypatch, failure):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    overrides = {"world": {"world_probe": lambda: ["wrong_world"]},
+                 "model": {"model_probe": lambda: {"x500_0", "x500_1"}},
+                 "clock": {"clock_probe": lambda *a, **k: {"clock_advancing": False, "reason": "gazebo_clock_slow", "evidence": {}}}}[failure]
+    result = _collect(tmp_path, monkeypatch, mode="integrated",
+        runtime_telemetry=_runtime_telemetry(manifest), overrides=overrides)
+    assert not result["ready"]
+    assert result["simulation_status"] == "not_ready"
+
+
+@pytest.mark.parametrize("failure", ["expired", "run", "duplicate", "message_time", "boolean"])
+def test_integrated_rejects_unusable_runtime_evidence(tmp_path, monkeypatch, failure):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    evidence = _runtime_telemetry(manifest)
+    if failure == "expired":
+        evidence["source_timestamp"] = "2020-01-01T00:00:00Z"
+    elif failure == "run":
+        evidence["run_id"] = "another-run"
+    elif failure == "duplicate":
+        evidence["vehicles"].append(copy.deepcopy(evidence["vehicles"][0]))
+    elif failure == "message_time":
+        evidence["vehicles"][0]["position_timestamp"] = "2020-01-01T00:00:00Z"
+    else:
+        evidence["vehicles"][0]["heartbeat_fresh"] = "true"
+    result = _collect(tmp_path, monkeypatch, mode="integrated", runtime_telemetry=evidence)
+    assert not result["ready"]
+    assert result["simulation_status"] == "ready"
+    assert result["system_status"] == "unknown"
 
 
 def test_integrated_health_cli_never_checks_or_binds_standalone_endpoints(

@@ -233,6 +233,16 @@ def test_proc_stat_parser_handles_spaces_and_parentheses_in_comm() -> None:
     assert harness._parse_proc_start_time(stat_text) == 123456
 
 
+@pytest.mark.parametrize("state, expected", [("Z", harness.PROCESS_EXITED), ("S", harness.STALE_STATE)])
+def test_empty_cmdline_is_only_exited_with_kernel_zombie_evidence(tmp_path, state, expected):
+    proc = tmp_path / "4242"
+    proc.mkdir()
+    tail = [state, *[str(field) for field in range(4, 22)], "123456"]
+    (proc / "stat").write_text("4242 (px4) " + " ".join(tail))
+    (proc / "cmdline").write_bytes(b"")
+    assert harness.read_process_identity(4242, proc_root=tmp_path).code == expected
+
+
 def test_process_identity_match_allows_signalling() -> None:
     result = harness.validate_process_identity(
         _process_row(),

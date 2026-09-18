@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 try:
     from . import harness
+    from .evidence import freshness, timestamp_seconds
+    from .gazebo_evidence import probe_clock, server_identity, capture_poses
 except ImportError:  # Direct script execution adds this directory to sys.path.
     import harness  # type: ignore
+    from evidence import freshness, timestamp_seconds
+    from gazebo_evidence import probe_clock, server_identity, capture_poses
 
 
 DEFAULT_STABILITY_WINDOW_S = 10.0
@@ -58,6 +61,8 @@ def probe_mavlink_stream(
     last_heartbeat_at: float | None = None
     last_telemetry_at: float | None = None
     last_seen: str | None = None
+    heartbeat_timestamp: str | None = None
+    position_timestamp: str | None = None
     heartbeat_count = 0
     telemetry_count = 0
     source_ids: set[tuple[int | None, int | None]] = set()
@@ -92,6 +97,7 @@ def probe_mavlink_stream(
                 )
                 last_heartbeat_at = now
                 last_seen = harness.utc_now()
+                heartbeat_timestamp = last_seen
                 if final_deadline is None:
                     final_deadline = (
                         first_heartbeat_at
@@ -103,6 +109,7 @@ def probe_mavlink_stream(
                 telemetry_count += 1
                 last_telemetry_at = now
                 last_seen = harness.utc_now()
+                position_timestamp = last_seen
 
             if first_heartbeat_at is None or last_heartbeat_at is None:
                 continue
@@ -172,6 +179,8 @@ def probe_mavlink_stream(
             component_id for _, component_id in source_ids if component_id is not None
         ),
         "last_seen": last_seen,
+        "heartbeat_timestamp": heartbeat_timestamp,
+        "position_timestamp": position_timestamp,
         "reason": reason,
         "evidence": {
             "heartbeat_count": heartbeat_count,
@@ -210,34 +219,8 @@ def parse_gazebo_clock_samples(output: str) -> list[float]:
     return samples
 
 
-def probe_gazebo_clock(world_name: str, timeout_s: float) -> dict[str, Any]:
-    topic = f"/world/{world_name}/clock"
-    try:
-        result = subprocess.run(
-            ["gz", "topic", "-e", "-t", topic, "-n", "2"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=max(float(timeout_s), 0.1),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {
-            "clock_advancing": False,
-            "reason": "gazebo_clock_probe_failed",
-            "evidence": {"topic": topic, "error": f"{type(exc).__name__}: {exc}"},
-        }
-    samples = parse_gazebo_clock_samples(result.stdout)
-    advancing = len(samples) >= 2 and samples[-1] > samples[0]
-    return {
-        "clock_advancing": advancing,
-        "reason": "ok" if advancing else "gazebo_clock_stalled",
-        "evidence": {
-            "topic": topic,
-            "returncode": result.returncode,
-            "samples_s": samples,
-            "stderr": result.stderr.strip() or None,
-        },
-    }
+def probe_gazebo_clock(world_name: str, timeout_s: float, *, duration_s: float = 2.0) -> dict[str, Any]:
+    return probe_clock(world_name, timeout_s, duration_s=duration_s)
 
 
 def _failed_probe(reason: str, exc: Exception) -> dict[str, Any]:
@@ -255,7 +238,17 @@ def _failed_probe(reason: str, exc: Exception) -> dict[str, Any]:
 def _runtime_telemetry_probes(
     manifest: dict[str, Any],
     runtime_telemetry: dict[str, Any] | None,
+    *,
+    run_id: str | None = None,
 ) -> dict[str, dict[str, Any]]:
+    envelope_reason = "runtime_telemetry_missing"
+    if isinstance(runtime_telemetry, dict):
+        valid, reason, _ = freshness(runtime_telemetry)
+        envelope_reason = "ok" if valid else f"runtime_telemetry_{reason}"
+        if runtime_telemetry.get("scene_id") != manifest["scene_id"]:
+            envelope_reason = "runtime_telemetry_scene_mismatch"
+        if run_id is not None and runtime_telemetry.get("run_id") != run_id:
+            envelope_reason = "runtime_telemetry_run_mismatch"
     rows = (
         runtime_telemetry.get("vehicles", [])
         if isinstance(runtime_telemetry, dict)
@@ -276,6 +269,9 @@ def _runtime_telemetry_probes(
     for vehicle in manifest["vehicles"]:
         node_id = str(vehicle["node_id"])
         row = by_node.get(node_id)
+        if envelope_reason != "ok":
+            probes[node_id] = _failed_probe(envelope_reason, ValueError(envelope_reason))
+            continue
         if row is None:
             probes[node_id] = _failed_probe(
                 "runtime_telemetry_missing",
@@ -300,22 +296,26 @@ def _runtime_telemetry_probes(
         except (TypeError, ValueError) as exc:
             probes[node_id] = _failed_probe("runtime_telemetry_invalid", exc)
             continue
-        heartbeat_fresh = bool(row.get("heartbeat_fresh"))
-        telemetry_fresh = bool(row.get("telemetry_fresh"))
+        if (type(row.get("heartbeat_fresh")) is not bool
+                or type(row.get("telemetry_fresh")) is not bool
+                or row.get("endpoint") != vehicle["command_endpoint"]):
+            probes[node_id] = _failed_probe("runtime_telemetry_invalid", ValueError("boolean_or_endpoint_mismatch"))
+            continue
+        try:
+            heartbeat_age = time.time() - timestamp_seconds(row["heartbeat_timestamp"])
+            telemetry_age = time.time() - timestamp_seconds(row["position_timestamp"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            probes[node_id] = _failed_probe("runtime_telemetry_invalid", exc)
+            continue
+        heartbeat_fresh = row["heartbeat_fresh"] and -0.1 <= heartbeat_age <= HEARTBEAT_MAX_AGE_S
+        telemetry_fresh = row["telemetry_fresh"] and -0.1 <= telemetry_age <= TELEMETRY_MAX_AGE_S
         probes[node_id] = {
             "heartbeat_fresh": heartbeat_fresh,
             "telemetry_fresh": telemetry_fresh,
             "observed_system_ids": observed_system_ids,
             "observed_component_ids": observed_component_ids,
             "last_seen": row.get("last_seen"),
-            "reason": str(
-                row.get("reason")
-                or (
-                    "ok"
-                    if heartbeat_fresh and telemetry_fresh
-                    else "runtime_telemetry_stale"
-                )
-            ),
+            "reason": "ok" if heartbeat_fresh and telemetry_fresh else "runtime_telemetry_stale",
             "evidence": {
                 "source": "runtime",
                 "runtime_status": row.get("status"),
@@ -332,9 +332,10 @@ def collect_health(
     stability_window_s: float = DEFAULT_STABILITY_WINDOW_S,
     mode: str = "standalone",
     runtime_telemetry: dict[str, Any] | None = None,
+    runtime_telemetry_provider: Callable[[], dict[str, Any]] | None = None,
     mavlink_probe: Callable[[str, float, float], dict[str, Any]] = probe_mavlink_stream,
-    clock_probe: Callable[[str, float], dict[str, Any]] = probe_gazebo_clock,
-    model_probe: Callable[[], set[str]] = harness.gazebo_models,
+    clock_probe: Callable[..., dict[str, Any]] = probe_gazebo_clock,
+    model_probe: Callable[[], set[str]] | None = None,
     world_probe: Callable[[], list[str]] = harness._running_gazebo_worlds,
     identity_reader: Callable[[int], harness.ProcessIdentityReadResult] | None = None,
 ) -> dict[str, Any]:
@@ -352,24 +353,15 @@ def collect_health(
         str(row.node_id): row for row in decisions if row.node_id is not None
     }
 
-    models = model_probe()
-    worlds = world_probe()
-    expected_world = str(manifest["world_name"])
-    try:
-        clock = clock_probe(expected_world, timeout_s)
-    except Exception as exc:
-        clock = {
-            "clock_advancing": False,
-            "reason": "gazebo_clock_probe_failed",
-            "evidence": {"error": f"{type(exc).__name__}: {exc}"},
-        }
-
     vehicles = list(manifest["vehicles"])
-    if mode == "integrated":
-        probe_rows = _runtime_telemetry_probes(manifest, runtime_telemetry)
-    else:
-        probe_rows: dict[str, dict[str, Any]] = {}
-        with ThreadPoolExecutor(max_workers=len(vehicles)) as executor:
+    probe_rows: dict[str, dict[str, Any]] = {}
+    expected_world = str(manifest["world_name"])
+    worlds = world_probe()
+    source_timestamp = harness.utc_now()
+    with ThreadPoolExecutor(max_workers=len(vehicles) + 1) as executor:
+        clock_future = executor.submit(clock_probe, expected_world, timeout_s,
+            duration_s=max(2.0, stability_window_s if mode == "standalone" else 2.0))
+        if mode == "standalone":
             futures = {
                 str(vehicle["node_id"]): executor.submit(
                     mavlink_probe,
@@ -384,6 +376,42 @@ def collect_health(
                     probe_rows[node_id] = future.result()
                 except Exception as exc:
                     probe_rows[node_id] = _failed_probe("mavlink_probe_failed", exc)
+        try:
+            clock = clock_future.result()
+        except Exception as exc:
+            clock = {"clock_advancing": False, "reason": "gazebo_clock_probe_failed",
+                     "evidence": {"error": f"{type(exc).__name__}: {exc}"}}
+    source_timestamp = clock.get("source_timestamp", source_timestamp)
+    if model_probe is not None:
+        models = model_probe()
+    else:
+        try:
+            models = {str(p["name"]) for message in capture_poses(expected_world, .05)
+                      for p in message.get("pose", []) if "name" in p}
+        except (OSError, ValueError, TimeoutError):
+            models = set()
+    server = server_identity(state, identity_reader=identity_reader)
+    # Re-check identities after probes; process replacement during observation
+    # must not inherit the initial identity decision.
+    decisions = harness._validate_processes(processes, run_id=str(state.get("run_id", "")),
+                                            identity_reader=identity_reader)
+    identity_by_node = {str(row.node_id): row for row in decisions if row.node_id is not None}
+    if mode == "integrated":
+        if runtime_telemetry_provider is not None:
+            runtime_telemetry = runtime_telemetry_provider()
+        probe_rows = _runtime_telemetry_probes(manifest, runtime_telemetry, run_id=state.get("run_id"))
+    else:
+        for probe in probe_rows.values():
+            try:
+                heartbeat_age = time.time() - timestamp_seconds(probe["heartbeat_timestamp"])
+                position_age = time.time() - timestamp_seconds(probe["position_timestamp"])
+                probe["heartbeat_fresh"] = probe.get("heartbeat_fresh") is True and -0.1 <= heartbeat_age <= HEARTBEAT_MAX_AGE_S
+                probe["telemetry_fresh"] = probe.get("telemetry_fresh") is True and -0.1 <= position_age <= TELEMETRY_MAX_AGE_S
+                if not probe["heartbeat_fresh"] or not probe["telemetry_fresh"]:
+                    probe["reason"] = "mavlink_evidence_stale"
+            except (KeyError, TypeError, ValueError):
+                probe["heartbeat_fresh"] = probe["telemetry_fresh"] = False
+                probe["reason"] = "mavlink_evidence_timestamp_missing"
 
     rows: list[dict[str, Any]] = []
     observed_system_ids: list[int] = []
@@ -457,6 +485,7 @@ def collect_health(
         and clock_advancing
         and unique_system_ids
         and all(row["readiness"] for row in rows)
+        and server["process_identity_valid"]
     )
     top_reasons: list[str] = []
     if not world_correct:
@@ -469,12 +498,41 @@ def collect_health(
         top_reasons.append("system_ids_not_unique")
     if any(not row["readiness"] for row in rows):
         top_reasons.append("vehicle_not_ready")
+    if not server["process_identity_valid"]:
+        top_reasons.append(server["reason"])
+    simulator_ready = bool(world_correct and expected_models.issubset(models) and clock_advancing
+                           and server["process_identity_valid"]
+                           and all(row["process_identity_valid"] for row in rows))
+    runtime_evidence = {
+        "contract_version": "1.0", "scene_id": manifest["scene_id"],
+        "map_version": manifest.get("map_version", f"{manifest['scene_id']}-map-1"),
+        "source_timestamp": source_timestamp, "valid_for_ms": 5000,
+        "clock_advancing": clock_advancing,
+        "world": {"name": expected_world, "status": "ready" if world_correct and server["process_identity_valid"] else "not_ready"},
+        "models": [{"node_id": row["node_id"], "name": row["evidence"]["gazebo_model_name"],
+                    "status": "ready" if row["process_identity_valid"] and row["evidence"]["model_present"] else "not_ready"}
+                   for row in rows],
+        "evidence_source": "simulation_integrated_health", "run_id": state.get("run_id"),
+        "process_identity_valid": server["process_identity_valid"] and all(row["process_identity_valid"] for row in rows),
+    }
+    evidence_fresh, evidence_reason, evidence_age = freshness(runtime_evidence)
+    if not evidence_fresh:
+        ready = simulator_ready = False
+        runtime_evidence["world"]["status"] = "unknown"
+        top_reasons.append(evidence_reason)
+    telemetry_unknown = mode == "integrated" and any(
+        str(probe_rows[str(v["node_id"])].get("reason", "")).startswith("runtime_telemetry_") for v in vehicles)
     return {
-        "contract_version": "1.0",
+        "contract_version": "1.1",
         "simulator": "gazebo",
         "mode": mode,
         "status": "ready" if ready else "not_ready",
         "ready": ready,
+        "simulation_status": "ready" if simulator_ready else "not_ready",
+        "system_status": "ready" if ready else "unknown" if telemetry_unknown else "not_ready",
+        "source_timestamp": source_timestamp,
+        "valid_for_ms": 5000,
+        "runtime_evidence": runtime_evidence,
         "server_running": world_correct,
         "clock_advancing": clock_advancing,
         "world": expected_world,
@@ -490,6 +548,9 @@ def collect_health(
             "clock": clock.get("evidence", {}),
             "stability_window_s": stability_window_s,
             "run_id": state.get("run_id"),
+            "gazebo_process": server,
+            "evidence_age_ms": evidence_age,
+            "evidence_fresh": evidence_fresh,
             "telemetry_source": (
                 "runtime" if mode == "integrated" else "direct_mavlink"
             ),

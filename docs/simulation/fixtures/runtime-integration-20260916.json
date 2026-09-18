@@ -1,0 +1,2018 @@
+{
+  "fixture_kind": "historical_real_observations_not_live_evidence",
+  "date": "2026-09-16",
+  "base": "b4e2f6e",
+  "px4_commit": "171f0f38cffa95f28d5e159f7aaf7599756f9e0e",
+  "gazebo_version": "8.14.0",
+  "isolation": {
+    "status": "PASS",
+    "scope": "SITL_ONLY",
+    "scene_id": "simple_recon_v0_1",
+    "started_with_health": {
+      "contract_version": "1.1",
+      "simulator": "gazebo",
+      "mode": "standalone",
+      "status": "ready",
+      "ready": true,
+      "simulation_status": "ready",
+      "system_status": "ready",
+      "source_timestamp": "2026-09-16T06:31:53.009647+00:00",
+      "valid_for_ms": 5000,
+      "runtime_evidence": {
+        "contract_version": "1.0",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "source_timestamp": "2026-09-16T06:31:53.009647+00:00",
+        "valid_for_ms": 5000,
+        "clock_advancing": true,
+        "world": {
+          "name": "simple_recon_v0_1",
+          "status": "ready"
+        },
+        "models": [
+          {
+            "node_id": "UAV-01",
+            "name": "x500_0",
+            "status": "ready"
+          },
+          {
+            "node_id": "UAV-02",
+            "name": "x500_1",
+            "status": "ready"
+          },
+          {
+            "node_id": "UAV-03",
+            "name": "x500_2",
+            "status": "ready"
+          }
+        ],
+        "evidence_source": "simulation_integrated_health",
+        "run_id": "4d92618d41564ed49112639875476a79",
+        "process_identity_valid": true
+      },
+      "server_running": true,
+      "clock_advancing": true,
+      "world": "simple_recon_v0_1",
+      "models": [
+        "base_link",
+        "rotor_0",
+        "rotor_1",
+        "rotor_2",
+        "rotor_3",
+        "x500_0",
+        "x500_1",
+        "x500_2"
+      ],
+      "scene_id": "simple_recon_v0_1",
+      "unique_system_ids": true,
+      "checked_at": "2026-09-16T06:31:54.589476+00:00",
+      "reason": "ok",
+      "evidence": {
+        "observed_worlds": [
+          "simple_recon_v0_1"
+        ],
+        "world_correct": true,
+        "expected_models": [
+          "x500_0",
+          "x500_1",
+          "x500_2"
+        ],
+        "clock": {
+          "sample_count": 2495,
+          "sim_span_s": 9.975999999999999,
+          "real_span_s": 9.995267382999998,
+          "real_time_factor": 0.9980723494168081,
+          "minimum_real_time_factor": 0.2,
+          "minimum_window_s": 1.0,
+          "first_sim_s": 413.204,
+          "last_sim_s": 423.18,
+          "topic": "/world/simple_recon_v0_1/clock",
+          "wall_elapsed_s": 10.207234271999994
+        },
+        "stability_window_s": 10.0,
+        "run_id": "4d92618d41564ed49112639875476a79",
+        "gazebo_process": {
+          "process_identity_valid": true,
+          "reason": "ok",
+          "processes": [
+            {
+              "code": "match",
+              "node_id": "UAV-01",
+              "pid": 733,
+              "signal_allowed": true,
+              "mismatches": [],
+              "expected": {
+                "pid": 733,
+                "pgid": 523,
+                "proc_start_time_ticks": 2446,
+                "executable": "/usr/bin/ruby3.0",
+                "cmdline": [
+                  "gz sim --verbose=1 -r -s /mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "observed": {
+                "pid": 733,
+                "pgid": 523,
+                "proc_start_time_ticks": 2446,
+                "executable": "/usr/bin/ruby3.0",
+                "cmdline": [
+                  "gz sim --verbose=1 -r -s /mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "detail": null
+            }
+          ]
+        },
+        "evidence_age_ms": 1579.8170566558838,
+        "evidence_fresh": true,
+        "telemetry_source": "direct_mavlink",
+        "runtime_telemetry_contract_version": null
+      },
+      "vehicles": [
+        {
+          "node_id": "UAV-01",
+          "system_id": 1,
+          "component_id": 1,
+          "endpoint": "udpin:127.0.0.1:14540",
+          "heartbeat_fresh": true,
+          "telemetry_fresh": true,
+          "process_identity_valid": true,
+          "last_seen": "2026-09-16T06:31:54.338353+00:00",
+          "reason": "ok",
+          "evidence": {
+            "expected_system_id": 1,
+            "observed_system_ids": [
+              1
+            ],
+            "expected_component_id": 1,
+            "observed_component_ids": [
+              1
+            ],
+            "gazebo_model_name": "x500_0",
+            "model_present": true,
+            "process": {
+              "code": "match",
+              "node_id": "UAV-01",
+              "pid": 523,
+              "signal_allowed": true,
+              "mismatches": [],
+              "expected": {
+                "pid": 523,
+                "pgid": 523,
+                "proc_start_time_ticks": 1621,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "0",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "observed": {
+                "pid": 523,
+                "pgid": 523,
+                "proc_start_time_ticks": 1621,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "0",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "detail": null
+            },
+            "telemetry_source": "direct_mavlink",
+            "telemetry": {
+              "heartbeat_count": 11,
+              "heartbeat_span_s": 10.009,
+              "last_heartbeat_age_s": 0.0,
+              "local_position_ned_count": 324,
+              "last_telemetry_age_s": 0.035,
+              "probe_duration_s": 10.831,
+              "error": null
+            }
+          },
+          "readiness": true
+        },
+        {
+          "node_id": "UAV-02",
+          "system_id": 2,
+          "component_id": 1,
+          "endpoint": "udpin:127.0.0.1:14541",
+          "heartbeat_fresh": true,
+          "telemetry_fresh": true,
+          "process_identity_valid": true,
+          "last_seen": "2026-09-16T06:31:54.010183+00:00",
+          "reason": "ok",
+          "evidence": {
+            "expected_system_id": 2,
+            "observed_system_ids": [
+              2
+            ],
+            "expected_component_id": 1,
+            "observed_component_ids": [
+              1
+            ],
+            "gazebo_model_name": "x500_1",
+            "model_present": true,
+            "process": {
+              "code": "match",
+              "node_id": "UAV-02",
+              "pid": 943,
+              "signal_allowed": true,
+              "mismatches": [],
+              "expected": {
+                "pid": 943,
+                "pgid": 943,
+                "proc_start_time_ticks": 3208,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "1",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-02",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "observed": {
+                "pid": 943,
+                "pgid": 943,
+                "proc_start_time_ticks": 3208,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "1",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-02",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "detail": null
+            },
+            "telemetry_source": "direct_mavlink",
+            "telemetry": {
+              "heartbeat_count": 11,
+              "heartbeat_span_s": 10.009,
+              "last_heartbeat_age_s": 0.0,
+              "local_position_ned_count": 315,
+              "last_telemetry_age_s": 0.004,
+              "probe_duration_s": 10.502,
+              "error": null
+            }
+          },
+          "readiness": true
+        },
+        {
+          "node_id": "UAV-03",
+          "system_id": 3,
+          "component_id": 1,
+          "endpoint": "udpin:127.0.0.1:14542",
+          "heartbeat_fresh": true,
+          "telemetry_fresh": true,
+          "process_identity_valid": true,
+          "last_seen": "2026-09-16T06:31:53.954209+00:00",
+          "reason": "ok",
+          "evidence": {
+            "expected_system_id": 3,
+            "observed_system_ids": [
+              3
+            ],
+            "expected_component_id": 1,
+            "observed_component_ids": [
+              1
+            ],
+            "gazebo_model_name": "x500_2",
+            "model_present": true,
+            "process": {
+              "code": "match",
+              "node_id": "UAV-03",
+              "pid": 1495,
+              "signal_allowed": true,
+              "mismatches": [],
+              "expected": {
+                "pid": 1495,
+                "pgid": 1495,
+                "proc_start_time_ticks": 4183,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "2",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-03",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "observed": {
+                "pid": 1495,
+                "pgid": 1495,
+                "proc_start_time_ticks": 4183,
+                "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "cmdline": [
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                  "-i",
+                  "2",
+                  "-d",
+                  "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+                ],
+                "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-03",
+                "run_id": "4d92618d41564ed49112639875476a79"
+              },
+              "detail": null
+            },
+            "telemetry_source": "direct_mavlink",
+            "telemetry": {
+              "heartbeat_count": 11,
+              "heartbeat_span_s": 10.008,
+              "last_heartbeat_age_s": 0.0,
+              "local_position_ned_count": 314,
+              "last_telemetry_age_s": 0.004,
+              "probe_duration_s": 10.447,
+              "error": null
+            }
+          },
+          "readiness": true
+        }
+      ]
+    },
+    "vehicles": [
+      {
+        "node_id": "UAV-01",
+        "expected_system_id": 1,
+        "started_at": "2026-09-16T06:31:54.589615+00:00",
+        "takeoff_observed": true,
+        "land_command_accepted": true,
+        "landed_observed": true,
+        "observed_system_id": 1,
+        "stream_ack": {
+          "command": 511,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+        },
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 25
+        },
+        "takeoff_observation": {
+          "observed": true,
+          "samples": 84,
+          "sample_count": 84,
+          "first_z": -0.008394479751586914,
+          "last_z": -1.4036976099014282,
+          "min_z": -1.4036976099014282,
+          "max_z": -0.008394479751586914,
+          "max_altitude_m": 1.4,
+          "threshold_altitude_m": 1.4,
+          "threshold_reached": true
+        },
+        "passive_isolation": [
+          {
+            "node_id": "UAV-02",
+            "system_id": 2,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 30,
+            "max_altitude_m": 0.0,
+            "isolated": true
+          },
+          {
+            "node_id": "UAV-03",
+            "system_id": 3,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 30,
+            "max_altitude_m": 0.011,
+            "isolated": true
+          }
+        ],
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "landing_observation": {
+          "observed": true,
+          "sample_count": 28,
+          "final_altitude_m": 0.092,
+          "landed": true
+        },
+        "status": "PASS"
+      },
+      {
+        "node_id": "UAV-02",
+        "expected_system_id": 2,
+        "started_at": "2026-09-16T06:32:09.842487+00:00",
+        "takeoff_observed": true,
+        "land_command_accepted": true,
+        "landed_observed": true,
+        "observed_system_id": 2,
+        "stream_ack": {
+          "command": 511,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+        },
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 27
+        },
+        "takeoff_observation": {
+          "observed": true,
+          "samples": 86,
+          "sample_count": 86,
+          "first_z": 0.04679369926452637,
+          "last_z": -1.4037165641784668,
+          "min_z": -1.4037165641784668,
+          "max_z": 0.055918022990226746,
+          "max_altitude_m": 1.4,
+          "threshold_altitude_m": 1.4,
+          "threshold_reached": true
+        },
+        "passive_isolation": [
+          {
+            "node_id": "UAV-01",
+            "system_id": 1,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 31,
+            "max_altitude_m": 0.0,
+            "isolated": true
+          },
+          {
+            "node_id": "UAV-03",
+            "system_id": 3,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 30,
+            "max_altitude_m": 0.029,
+            "isolated": true
+          }
+        ],
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "landing_observation": {
+          "observed": true,
+          "sample_count": 28,
+          "final_altitude_m": 0.137,
+          "landed": true
+        },
+        "status": "PASS"
+      },
+      {
+        "node_id": "UAV-03",
+        "expected_system_id": 3,
+        "started_at": "2026-09-16T06:32:25.110489+00:00",
+        "takeoff_observed": true,
+        "land_command_accepted": true,
+        "landed_observed": true,
+        "observed_system_id": 3,
+        "stream_ack": {
+          "command": 511,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+        },
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 30
+        },
+        "takeoff_observation": {
+          "observed": true,
+          "samples": 85,
+          "sample_count": 85,
+          "first_z": 0.010455220937728882,
+          "last_z": -1.413747787475586,
+          "min_z": -1.413747787475586,
+          "max_z": 0.015392839908599854,
+          "max_altitude_m": 1.41,
+          "threshold_altitude_m": 1.4,
+          "threshold_reached": true
+        },
+        "passive_isolation": [
+          {
+            "node_id": "UAV-01",
+            "system_id": 1,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 31,
+            "max_altitude_m": 0.008,
+            "isolated": true
+          },
+          {
+            "node_id": "UAV-02",
+            "system_id": 2,
+            "stream_ack": {
+              "command": 511,
+              "result": 0,
+              "result_name": "MAV_RESULT_ACCEPTED",
+              "timeout": false,
+              "command_name": "MAV_CMD_SET_MESSAGE_INTERVAL"
+            },
+            "armed": false,
+            "sample_count": 30,
+            "max_altitude_m": 0.0,
+            "isolated": true
+          }
+        ],
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "landing_observation": {
+          "observed": true,
+          "sample_count": 28,
+          "final_altitude_m": 0.121,
+          "landed": true
+        },
+        "status": "PASS"
+      }
+    ],
+    "completed_at": "2026-09-16T06:32:41.155140+00:00"
+  },
+  "first_patrol": {
+    "status": "FAIL",
+    "started_at": "2026-09-16T06:32:42.995045+00:00",
+    "completed_at": "2026-09-16T06:34:48.280059+00:00",
+    "separation": {
+      "minimum_distance_m": 7.915,
+      "pair": [
+        "UAV-01",
+        "UAV-03"
+      ],
+      "sample_count": 982,
+      "attempt_count": 985,
+      "incomplete_samples": 3,
+      "maximum_gap_s": 0.20044576299994787,
+      "threshold_m": 7.0,
+      "threshold_met": true
+    },
+    "physical_evidence": {
+      "source": "gazebo_dynamic_pose_and_existing_mavlink_sessions",
+      "status": "FAIL",
+      "error": null,
+      "vehicles": [
+        {
+          "node_id": "UAV-01",
+          "physical_validation_passed": false,
+          "error": "ValueError:calibration_residual_exceeded"
+        },
+        {
+          "node_id": "UAV-02",
+          "physical_validation_passed": false,
+          "error": "ValueError:calibration_residual_exceeded"
+        },
+        {
+          "node_id": "UAV-03",
+          "physical_validation_passed": false,
+          "error": "ValueError:calibration_residual_exceeded"
+        }
+      ],
+      "world_pose_sample_count": 1563,
+      "maximum_pose_gap_s": 0.2880000000000109,
+      "minimum_world_distance_m": 7.9341099525744685
+    },
+    "error": "PatrolError: physical_coordinate_or_separation_validation_failed",
+    "vehicles": [
+      {
+        "node_id": "UAV-01",
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 5799
+        },
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "max_altitude_m": 8.185,
+        "landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.0001994350000131817,
+          "heartbeat_age_s": 0.0014322020000463453,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": 44.83014385804158,
+            "y_m": -19.964959474685944,
+            "z_m": -0.045534044937825174
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": 44.798561096191406,
+            "y_m": -19.968276977539062,
+            "z_m": -0.03981150686740875
+          }
+        },
+        "waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 15.0,
+              "y_m": -20.0,
+              "z_m": -8.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 14.968417238149827,
+              "y_m": -20.00331750285312,
+              "z_m": -7.994277461929584
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 14.176577497567946,
+              "y_m": -19.854533525589265,
+              "z_m": -7.976175800399518
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 14.144994735717773,
+              "y_m": -19.857851028442383,
+              "z_m": -7.970453262329102
+            },
+            "arrival_error_m": 0.837,
+            "best_error_m": 0.837,
+            "hold_samples": 5,
+            "index": 1
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 30.0,
+              "y_m": -20.0,
+              "z_m": -8.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 29.968417238149826,
+              "y_m": -20.00331750285312,
+              "z_m": -7.994277461929584
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 29.640294004525956,
+              "y_m": -19.932654710892,
+              "z_m": -8.049648777084089
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 29.60871124267578,
+              "y_m": -19.935972213745117,
+              "z_m": -8.043926239013672
+            },
+            "arrival_error_m": 0.369,
+            "best_error_m": 0.369,
+            "hold_samples": 5,
+            "index": 2
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 45.0,
+              "y_m": -20.0,
+              "z_m": -8.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 44.968417238149826,
+              "y_m": -20.00331750285312,
+              "z_m": -7.994277461929584
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 44.55085461243611,
+              "y_m": -19.948302599075593,
+              "z_m": -7.989515796737408
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 44.51927185058594,
+              "y_m": -19.95162010192871,
+              "z_m": -7.983793258666992
+            },
+            "arrival_error_m": 0.452,
+            "best_error_m": 0.452,
+            "hold_samples": 5,
+            "index": 3
+          }
+        ],
+        "entry_waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 10.0,
+              "y_m": 0.0,
+              "z_m": -8.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.968417238149827,
+              "y_m": -0.0033175028531194192,
+              "z_m": -7.994277461929584
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.442167211618239,
+              "y_m": -0.1330117307932734,
+              "z_m": -8.020746723251081
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.410584449768066,
+              "y_m": -0.13632923364639282,
+              "z_m": -8.015024185180664
+            },
+            "arrival_error_m": 0.574,
+            "best_error_m": 0.574,
+            "hold_samples": 5,
+            "index": 1
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 10.0,
+              "y_m": -20.0,
+              "z_m": -8.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.968417238149827,
+              "y_m": -20.00331750285312,
+              "z_m": -7.994277461929584
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.918819357003981,
+              "y_m": -19.558039995315827,
+              "z_m": -8.070627704696394
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.887236595153809,
+              "y_m": -19.561357498168945,
+              "z_m": -8.064905166625977
+            },
+            "arrival_error_m": 0.455,
+            "best_error_m": 0.455,
+            "hold_samples": 5,
+            "index": 2
+          }
+        ]
+      },
+      {
+        "node_id": "UAV-02",
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 5242
+        },
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "max_altitude_m": 10.24,
+        "landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.0019029779999755192,
+          "heartbeat_age_s": 0.003443372999981875,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": -39.90917063619367,
+            "y_m": -0.028617635431329447,
+            "z_m": 0.007962624043533637
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": -39.921443939208984,
+            "y_m": -8.001121520996094,
+            "z_m": 0.031649261713027954
+          }
+        },
+        "waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -10.0,
+              "y_m": 0.0,
+              "z_m": -10.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -10.012273303015311,
+              "y_m": -7.972503885564764,
+              "z_m": -9.976313362330506
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -9.41364050771467,
+              "y_m": 0.12920735770221548,
+              "z_m": -10.001720657139709
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -9.42591381072998,
+              "y_m": -7.843296527862549,
+              "z_m": -9.978034019470215
+            },
+            "arrival_error_m": 0.6,
+            "best_error_m": 0.6,
+            "hold_samples": 5,
+            "index": 1
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -25.0,
+              "y_m": 0.0,
+              "z_m": -10.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -25.01227330301531,
+              "y_m": -7.972503885564764,
+              "z_m": -9.976313362330506
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -24.404852398888988,
+              "y_m": 0.039188131627996725,
+              "z_m": -9.967457046299865
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -24.417125701904297,
+              "y_m": -7.933315753936768,
+              "z_m": -9.943770408630371
+            },
+            "arrival_error_m": 0.597,
+            "best_error_m": 0.597,
+            "hold_samples": 5,
+            "index": 2
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -40.0,
+              "y_m": 0.0,
+              "z_m": -10.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -40.01227330301531,
+              "y_m": -7.972503885564764,
+              "z_m": -9.976313362330506
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -39.33858729268781,
+              "y_m": 0.02868150168414907,
+              "z_m": -9.974351157933166
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -39.350860595703125,
+              "y_m": -7.943822383880615,
+              "z_m": -9.950664520263672
+            },
+            "arrival_error_m": 0.663,
+            "best_error_m": 0.663,
+            "hold_samples": 5,
+            "index": 3
+          }
+        ],
+        "entry_waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 0.0,
+              "y_m": 0.0,
+              "z_m": -10.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -0.01227330301531081,
+              "y_m": -7.972503885564764,
+              "z_m": -9.976313362330506
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -0.1583196606802153,
+              "y_m": 0.6643774359798034,
+              "z_m": -10.009363403111388
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -0.17059296369552612,
+              "y_m": -7.308126449584961,
+              "z_m": -9.985676765441895
+            },
+            "arrival_error_m": 0.683,
+            "best_error_m": 0.683,
+            "hold_samples": 5,
+            "index": 1
+          }
+        ]
+      },
+      {
+        "node_id": "UAV-03",
+        "arm_ack": {
+          "command": 400,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_COMPONENT_ARM_DISARM"
+        },
+        "takeoff_ack": {
+          "command": 22,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_TAKEOFF",
+          "local_position_cursor": 5095
+        },
+        "land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "max_altitude_m": 12.274,
+        "landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.19968900399999256,
+          "heartbeat_age_s": 0.00018968599999880098,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": 25.001446193043236,
+            "y_m": 19.972725524700504,
+            "z_m": 0.048806864973455925
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": 24.943950653076172,
+            "y_m": 27.94821548461914,
+            "z_m": -0.010288164019584656
+          }
+        },
+        "waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -5.0,
+              "y_m": 20.0,
+              "z_m": -12.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -5.057495539967064,
+              "y_m": 27.975489959918637,
+              "z_m": -12.05909502899304
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -5.959480339702125,
+              "y_m": 20.238526000774723,
+              "z_m": -12.01390587890491
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -6.0169758796691895,
+              "y_m": 28.21401596069336,
+              "z_m": -12.07300090789795
+            },
+            "arrival_error_m": 0.989,
+            "best_error_m": 0.989,
+            "hold_samples": 5,
+            "index": 1
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 10.0,
+              "y_m": 20.0,
+              "z_m": -12.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.942504460032936,
+              "y_m": 27.975489959918637,
+              "z_m": -12.05909502899304
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.5510801728406,
+              "y_m": 19.783383025921207,
+              "z_m": -11.950117464903444
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.493584632873535,
+              "y_m": 27.758872985839844,
+              "z_m": -12.009212493896484
+            },
+            "arrival_error_m": 0.501,
+            "best_error_m": 0.501,
+            "hold_samples": 5,
+            "index": 2
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": 25.0,
+              "y_m": 20.0,
+              "z_m": -12.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": 24.942504460032936,
+              "y_m": 27.975489959918637,
+              "z_m": -12.05909502899304
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 24.42173046428347,
+              "y_m": 19.838348998821598,
+              "z_m": -11.90231740081653
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 24.364234924316406,
+              "y_m": 27.813838958740234,
+              "z_m": -11.96141242980957
+            },
+            "arrival_error_m": 0.608,
+            "best_error_m": 0.608,
+            "hold_samples": 5,
+            "index": 3
+          }
+        ],
+        "entry_waypoints": [
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -10.0,
+              "y_m": -8.0,
+              "z_m": -12.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -10.057495539967064,
+              "y_m": -0.02451004008136337,
+              "z_m": -12.05909502899304
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -9.292582089122291,
+              "y_m": -7.894880638324398,
+              "z_m": -12.009798403624147
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -9.350077629089355,
+              "y_m": 0.08060932159423828,
+              "z_m": -12.068893432617188
+            },
+            "arrival_error_m": 0.715,
+            "best_error_m": 0.715,
+            "hold_samples": 5,
+            "index": 1
+          },
+          {
+            "reached": true,
+            "frame": "scene_ned",
+            "scene_target": {
+              "frame": "scene_ned",
+              "x_m": -10.0,
+              "y_m": 20.0,
+              "z_m": -12.0
+            },
+            "vehicle_local_target": {
+              "frame": "vehicle_local_ned",
+              "x_m": -10.057495539967064,
+              "y_m": 27.975489959918637,
+              "z_m": -12.05909502899304
+            },
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -10.077926212962623,
+              "y_m": 19.73236526469074,
+              "z_m": -12.08873211944446
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -10.135421752929688,
+              "y_m": 27.707855224609375,
+              "z_m": -12.1478271484375
+            },
+            "arrival_error_m": 0.293,
+            "best_error_m": 0.293,
+            "hold_samples": 5,
+            "index": 2
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostic_patrol": {
+    "status": "FAIL",
+    "error": "PatrolError: UAV-01 waypoint 2 timeout",
+    "vehicles": [
+      {
+        "node_id": "UAV-01",
+        "calibration_error": "Command '['/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4-listener', '--instance', '0', 'vehicle_local_position', '-n', '1']' timed out after 3 seconds",
+        "recovery_land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "recovery_landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.1995048109997697,
+          "heartbeat_age_s": 0.00011998599984508473,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": 30.79189204379931,
+            "y_m": -19.852111036423594,
+            "z_m": -0.020522360433489525
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": 30.816883087158203,
+            "y_m": -19.870630264282227,
+            "z_m": 0.03394134342670441
+          }
+        },
+        "calibration_valid_at_end": false,
+        "physical_error": "ValueError:calibration_residual_exceeded",
+        "worst_measured_pairs": [
+          {
+            "sim_time_s": 256.8,
+            "skew_s": 0.020000000000038654,
+            "model_id": 29,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.824190469479728,
+              "y_m": -10.977105381890498,
+              "z_m": -8.080770052376863
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.870283126831055,
+              "y_m": -12.34638786315918,
+              "z_m": -7.95930814743042
+            }
+          },
+          {
+            "sim_time_s": 256.496,
+            "skew_s": 0.01599999999996271,
+            "model_id": 29,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.963281338768725,
+              "y_m": -7.949617687493541,
+              "z_m": -8.105392575321885
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 10.054471969604492,
+              "y_m": -9.235116958618164,
+              "z_m": -7.987157344818115
+            }
+          },
+          {
+            "sim_time_s": 257.096,
+            "skew_s": 0.016000000000019554,
+            "model_id": 29,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": 9.748850201074893,
+              "y_m": -13.77302249259589,
+              "z_m": -8.121444161001394
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": 9.754158973693848,
+              "y_m": -15.026544570922852,
+              "z_m": -8.003534317016602
+            }
+          }
+        ],
+        "initial_calibration": {
+          "contract_version": "1.0",
+          "transform_version": "ned-translation-1",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "node_id": "UAV-01",
+          "status": "calibrated",
+          "valid": true,
+          "calibration_version": "bbda14ce50e9de8991603048:2026-09-16T06:57:25.067127+00:00",
+          "local_origin_id": "bbda14ce50e9de8991603048",
+          "origin_continuity": "verified",
+          "axis_alignment": "ned_aligned",
+          "scene_origin": {
+            "kind": "gazebo_world_ned",
+            "north_m": 0.0,
+            "east_m": 0.0,
+            "down_m": 0.0
+          },
+          "altitude_reference": "scene_origin_z_down",
+          "source_timestamp": "2026-09-16T06:57:25.067127+00:00",
+          "valid_for_ms": 5000,
+          "translation_scene_ned_m": {
+            "north": -0.024991043358890994,
+            "east": 0.0185192278586328,
+            "down": -0.05446370386019393
+          },
+          "evidence_source": "gazebo_pose_and_px4_local_position",
+          "context": {
+            "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff",
+            "process_identity": {
+              "pid": 16870,
+              "pgid": 16870,
+              "proc_start_time_ticks": 175857,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "0",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+              "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff"
+            },
+            "origin": {
+              "ref_timestamp": 6460000.0,
+              "ref_lat": 47.397971,
+              "ref_lon": 8.546164,
+              "ref_alt": 0.27501,
+              "xy_reset_counter": 3.0,
+              "z_reset_counter": 2.0,
+              "xy_valid": true,
+              "z_valid": true,
+              "xy_global": true,
+              "z_global": true
+            },
+            "model_id": 29
+          }
+        }
+      },
+      {
+        "node_id": "UAV-02",
+        "calibration_error": "Command '['/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4-listener', '--instance', '1', 'vehicle_local_position', '-n', '1']' timed out after 3 seconds",
+        "recovery_land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "recovery_landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.0008393360003537964,
+          "heartbeat_age_s": 0.0020038640000166197,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": -4.626412715393892,
+            "y_m": 6.546367112679535,
+            "z_m": -0.0044998421563997425
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": -4.625813007354736,
+            "y_m": -1.4483020305633545,
+            "z_m": -0.0008324533700942993
+          }
+        },
+        "calibration_valid_at_end": false,
+        "physical_error": "ValueError:calibration_residual_exceeded",
+        "worst_measured_pairs": [
+          {
+            "sim_time_s": 270.724,
+            "skew_s": 0.027999999999963165,
+            "model_id": 68,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -16.99910917591709,
+              "y_m": 0.035252449332890956,
+              "z_m": -10.0671742280055
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -18.09551429748535,
+              "y_m": -7.961877346038818,
+              "z_m": -9.988908767700195
+            }
+          },
+          {
+            "sim_time_s": 270.828,
+            "skew_s": 0.012000000000000455,
+            "model_id": 68,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -18.064050013286966,
+              "y_m": 0.043488098251226216,
+              "z_m": -10.064718908770969
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -19.030710220336914,
+              "y_m": -7.952911853790283,
+              "z_m": -9.98040771484375
+            }
+          },
+          {
+            "sim_time_s": 271.324,
+            "skew_s": 0.02800000000002001,
+            "model_id": 68,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -21.601408819777546,
+              "y_m": 0.05626713649444574,
+              "z_m": -10.10367177231496
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -22.554288864135742,
+              "y_m": -7.923421859741211,
+              "z_m": -10.020837783813477
+            }
+          }
+        ],
+        "initial_calibration": {
+          "contract_version": "1.0",
+          "transform_version": "ned-translation-1",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "node_id": "UAV-02",
+          "status": "calibrated",
+          "valid": true,
+          "calibration_version": "1b8f2fa35d2dff8e2ffba944:2026-09-16T06:57:28.884360+00:00",
+          "local_origin_id": "1b8f2fa35d2dff8e2ffba944",
+          "origin_continuity": "verified",
+          "axis_alignment": "ned_aligned",
+          "scene_origin": {
+            "kind": "gazebo_world_ned",
+            "north_m": 0.0,
+            "east_m": 0.0,
+            "down_m": 0.0
+          },
+          "altitude_reference": "scene_origin_z_down",
+          "source_timestamp": "2026-09-16T06:57:28.884360+00:00",
+          "valid_for_ms": 5000,
+          "translation_scene_ned_m": {
+            "north": -0.0005997080391558327,
+            "east": 7.99466914324289,
+            "down": -0.0036673887863054437
+          },
+          "evidence_source": "gazebo_pose_and_px4_local_position",
+          "context": {
+            "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff",
+            "process_identity": {
+              "pid": 17283,
+              "pgid": 17283,
+              "proc_start_time_ticks": 177271,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "1",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-02",
+              "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff"
+            },
+            "origin": {
+              "ref_timestamp": 14412000.0,
+              "ref_lat": 47.397971,
+              "ref_lon": 8.54627,
+              "ref_alt": 0.24359,
+              "xy_reset_counter": 3.0,
+              "z_reset_counter": 2.0,
+              "xy_valid": true,
+              "z_valid": true,
+              "xy_global": true,
+              "z_global": true
+            },
+            "model_id": 68
+          }
+        }
+      },
+      {
+        "node_id": "UAV-03",
+        "calibration_error": "Command '['/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4-listener', '--instance', '2', 'vehicle_local_position', '-n', '1']' timed out after 3 seconds",
+        "recovery_land_ack": {
+          "command": 21,
+          "result": 0,
+          "result_name": "MAV_RESULT_ACCEPTED",
+          "timeout": false,
+          "command_name": "MAV_CMD_NAV_LAND"
+        },
+        "recovery_landing_observation": {
+          "landed": true,
+          "disarmed": true,
+          "landed_state": 1,
+          "landed_age_s": 0.1988770940001814,
+          "heartbeat_age_s": 5.1389000418566866e-05,
+          "scene_position": {
+            "frame": "scene_ned",
+            "x_m": 0.04489419852090519,
+            "y_m": -8.041534529726636,
+            "z_m": 0.056303607285909975
+          },
+          "vehicle_local_position": {
+            "frame": "vehicle_local_ned",
+            "x_m": 0.059290215373039246,
+            "y_m": -0.049986474215984344,
+            "z_m": 0.0446479469537735
+          }
+        },
+        "calibration_valid_at_end": false,
+        "physical_error": "ValueError:calibration_residual_exceeded",
+        "worst_measured_pairs": [
+          {
+            "sim_time_s": 265.12,
+            "skew_s": 0.02800000000002001,
+            "model_id": 107,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -9.682844104346868,
+              "y_m": 5.815817828744034,
+              "z_m": -12.194433908849373
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -9.668312072753906,
+              "y_m": 15.3689546585083,
+              "z_m": -12.048593521118164
+            }
+          },
+          {
+            "sim_time_s": 265.416,
+            "skew_s": 0.02400000000000091,
+            "model_id": 107,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -9.645391830274031,
+              "y_m": 9.0862921150816,
+              "z_m": -12.181650832855842
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -9.622501373291016,
+              "y_m": 18.593549728393555,
+              "z_m": -12.057808876037598
+            }
+          },
+          {
+            "sim_time_s": 265.72,
+            "skew_s": 0.02800000000002001,
+            "model_id": 107,
+            "scene_position": {
+              "frame": "scene_ned",
+              "x_m": -9.676257720279425,
+              "y_m": 12.330679448336092,
+              "z_m": -12.198258275379935
+            },
+            "vehicle_local_position": {
+              "frame": "vehicle_local_ned",
+              "x_m": -9.65012264251709,
+              "y_m": 21.752384185791016,
+              "z_m": -12.086832046508789
+            }
+          }
+        ],
+        "initial_calibration": {
+          "contract_version": "1.0",
+          "transform_version": "ned-translation-1",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "node_id": "UAV-03",
+          "status": "calibrated",
+          "valid": true,
+          "calibration_version": "e392a8d032ac5b2a3921437c:2026-09-16T06:57:33.002614+00:00",
+          "local_origin_id": "e392a8d032ac5b2a3921437c",
+          "origin_continuity": "verified",
+          "axis_alignment": "ned_aligned",
+          "scene_origin": {
+            "kind": "gazebo_world_ned",
+            "north_m": 0.0,
+            "east_m": 0.0,
+            "down_m": 0.0
+          },
+          "altitude_reference": "scene_origin_z_down",
+          "source_timestamp": "2026-09-16T06:57:33.002614+00:00",
+          "valid_for_ms": 5000,
+          "translation_scene_ned_m": {
+            "north": -0.014396016852134057,
+            "east": -7.991548055510653,
+            "down": 0.011655660332136476
+          },
+          "evidence_source": "gazebo_pose_and_px4_local_position",
+          "context": {
+            "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff",
+            "process_identity": {
+              "pid": 17834,
+              "pgid": 17834,
+              "proc_start_time_ticks": 178249,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "2",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-03",
+              "run_id": "b74d1b90bb3d4b8eb7fe2c6f496a4dff"
+            },
+            "origin": {
+              "ref_timestamp": 23320000.0,
+              "ref_lat": 47.397971,
+              "ref_lon": 8.546058,
+              "ref_alt": 0.27069,
+              "xy_reset_counter": 3.0,
+              "z_reset_counter": 2.0,
+              "xy_valid": true,
+              "z_valid": true,
+              "xy_global": true,
+              "z_global": true
+            },
+            "model_id": 107
+          }
+        }
+      }
+    ]
+  },
+  "integrated_without_runtime": {
+    "contract_version": "1.1",
+    "simulator": "gazebo",
+    "mode": "integrated",
+    "status": "not_ready",
+    "ready": false,
+    "simulation_status": "ready",
+    "system_status": "unknown",
+    "source_timestamp": "2026-09-16T06:48:38.641763+00:00",
+    "valid_for_ms": 5000,
+    "runtime_evidence": {
+      "contract_version": "1.0",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-09-16T06:48:38.641763+00:00",
+      "valid_for_ms": 5000,
+      "clock_advancing": true,
+      "world": {
+        "name": "simple_recon_v0_1",
+        "status": "ready"
+      },
+      "models": [
+        {
+          "node_id": "UAV-01",
+          "name": "x500_0",
+          "status": "ready"
+        },
+        {
+          "node_id": "UAV-02",
+          "name": "x500_1",
+          "status": "ready"
+        },
+        {
+          "node_id": "UAV-03",
+          "name": "x500_2",
+          "status": "ready"
+        }
+      ],
+      "evidence_source": "simulation_integrated_health",
+      "run_id": "75bd5d679f9148cfa1b391714976aa0f",
+      "process_identity_valid": true
+    },
+    "server_running": true,
+    "clock_advancing": true,
+    "world": "simple_recon_v0_1",
+    "models": [
+      "base_link",
+      "rotor_0",
+      "rotor_1",
+      "rotor_2",
+      "rotor_3",
+      "x500_0",
+      "x500_1",
+      "x500_2"
+    ],
+    "scene_id": "simple_recon_v0_1",
+    "unique_system_ids": false,
+    "checked_at": "2026-09-16T06:48:38.933424+00:00",
+    "reason": "system_ids_not_unique,vehicle_not_ready",
+    "evidence": {
+      "observed_worlds": [
+        "simple_recon_v0_1"
+      ],
+      "world_correct": true,
+      "expected_models": [
+        "x500_0",
+        "x500_1",
+        "x500_2"
+      ],
+      "clock": {
+        "sample_count": 499,
+        "sim_span_s": 1.9920000000000186,
+        "real_span_s": 1.9920008670000016,
+        "real_time_factor": 0.9999995647592341,
+        "minimum_real_time_factor": 0.2,
+        "minimum_window_s": 1.0,
+        "first_sim_s": 258.7,
+        "last_sim_s": 260.692,
+        "topic": "/world/simple_recon_v0_1/clock",
+        "wall_elapsed_s": 2.1278649870000663
+      },
+      "stability_window_s": 10.0,
+      "run_id": "75bd5d679f9148cfa1b391714976aa0f",
+      "gazebo_process": {
+        "process_identity_valid": true,
+        "reason": "ok",
+        "processes": [
+          {
+            "code": "match",
+            "node_id": "UAV-01",
+            "pid": 11063,
+            "signal_allowed": true,
+            "mismatches": [],
+            "expected": {
+              "pid": 11063,
+              "pgid": 10851,
+              "proc_start_time_ticks": 119310,
+              "executable": "/usr/bin/ruby3.0",
+              "cmdline": [
+                "gz sim --verbose=1 -r -s /mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "observed": {
+              "pid": 11063,
+              "pgid": 10851,
+              "proc_start_time_ticks": 119310,
+              "executable": "/usr/bin/ruby3.0",
+              "cmdline": [
+                "gz sim --verbose=1 -r -s /mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "detail": null
+          }
+        ]
+      },
+      "evidence_age_ms": 291.63193702697754,
+      "evidence_fresh": true,
+      "telemetry_source": "runtime",
+      "runtime_telemetry_contract_version": null
+    },
+    "vehicles": [
+      {
+        "node_id": "UAV-01",
+        "system_id": 1,
+        "component_id": 1,
+        "endpoint": "udpin:127.0.0.1:14540",
+        "heartbeat_fresh": false,
+        "telemetry_fresh": false,
+        "process_identity_valid": true,
+        "last_seen": null,
+        "reason": "runtime_telemetry_missing,system_id_mismatch,component_id_mismatch,telemetry_stale",
+        "evidence": {
+          "expected_system_id": 1,
+          "observed_system_ids": [],
+          "expected_component_id": 1,
+          "observed_component_ids": [],
+          "gazebo_model_name": "x500_0",
+          "model_present": true,
+          "process": {
+            "code": "match",
+            "node_id": "UAV-01",
+            "pid": 10851,
+            "signal_allowed": true,
+            "mismatches": [],
+            "expected": {
+              "pid": 10851,
+              "pgid": 10851,
+              "proc_start_time_ticks": 118471,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "0",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "observed": {
+              "pid": 10851,
+              "pgid": 10851,
+              "proc_start_time_ticks": 118471,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "0",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-01",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "detail": null
+          },
+          "telemetry_source": "runtime",
+          "telemetry": {
+            "error": "ValueError: runtime_telemetry_missing"
+          }
+        },
+        "readiness": false
+      },
+      {
+        "node_id": "UAV-02",
+        "system_id": 2,
+        "component_id": 1,
+        "endpoint": "udpin:127.0.0.1:14541",
+        "heartbeat_fresh": false,
+        "telemetry_fresh": false,
+        "process_identity_valid": true,
+        "last_seen": null,
+        "reason": "runtime_telemetry_missing,system_id_mismatch,component_id_mismatch,telemetry_stale",
+        "evidence": {
+          "expected_system_id": 2,
+          "observed_system_ids": [],
+          "expected_component_id": 1,
+          "observed_component_ids": [],
+          "gazebo_model_name": "x500_1",
+          "model_present": true,
+          "process": {
+            "code": "match",
+            "node_id": "UAV-02",
+            "pid": 11270,
+            "signal_allowed": true,
+            "mismatches": [],
+            "expected": {
+              "pid": 11270,
+              "pgid": 11270,
+              "proc_start_time_ticks": 120065,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "1",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-02",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "observed": {
+              "pid": 11270,
+              "pgid": 11270,
+              "proc_start_time_ticks": 120065,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "1",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-02",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "detail": null
+          },
+          "telemetry_source": "runtime",
+          "telemetry": {
+            "error": "ValueError: runtime_telemetry_missing"
+          }
+        },
+        "readiness": false
+      },
+      {
+        "node_id": "UAV-03",
+        "system_id": 3,
+        "component_id": 1,
+        "endpoint": "udpin:127.0.0.1:14542",
+        "heartbeat_fresh": false,
+        "telemetry_fresh": false,
+        "process_identity_valid": true,
+        "last_seen": null,
+        "reason": "runtime_telemetry_missing,system_id_mismatch,component_id_mismatch,telemetry_stale",
+        "evidence": {
+          "expected_system_id": 3,
+          "observed_system_ids": [],
+          "expected_component_id": 1,
+          "observed_component_ids": [],
+          "gazebo_model_name": "x500_2",
+          "model_present": true,
+          "process": {
+            "code": "match",
+            "node_id": "UAV-03",
+            "pid": 11816,
+            "signal_allowed": true,
+            "mismatches": [],
+            "expected": {
+              "pid": 11816,
+              "pgid": 11816,
+              "proc_start_time_ticks": 121036,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "2",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-03",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "observed": {
+              "pid": 11816,
+              "pgid": 11816,
+              "proc_start_time_ticks": 121036,
+              "executable": "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+              "cmdline": [
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/bin/px4",
+                "-i",
+                "2",
+                "-d",
+                "/home/zyq/PX4-Autopilot/build/px4_sitl_default/etc"
+              ],
+              "cwd": "/mnt/d/2026UAVSwarm-worktrees/px4-gazebo-runtime-integration/.runtime/px4_gazebo/UAV-03",
+              "run_id": "75bd5d679f9148cfa1b391714976aa0f"
+            },
+            "detail": null
+          },
+          "telemetry_source": "runtime",
+          "telemetry": {
+            "error": "ValueError: runtime_telemetry_missing"
+          }
+        },
+        "readiness": false
+      }
+    ]
+  },
+  "g1_status": "NOT_RUN_USER_REQUESTED_VERSION_FREEZE"
+}

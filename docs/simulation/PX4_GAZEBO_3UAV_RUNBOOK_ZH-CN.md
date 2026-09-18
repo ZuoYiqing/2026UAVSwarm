@@ -1,5 +1,9 @@
 # PX4 / Gazebo 三机仿真运行手册
 
+本轮坐标标定、证据有效期和 Runtime 集成操作以
+[集成补充手册](PX4_GAZEBO_RUNTIME_INTEGRATION_ZH-CN.md) 为准。
+历史验收记录不能证明当前版本通过。
+
 ## 1. 适用范围
 
 本工作线只负责 PX4 SITL、Gazebo 场景、三机身份绑定、仿真健康证明、独立验收巡检和安全停止。
@@ -69,21 +73,20 @@ Harness 只读共享配置并校验漂移，不会自动覆盖。发现差异时
 - Gazebo world：ENU / Z-up；
 - 场景、障碍物、禁飞区、巡检航线和机间距离：共享 `scene_ned`；
 - PX4 `LOCAL_POSITION_NED` 和 `SET_POSITION_TARGET_LOCAL_NED`：每机独立 `vehicle_local_ned`；
-- 两个 NED frame 均为 `z_down`，但原点和朝向可以不同；
-- 高度相对本机 spawn：`altitude_m = max(0, -vehicle_local_z_m)`；
+- 两个 NED frame 均为 `z_down`，本实现只支持轴对齐、原点不同；
+- 相对起飞高度为起飞前 local z 减当前 local z，不等于公共高程或 AGL；
 - Runtime / Cesium：消费 `scene_ned`，并结合唯一 WGS84 origin 转换。
 
-设本机 spawn 在 `scene_ned` 中为平移 `t_spawn`，spawn yaw 为 `yaw`：
+设实测 local 原点平移为 `t_calibrated`，载具 yaw 不参与 NED 坐标变换：
 
 ```text
-scene_xy = t_spawn_xy + R(yaw) * vehicle_local_xy
-scene_z  = t_spawn_z  + vehicle_local_z
-
-vehicle_local_xy = R(-yaw) * (scene_xy - t_spawn_xy)
-vehicle_local_z  = scene_z - t_spawn_z
+scene_ned = vehicle_local_ned + t_calibrated
+vehicle_local_ned = scene_ned - t_calibrated
 ```
 
-当 spawn yaw 为 0 时，退化为：
+spawn 仅为初始布局，不代替实测 EKF 原点。非零 `frame_rotation_deg` 拒绝；
+重启、EKF 原点或 reset counter 变化、Gazebo model ID 变化后必须重新标定。
+早期未标定公式只适合几何单元测试，不能作为生产物理证据：
 
 ```text
 vehicle_local_ned = scene_ned - vehicle_spawn_ned
@@ -228,11 +231,18 @@ Runtime telemetry 最小契约：
 ```json
 {
   "contract_version": "1.0",
+  "scene_id": "simple_recon_v0_1",
+  "run_id": "<current harness run_id>",
+  "source_timestamp": "<UTC producer sample timestamp>",
+  "valid_for_ms": 5000,
   "vehicles": [
     {
       "node_id": "UAV-01",
       "system_id": 1,
       "component_id": 1,
+      "endpoint": "udpin:127.0.0.1:14540",
+      "heartbeat_timestamp": "<UTC heartbeat receive timestamp>",
+      "position_timestamp": "<UTC LOCAL_POSITION_NED receive timestamp>",
       "heartbeat_fresh": true,
       "telemetry_fresh": true,
       "last_seen": "<UTC timestamp>",

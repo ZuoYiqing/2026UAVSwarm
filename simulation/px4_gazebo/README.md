@@ -51,8 +51,10 @@ Patrol geometry, obstacle checks, no-fly checks and separation use the shared
 `scene_ned` frame. Each public waypoint is transformed into the target
 aircraft's `vehicle_local_ned` frame before `SET_POSITION_TARGET_LOCAL_NED` is
 sent. Raw PX4 `LOCAL_POSITION_NED` is transformed back into `scene_ned` before
-any cross-vehicle calculation. Spawn translation and yaw rotation are both
-part of this transform.
+any cross-vehicle calculation. Measured origin translation is used; vehicle yaw
+does not rotate NED axes. Explicit nonzero frame rotations are rejected.
+See [the integration runbook](../../docs/simulation/PX4_GAZEBO_RUNTIME_INTEGRATION_ZH-CN.md)
+for calibration validity, evidence publication and current acceptance limits.
 
 Health has two explicit modes. `--mode standalone` directly probes MAVLink and
 requires Runtime to be stopped. `--mode integrated --runtime-telemetry <json>`

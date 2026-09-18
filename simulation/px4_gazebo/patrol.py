@@ -18,8 +18,12 @@ from typing import Any, Callable
 
 try:
     from . import harness
+    from .calibration import aligned_translation, check_context, read_origin_context, translation_from_calibration
+    from .gazebo_evidence import capture_poses
 except ImportError:  # Direct script execution adds this directory to sys.path.
     import harness  # type: ignore
+    from calibration import aligned_translation, check_context, read_origin_context, translation_from_calibration
+    from gazebo_evidence import capture_poses
 
 
 DEFAULT_PATROL_PATH = (
@@ -57,21 +61,11 @@ def vehicle_local_to_scene_ned(
     vehicle_spawn_ned: dict[str, Any],
 ) -> PositionNED:
     """Transform one PX4-local NED position into the shared scene NED frame."""
-    yaw_rad = math.radians(float(vehicle_spawn_ned.get("yaw_deg", 0.0)))
-    cos_yaw = math.cos(yaw_rad)
-    sin_yaw = math.sin(yaw_rad)
+    north, east, down = aligned_translation(vehicle_spawn_ned)
     return PositionNED(
-        x_m=(
-            float(vehicle_spawn_ned["x_m"])
-            + cos_yaw * position.x_m
-            - sin_yaw * position.y_m
-        ),
-        y_m=(
-            float(vehicle_spawn_ned["y_m"])
-            + sin_yaw * position.x_m
-            + cos_yaw * position.y_m
-        ),
-        z_m=float(vehicle_spawn_ned["z_m"]) + position.z_m,
+        x_m=north + position.x_m,
+        y_m=east + position.y_m,
+        z_m=down + position.z_m,
     )
 
 
@@ -80,15 +74,11 @@ def scene_to_vehicle_local_ned(
     vehicle_spawn_ned: dict[str, Any],
 ) -> PositionNED:
     """Transform one shared scene NED position into a PX4-local NED frame."""
-    yaw_rad = math.radians(float(vehicle_spawn_ned.get("yaw_deg", 0.0)))
-    cos_yaw = math.cos(yaw_rad)
-    sin_yaw = math.sin(yaw_rad)
-    delta_x = position.x_m - float(vehicle_spawn_ned["x_m"])
-    delta_y = position.y_m - float(vehicle_spawn_ned["y_m"])
+    north, east, down = aligned_translation(vehicle_spawn_ned)
     return PositionNED(
-        x_m=cos_yaw * delta_x + sin_yaw * delta_y,
-        y_m=-sin_yaw * delta_x + cos_yaw * delta_y,
-        z_m=position.z_m - float(vehicle_spawn_ned["z_m"]),
+        x_m=position.x_m - north,
+        y_m=position.y_m - east,
+        z_m=position.z_m - down,
     )
 
 
@@ -414,7 +404,7 @@ def ack_accepted(ack: dict[str, Any] | None) -> bool:
 class MavlinkPatrolController:
     """One short-lived standalone controller bound to one MAVLink session."""
 
-    def __init__(self, vehicle: dict[str, Any], session: Any) -> None:
+    def __init__(self, vehicle: dict[str, Any], session: Any, *, calibration_provider=None) -> None:
         self.vehicle = vehicle
         self.session = session
         self.node_id = str(vehicle["node_id"])
@@ -437,6 +427,17 @@ class MavlinkPatrolController:
         self._setpoint_thread: threading.Thread | None = None
         self._setpoint_error: str | None = None
         self.connected = False
+        self.calibration: dict[str, Any] | None = None
+        self._calibration_provider = calibration_provider
+        self._origin_stop = threading.Event()
+        self._origin_thread: threading.Thread | None = None
+        self._calibration_error: str | None = None
+        self._last_boot_ms: int | None = None
+        self._heartbeat_at: float | None = None
+        self._landed_at: float | None = None
+        self._landed_state: int | None = None
+        self._land_sent_at: float | None = None
+        self._takeoff_local_z: float | None = None
 
     @property
     def max_altitude_m(self) -> float:
@@ -450,7 +451,14 @@ class MavlinkPatrolController:
 
     def position(self) -> PositionNED | None:
         with self._condition:
+            if self._calibration_error or self._last_telemetry_at is None or time.monotonic() - self._last_telemetry_at > TELEMETRY_STALE_AFTER_S:
+                return None
             return self._scene_position
+
+    def position_sample(self) -> dict[str, Any]:
+        with self._condition:
+            return {"position": self.position(), "sequence": self._position_sequence,
+                    "received_at": self._last_telemetry_at, "calibration_valid": self._calibration_error is None}
 
     def vehicle_local_position(self) -> PositionNED | None:
         with self._condition:
@@ -464,6 +472,10 @@ class MavlinkPatrolController:
         message_type = getattr(message, "get_type", lambda: "")()
         with self._condition:
             if message_type == "LOCAL_POSITION_NED":
+                boot_ms = getattr(message, "time_boot_ms", None)
+                if boot_ms is not None and self._last_boot_ms is not None and boot_ms < self._last_boot_ms:
+                    self._calibration_error = "px4_boot_clock_reset"
+                self._last_boot_ms = boot_ms
                 self._vehicle_local_position = PositionNED(
                     x_m=float(getattr(message, "x", 0.0)),
                     y_m=float(getattr(message, "y", 0.0)),
@@ -476,7 +488,7 @@ class MavlinkPatrolController:
                 self._position_sequence += 1
                 self._max_altitude_m = max(
                     self._max_altitude_m,
-                    self._vehicle_local_position.altitude_m,
+                    (self._takeoff_local_z or 0.0) - self._vehicle_local_position.z_m,
                 )
                 self._last_telemetry_at = time.monotonic()
             elif message_type == "HEARTBEAT":
@@ -485,6 +497,10 @@ class MavlinkPatrolController:
                 )
                 self._armed = bool(int(getattr(message, "base_mode", 0)) & armed_flag)
                 self._custom_mode = int(getattr(message, "custom_mode", 0))
+                self._heartbeat_at = time.monotonic()
+            elif message_type == "EXTENDED_SYS_STATE":
+                self._landed_state = int(getattr(message, "landed_state", 0))
+                self._landed_at = time.monotonic()
             self._condition.notify_all()
 
     def connect(self, *, timeout_s: float) -> dict[str, Any]:
@@ -502,15 +518,52 @@ class MavlinkPatrolController:
         if not ack_accepted(stream_ack):
             raise PatrolError(f"{self.node_id} LOCAL_POSITION_NED stream request failed")
         self.connected = True
+        # EXTENDED_SYS_STATE is completion evidence, not a flight command.
+        connection = self.session.connection
+        if connection is not None:
+            with self.session.tx_lock:
+                connection.mav.command_long_send(self.session.target_system, self.session.target_component,
+                                                 511, 0, 245, 200000, 0, 0, 0, 0, 0)
+        if self._calibration_provider is not None:
+            self.calibration = self._calibration_provider(self.vehicle, self.session)
+            self.vehicle_spawn_ned = translation_from_calibration(self.calibration)
+            self._origin_thread = threading.Thread(target=self._monitor_origin, daemon=True,
+                                                    name=f"patrol-origin-{self.node_id}")
+            self._origin_thread.start()
         return stream_ack
 
+    def _monitor_origin(self) -> None:
+        while not self._origin_stop.wait(0.5):
+            try:
+                self._check_calibration()
+            except Exception as exc:
+                self._calibration_error = str(exc)
+                self._setpoint_error = f"calibration_invalid:{exc}"
+                return
+
+    def _check_calibration(self) -> None:
+        if self._calibration_error:
+            raise PatrolError(self._calibration_error)
+        if self.calibration is not None:
+            state = harness.read_state() or {}
+            poses = capture_poses(str(state["world_name"]), .25)
+            ids = {p["id"] for message in poses for p in message.get("pose", [])
+                   if p.get("name") == self.vehicle["gazebo_model_name"]}
+            if len(ids) != 1:
+                raise PatrolError("calibration_model_missing_or_replaced")
+            check_context(self.calibration, read_origin_context(self.vehicle), model_id=next(iter(ids)))
+
     def arm(self, *, timeout_s: float) -> dict[str, Any]:
+        self._check_calibration()
         ack = self.session.arm(timeout_s=timeout_s)
         if not ack_accepted(ack):
             raise PatrolError(f"{self.node_id} ARM ACK failed")
         return ack
 
     def takeoff(self, *, altitude_m: float, timeout_s: float) -> dict[str, Any]:
+        self._check_calibration()
+        if self._vehicle_local_position is not None:
+            self._takeoff_local_z = self._vehicle_local_position.z_m
         ack = self.session.takeoff(altitude_m=altitude_m, timeout_s=timeout_s)
         if not ack_accepted(ack):
             raise PatrolError(f"{self.node_id} TAKEOFF ACK failed")
@@ -551,6 +604,8 @@ class MavlinkPatrolController:
         }
 
     def _send_setpoint(self, scene_target: PositionNED) -> None:
+        if self._calibration_error:
+            raise PatrolError(f"calibration_invalid:{self._calibration_error}")
         vehicle_local_target = scene_to_vehicle_local_ned(
             scene_target,
             self.vehicle_spawn_ned,
@@ -740,6 +795,7 @@ class MavlinkPatrolController:
         }
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
+        self._land_sent_at = time.monotonic()
         ack = self.session.land(timeout_s=timeout_s)
         if ack_accepted(ack):
             self.stop_setpoints()
@@ -770,10 +826,18 @@ class MavlinkPatrolController:
                         low_samples += 1
                     else:
                         low_samples = 0
-                if low_samples >= 3 and self._armed is False:
+                now = time.monotonic()
+                after = self._land_sent_at or 0.0
+                if (self._landed_state == 1 and self._armed is False
+                        and self._landed_at is not None and self._heartbeat_at is not None
+                        and self._landed_at >= after and self._heartbeat_at >= after
+                        and now - self._landed_at <= 2 and now - self._heartbeat_at <= 2):
                     return {
                         "landed": True,
                         "disarmed": True,
+                        "landed_state": self._landed_state,
+                        "landed_age_s": now - self._landed_at,
+                        "heartbeat_age_s": now - self._heartbeat_at,
                         **framed_position_report(
                             scene_position=self._scene_position,
                             vehicle_local_position=self._vehicle_local_position,
@@ -799,6 +863,9 @@ class MavlinkPatrolController:
         self._setpoint_thread = None
 
     def close(self) -> None:
+        self._origin_stop.set()
+        if self._origin_thread is not None:
+            self._origin_thread.join(timeout=4)
         self.stop_setpoints()
         if self._subscription is not None:
             self.session.unsubscribe(self._subscription)
@@ -814,6 +881,7 @@ def run_patrol(
     command_timeout_s: float = 10.0,
     landing_timeout_s: float = 45.0,
     sleep: Callable[[float], None] = time.sleep,
+    motion_observer: Any = None,
 ) -> dict[str, Any]:
     """Execute and report one deterministic standalone three-UAV patrol."""
     by_node = {controller.node_id: controller for controller in controllers}
@@ -833,19 +901,39 @@ def run_patrol(
         for row in plan_rows
     }
     stop_monitor = threading.Event()
+    monitor_active = threading.Event()
     separation: dict[str, Any] = {
         "minimum_distance_m": None,
         "pair": None,
         "sample_count": 0,
+        "attempt_count": 0,
+        "incomplete_samples": 0,
+        "maximum_gap_s": 0.0,
     }
 
     def monitor_separation() -> None:
+        sequences: dict[str, int] = {}
+        last_complete: float | None = None
         while not stop_monitor.wait(0.1):
-            positions = {
-                node_id: position
-                for node_id, controller in by_node.items()
-                if (position := controller.position()) is not None
-            }
+            if not monitor_active.is_set():
+                continue
+            now = time.monotonic()
+            if last_complete is None:
+                last_complete = now
+            samples = {node_id: controller.position_sample() for node_id, controller in by_node.items()}
+            separation["attempt_count"] += 1
+            complete = all(sample["position"] is not None and sample["calibration_valid"]
+                           and sample["received_at"] is not None
+                           and now - sample["received_at"] <= TELEMETRY_STALE_AFTER_S
+                           and sample["sequence"] > sequences.get(node_id, -1)
+                           for node_id, sample in samples.items())
+            separation["maximum_gap_s"] = max(separation["maximum_gap_s"], now - last_complete)
+            if not complete:
+                separation["incomplete_samples"] += 1
+                continue
+            last_complete = now
+            sequences = {node_id: sample["sequence"] for node_id, sample in samples.items()}
+            positions = {node_id: sample["position"] for node_id, sample in samples.items()}
             candidate, pair = minimum_pairwise_distance(positions)
             if candidate is None:
                 continue
@@ -862,12 +950,16 @@ def run_patrol(
     )
     monitor_thread.start()
     error: str | None = None
+    physical_evidence: dict[str, Any] | None = None
     try:
         for row in plan_rows:
             node_id = str(row["node_id"])
             results[node_id]["stream_ack"] = by_node[node_id].connect(
                 timeout_s=command_timeout_s
             )
+        monitor_active.set()
+        if motion_observer is not None:
+            motion_observer.start()
 
         for index, row in enumerate(plan_rows):
             node_id = str(row["node_id"])
@@ -918,7 +1010,8 @@ def run_patrol(
             controller = by_node[node_id]
             current = controller.position()
             if current is None:
-                raise PatrolError(f"{node_id} has no LOCAL_POSITION_NED")
+                raise PatrolError(f"{node_id} has no usable LOCAL_POSITION_NED: "
+                                  f"{getattr(controller, '_calibration_error', None) or 'telemetry_stale'}")
             hold_target = PositionNED(
                 x_m=current.x_m,
                 y_m=current.y_m,
@@ -1021,7 +1114,15 @@ def run_patrol(
     finally:
         stop_monitor.set()
         monitor_thread.join(timeout=2.0)
+        if motion_observer is not None:
+            try:
+                physical_evidence = motion_observer.finish()
+            except Exception as exc:
+                physical_evidence = {"status": "FAIL", "error": f"{type(exc).__name__}:{exc}"}
         for controller in controllers:
+            results[controller.node_id]["calibration"] = getattr(controller, "calibration", None)
+            results[controller.node_id]["calibration_valid_at_end"] = not getattr(controller, "_calibration_error", None)
+            results[controller.node_id]["calibration_error"] = getattr(controller, "_calibration_error", None)
             results[controller.node_id]["max_altitude_m"] = round(
                 controller.max_altitude_m,
                 3,
@@ -1038,10 +1139,19 @@ def run_patrol(
     separation["threshold_m"] = float(plan["minimum_separation_m"])
     separation["threshold_met"] = bool(
         minimum_distance is not None
+        and separation["sample_count"] >= 2
+        and separation["maximum_gap_s"] <= 1.0
+        and separation["incomplete_samples"] <= separation["attempt_count"] * 0.1
         and float(minimum_distance) >= float(plan["minimum_separation_m"])
     )
     if error is None and not separation["threshold_met"]:
-        error = "PatrolError: minimum_separation_below_threshold"
+        error = "PatrolError: minimum_separation_or_sample_coverage_failed"
+    if error is None and any(not row["calibration_valid_at_end"] for row in results.values()):
+        error = "PatrolError: calibration_invalid"
+    if error is None and physical_evidence is not None and (
+            physical_evidence.get("status") != "PASS"
+            or physical_evidence.get("minimum_world_distance_m", 0) < float(plan["minimum_separation_m"])):
+        error = "PatrolError: physical_coordinate_or_separation_validation_failed"
     status = "PASS" if error is None else "FAIL"
     return {
         "status": status,
@@ -1057,5 +1167,6 @@ def run_patrol(
         "completed_at": harness.utc_now(),
         "vehicles": [results[str(row["node_id"])] for row in plan_rows],
         "separation": separation,
+        "physical_evidence": physical_evidence,
         "error": error,
     }

@@ -4,6 +4,7 @@
   "px4_autopilot_dir": "~/PX4-Autopilot",
   "build_target": "px4_sitl_default",
   "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
   "scene_path": "scenarios/simple_recon_v0_1/scene.json",
   "world_name": "simple_recon_v0_1",
   "world_path": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
