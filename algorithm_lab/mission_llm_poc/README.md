@@ -5,6 +5,15 @@
 验证结果：19/19 单元测试、40/40 框架案例、5/5 规则基线演示通过。
 证据见 docs/verification.json 与 docs/scaffold_validation.json。
 
+2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
+[参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
+早期报告和verification.json是当时的历史记录，不表示当前Git提交状态。
+首轮待批准的[下载清单](docs/DOWNLOAD_PROPOSAL_20260920.json)已固定文件版本、大小和发布方哈希，
+三个主要制品合计约3.39GB；尚未下载或在本地校验这些制品。
+
+部署要求：所有任务推理完全离线，禁止闭源云模型调用、云端回退和自动联网下载。
+制品准备阶段与断网部署阶段分开验收。现有模块没有下载器，也尚未验证真实推理引擎离线冷启动。
+
 输入结构化任务、自然语言目标和集群快照，输出受 JSON Schema 及语义校验约束的
 Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解自然语言。
 本实验的 schema 是 Algorithm Lab 草案，不是对主线 Plan IR 的修改。
@@ -45,7 +54,7 @@ python -m venv .venv
 - contracts.py：严格 JSON、schema 校验、内容哈希。
 - semantic_validator.py：任务完整性、载具资格、Policy DENY、快照时效检查。
 - mission_planner.py：规则基线与可选模型推理流程。
-- local_model_client.py：显式指定的 loopback 文本推理服务，无工具调用。
+- local_model_client.py：可选的本机推理适配器，只调用 loopback 文本推理服务，无工具调用。
 - benchmark.py：框架验证和真实模型实验分开统计。
 - examples：5 个合成场景，绝不是当前无人机遥测。
 - tests：单元验证，无网络/飞控/模型权重依赖。
@@ -64,6 +73,12 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 
 ## 真实模型入口（Step 3 之后使用）
 
+这里的client只是程序之间传递输入/输出的适配器，不是新的前端控制台，
+也不是模型本身；不要求安装Ollama。当前实现使用本机HTTP，未来也可实现
+同进程Python/C++或硬件厂商SDK后端，仍返回同样的实验提案；这些后端尚未实现。
+无人平台上是伴随计算机加载本地权重，不是把聊天页面或大模型装进飞控。
+现有前端不变；如何集成由Integration Owner决定。
+
 先确定模型版本、量化、权重路径、许可证和推理框架，再另行批准下载。
 已有经过确认的本机模型服务时，可显式运行：
 
@@ -76,6 +91,9 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 不使用环境代理、不跟随重定向、不重试、不发送 tools。
 默认请求约束 JSON；如服务不支持会明确失败。--unconstrained 仅用于显式对比。
 后续需按实际推理框架验证 schema 子集兼容性、模型身份和推理设置。
+loopback限制只约束本适配器，不能证明其后面的服务不会联网。
+正式部署还需预置全部权重/分词器/视觉处理器、限制引擎出站网络、
+关闭遥测及自动更新，并在隔离网络环境完成冷启动测试。
 
 记录原始文本、输入/提示词/输出哈希、服务返回模型名、token usage 和端到端耗时。
 尚未采集首 token 延迟、峰值显存、权重 revision 或 GPU 吞吐；未知值保持 null。
