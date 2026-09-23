@@ -731,6 +731,7 @@ class RuntimeStateStore:
                     "scene_origin": calibration.get("scene_origin") if calibration else None,
                     "altitude_reference": calibration.get("altitude_reference") if calibration else None,
                     "origin_continuity": calibration.get("origin_continuity") if calibration else None,
+                    "axis_alignment": calibration.get("axis_alignment") if calibration else None,
                     "source_timestamp": node.get("last_seen"),
                     "sample_timestamp": node.get("last_seen"),
                     "calibration_source_timestamp": calibration.get("source_timestamp") if calibration else None,
