@@ -34,10 +34,13 @@ import {
   Minus,
   Compass,
   Radio,
+  ArrowUp,
+  ArrowDown,
 } from "lucide";
 import { DemoVehicleFeed } from "./demo-vehicle-feed.js";
 import { VEHICLE_CONTRACT_VERSION } from "./vehicle-contract.js";
 import { VehicleLayer } from "./vehicle-layer.js";
+import { createFlightActionClient } from "./flight-action.js";
 import { QINGLAN_SCENE, RECON_SCENE } from "./scene-alignment.js";
 import { createReferenceScene } from "./reference-scene.js";
 import { createParentMessageHandler } from "./parent-bridge.js";
@@ -118,6 +121,10 @@ const elements = {
   telemetryPanel: document.querySelector(".telemetry-panel"),
   liveButton: document.querySelector("#live-button"),
   demoButton: document.querySelector("#demo-button"),
+  takeoffAltitude: document.querySelector("#takeoff-altitude"),
+  takeoffButton: document.querySelector("#action-takeoff"),
+  landButton: document.querySelector("#action-land"),
+  actionResult: document.querySelector("#action-result"),
 };
 
 const viewer = new Viewer("cesium-container", {
@@ -275,6 +282,16 @@ function refreshVehicleControls() {
   }
   elements.vehicleSelect.disabled = records.length === 0;
 
+  // 只有当选中载具确实在选择列表中时才回写 .value。
+  // 若选中的载具因标定过期暂时不在列表里，直接赋值 "" 或让它落到第一个
+  // option，会在下一次快照时把用户的选择顶掉，表现为"选谁都是第一架"。
+  if (records.some((record) => record.vehicle.id === selectedId)) {
+    elements.vehicleSelect.value = selectedId;
+  } else if (!selectedId && records.length > 0) {
+    vehicleLayer.setSelected(records[0].vehicle.id);
+    elements.vehicleSelect.value = vehicleLayer.selectedVehicleId;
+  }
+
   const typeCount = new Set(records.map((record) => record.vehicle.vehicleType))
     .size;
   const staleCount = records.filter((record) =>
@@ -336,7 +353,11 @@ function refreshSelectedTelemetry() {
 
 function setSelectedVehicle(vehicleId) {
   vehicleLayer.setSelected(vehicleId);
-  elements.vehicleSelect.value = vehicleLayer.selectedVehicleId;
+  // 不要无条件回写 .value —— vehicleId 无效时 setSelected() 会把内部选择置空，
+  // 而给 <select> 赋空值会让浏览器自动选中第一个 option，造成选择被静默顶掉。
+  if (elements.vehicleSelect.querySelector(`option[value="${CSS.escape(vehicleLayer.selectedVehicleId)}"]`)) {
+    elements.vehicleSelect.value = vehicleLayer.selectedVehicleId;
+  }
   refreshSelectedTelemetry();
   if (followEnabled) {
     viewer.trackedEntity =
@@ -683,6 +704,8 @@ createIcons({
     Minus,
     Compass,
     Radio,
+    ArrowUp,
+    ArrowDown,
   },
 });
 document
@@ -781,6 +804,101 @@ document.querySelector("#label-toggle").addEventListener("change", (event) => {
 
 elements.vehicleSelect.addEventListener("change", (event) => {
   setSelectedVehicle(event.target.value);
+});
+
+/* ------------------------------------------------------------------ *
+ * 飞行动作控制
+ *
+ * 按钮 → Runtime 的 /api/actions/* → Policy Gate → MAVLink → PX4。
+ * 本页只负责"发起请求 + 呈现结果"，不做任何本地状态推断：
+ * 飞机的真实状态以 Runtime 回报的 ACK / 高度观测 / policy_decision 为准。
+ * 演示数据（DEMO 模式）下禁止发动作，避免用户误以为在控制真机。
+ * ------------------------------------------------------------------ */
+
+const flightActionClient = createFlightActionClient({
+  // 用相对路径走 Vite 的 /api 代理：既避免跨域，也与快照轮询保持同一来源。
+  apiBaseUrl: "/api",
+});
+
+function selectedNodeId() {
+  return vehicleLayer.selectedVehicleId || "";
+}
+
+function describeActionOutcome(result) {
+  if (!result.ok) {
+    return `失败 · ${result.error}${result.message && result.message !== result.error ? ` · ${result.message}` : ""}`;
+  }
+  const s = result.summary || {};
+  const acks = [
+    s.acks?.arm ? `ARM ${s.acks.arm.resultName || s.acks.arm.result}` : null,
+    s.acks?.takeoff ? `TAKEOFF ${s.acks.takeoff.resultName || s.acks.takeoff.result}` : null,
+    s.acks?.land ? `LAND ${s.acks.land.resultName || s.acks.land.result}` : null,
+  ].filter(Boolean);
+  const altitude =
+    s.maxAltitudeM === null || s.maxAltitudeM === undefined ? null : `最高 ${s.maxAltitudeM} m`;
+  const policy = s.policyDecision?.decisionCode ? `policy ${s.policyDecision.decisionCode}` : null;
+  return [`成功 · ${s.status || s.result}`, altitude, ...acks, policy]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function showActionResult(text, state = "busy") {
+  elements.actionResult.hidden = false;
+  elements.actionResult.textContent = text;
+  elements.actionResult.dataset.state = state;
+}
+
+function setActionBusy(busy, label = "") {
+  elements.takeoffButton.disabled = busy;
+  elements.landButton.disabled = busy;
+  elements.vehicleSelect.disabled = busy || vehicleLayer.getRecords().length === 0;
+  if (busy) {
+    showActionResult(label, "busy");
+  }
+}
+
+async function runFlightAction(kind) {
+  const nodeId = selectedNodeId();
+  if (!nodeId) {
+    showActionResult("请先选择一个载具", "error");
+    return;
+  }
+  if (snapshotState.mode === "demo") {
+    showActionResult("当前为 DEMO 演示数据，不能下发飞行动作", "error");
+    return;
+  }
+
+  if (kind === "takeoff") {
+    const altitudeM = Number(elements.takeoffAltitude?.value);
+    if (!Number.isFinite(altitudeM) || altitudeM <= 0) {
+      showActionResult("起飞高度必须是大于 0 的数字", "error");
+      return;
+    }
+    setActionBusy(true, `${nodeId} 起飞中… 目标 ${altitudeM} m（等待 Runtime 回报）`);
+    try {
+      const result = await flightActionClient.takeoff({ nodeId, altitudeM });
+      showActionResult(`${nodeId} 起飞：${describeActionOutcome(result)}`, result.ok ? "ok" : "error");
+    } finally {
+      setActionBusy(false);
+    }
+    return;
+  }
+
+  setActionBusy(true, `${nodeId} 降落中…（等待 Runtime 回报）`);
+  try {
+    const result = await flightActionClient.land({ nodeId });
+    showActionResult(`${nodeId} 降落：${describeActionOutcome(result)}`, result.ok ? "ok" : "error");
+  } finally {
+    setActionBusy(false);
+  }
+}
+
+elements.takeoffButton.addEventListener("click", () => {
+  runFlightAction("takeoff");
+});
+
+elements.landButton.addEventListener("click", () => {
+  runFlightAction("land");
 });
 
 elements.playButton.addEventListener("click", () => {

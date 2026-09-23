@@ -174,11 +174,14 @@ export class VehicleLayer {
       }
     }
 
-    if (
-      !this.selectedVehicleId ||
-      !this.records.has(this.selectedVehicleId)
-    ) {
-      this.setSelected(snapshot.vehicles[0]?.id || "");
+    // 选择状态的保留策略（修复"选谁都会跳回第一架"）：
+    // 选中载具可能因为标定过期而暂时失去可用位置、被上游快照过滤掉。此时
+    // 不能把选择重置到 vehicles[0] —— 否则用户选 UAV-02 后，下一次快照一到
+    // 就被打回 UAV-01，表现为"选了 A 却总显示第一架"。
+    // 只保留 ID；标定恢复后该载具重新出现，选择自动生效。
+    // 真正的兜底放在 refreshVehicleControls()：列表为空时才退到第一架。
+    if (!this.selectedVehicleId) {
+      this.selectedVehicleId = snapshot.vehicles[0]?.id || "";
     }
   }
 

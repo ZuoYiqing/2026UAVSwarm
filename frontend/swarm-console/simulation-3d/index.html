@@ -136,6 +136,34 @@
           </button>
         </div>
 
+        <label for="takeoff-altitude">起飞高度 / m</label>
+        <div class="button-row">
+          <input
+            id="takeoff-altitude"
+            type="number"
+            min="1"
+            max="120"
+            step="1"
+            value="3"
+            title="目标起飞高度（米）"
+          />
+          <button
+            id="action-takeoff"
+            type="button"
+            title="让当前载具起飞到目标高度（经 Runtime 与 Policy Gate）"
+          >
+            <i data-lucide="arrow-up"></i> 起飞
+          </button>
+          <button
+            id="action-land"
+            type="button"
+            title="让当前载具降落（经 Runtime 与 Policy Gate）"
+          >
+            <i data-lucide="arrow-down"></i> 降落
+          </button>
+        </div>
+        <div id="action-result" class="alignment-status" role="status" hidden></div>
+
         <label class="switch-row">
           <span>遥测历史航迹 · 实线</span>
           <input id="route-toggle" type="checkbox" checked />

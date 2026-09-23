@@ -789,3 +789,63 @@ select {
     left: 12px;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 飞行动作控制（起飞 / 降落）
+ * 与"园区 / 跟随"那行按钮同一套视觉，但这一行是 3 列：
+ * [高度输入] [起飞] [降落]
+ * ------------------------------------------------------------------ */
+.button-row:has(#action-takeoff) {
+  grid-template-columns: 64px 1fr 1fr;
+}
+
+#takeoff-altitude {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid rgba(122, 169, 178, 0.32);
+  border-radius: 5px;
+  color: #e8f1f2;
+  background: rgba(9, 21, 26, 0.94);
+  font-size: 12px;
+  text-align: center;
+}
+
+#takeoff-altitude:focus {
+  outline: none;
+  border-color: rgba(54, 199, 244, 0.65);
+}
+
+#action-takeoff,
+#action-land {
+  font-size: 12px;
+}
+
+#action-takeoff:disabled,
+#action-land:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 动作结果提示：沿用 alignment-status 的观感，但状态色由 data-state 决定 */
+#action-result {
+  margin-top: 2px;
+}
+
+#action-result[data-state="ok"] {
+  border-left-color: #92ad72;
+  color: #bcccaa;
+  background: #2c3d2438;
+}
+
+#action-result[data-state="error"] {
+  border-left-color: #ff5e5e;
+  color: #ffd5d5;
+  background: #3d0e1238;
+}
+
+#action-result[data-state="busy"] {
+  border-left-color: #36c7f4;
+  color: #bfe6f5;
+  background: #0c2d3a38;
+}
+
