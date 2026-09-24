@@ -146,7 +146,22 @@ def build_calibration(vehicle: dict[str, Any], manifest: dict[str, Any], pairs: 
         "calibration_version": f"{origin_id}:{sampled_at}", "local_origin_id": origin_id,
         "origin_continuity": "verified", "axis_alignment": "ned_aligned",
         "scene_origin": {"kind": "gazebo_world_ned", "north_m": 0.0, "east_m": 0.0, "down_m": 0.0},
-        "altitude_reference": "scene_origin_z_down", "source_timestamp": sampled_at, "valid_for_ms": 5000,
+        "altitude_reference": "scene_origin_z_down", "source_timestamp": sampled_at,
+        # 有效期 60 秒。
+        #
+        # 原值是 5000ms（5 秒），实际发布时还要扣掉采样耗时，只剩约 4.8 秒 ——
+        # 意味着想持续在三维视图里看到载具就必须跑循环发布，否则每 5 秒断一次。
+        # 对操作者是不可用的体验。
+        #
+        # 取 60 秒的依据：
+        #   * Runtime 侧 state_store.py 把 valid_for_ms 钳制在 [100, 60000]，
+        #     60000 是它接受的上限，本值正好取满；
+        #   * 标定的有效性并不靠这个 TTL 保证，而是靠 local_origin_id ——
+        #     它由 PX4 原点字段 + reset counter + 完整进程身份 + Gazebo model_id
+        #     哈希而成（见上方 origin_id）。身份一变标定立即失效，
+        #     与 TTL 无关。TTL 只兜住"标定本身很旧"这种情况。
+        #   * 静止测量得到的平移量不会随时间漂移，60 秒内仍然成立。
+        "valid_for_ms": 60000,
         "translation_scene_ned_m": dict(zip(("north", "east", "down"), translation)),
         "evidence_source": "gazebo_pose_and_px4_local_position", "context": identity,
         "evidence": {"sample_count": len(pairs), "span_s": pairs[-1]["sim_time_s"] - pairs[0]["sim_time_s"],
