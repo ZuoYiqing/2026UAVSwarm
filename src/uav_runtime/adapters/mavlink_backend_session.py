@@ -871,18 +871,40 @@ class MavlinkBackendSession:
             failure_reason = f"goto_exception:{type(exc).__name__}:{exc}"
         finally:
             # --- 4) 无论成功、超时还是异常，都必须收敛 ---
-            # 顺序很重要：先停流，再切回模式。反过来的话，切模式期间流仍在发
+            # 顺序很重要：先停流，再切模式。反过来的话，切模式期间流仍在发
             # OFFBOARD setpoint，会把载具又拉回位置控制。
             stop_stream.set()
             try:
                 restore_result = self.set_mode(
                     main_mode=restore_mode, timeout_s=3.0, confirm_timeout_s=3.0
                 )
+                confirmed = bool(restore_result["confirmed"])
+                observed = restore_result.get("observed_main_mode")
+                # 目标模式没确认时，先看是不是"其实已经安全了"。
+                #
+                # 实测背景：停流后 PX4 自己也会退出 OFFBOARD（它有自己的回退逻辑），
+                # 于是我们的模式命令与 PX4 的回退会撞在一起。曾观测到：命令切 POSCTL
+                # 未确认，但心跳此时报 AUTO（4）—— 载具其实已经离开了 OFFBOARD，
+                # 处于一个正常的自主悬停模式，是安全的。
+                #
+                # 因此确认条件是"**已离开 OFFBOARD 且处于已知模式**"，而不是强求
+                # 某一个特定模式。这样既不和 PX4 的回退打架，也不会放过真正的危险
+                # 状态（仍停在 OFFBOARD）。
+                if not confirmed and observed != PX4_CUSTOM_MAIN_MODE_OFFBOARD and observed in PX4_MAIN_MODE_NAMES:
+                    confirmed = True
+                    restore_result["accepted_fallback"] = True
                 restored = {
-                    "restored": bool(restore_result["confirmed"]),
+                    "restored": confirmed,
                     "main_mode": restore_mode,
                     "main_mode_name": PX4_MAIN_MODE_NAMES.get(restore_mode, str(restore_mode)),
-                    "observed_main_mode": restore_result.get("observed_main_mode"),
+                    "observed_main_mode": observed,
+                    "observed_main_mode_name": (
+                        None if observed is None
+                        else PX4_MAIN_MODE_NAMES.get(int(observed), f"MAIN_{int(observed)}")
+                    ),
+                    # 仍停在 OFFBOARD 是最危险的结果，必须显式标出来
+                    "still_in_offboard": observed == PX4_CUSTOM_MAIN_MODE_OFFBOARD,
+                    "accepted_fallback": bool(restore_result.get("accepted_fallback")),
                     "attempted": True,
                 }
             except Exception as exc:  # noqa: BLE001

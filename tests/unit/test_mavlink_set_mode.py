@@ -601,3 +601,52 @@ def test_goto_requires_connection() -> None:
         assert "connection_required" in str(exc)
     else:
         raise AssertionError("未连接时应抛 RuntimeError")
+
+
+# --- 收敛语义：离开 OFFBOARD 即可，不强制某个特定模式 -----------------------
+
+
+def test_goto_accepts_safe_fallback_when_target_mode_not_confirmed() -> None:
+    """目标模式（POSCTL）没确认，但载具已离开 OFFBOARD -> 视为已收敛。
+
+    实测背景：停流后 PX4 自己也会退出 OFFBOARD，我们的模式命令与它的回退会撞
+    在一起。曾观测到命令切 POSCTL 未确认、心跳报 AUTO（4），而载具其实已处于
+    正常自主悬停模式。若坚持"必须等于 POSCTL"，就会把这种安全结果误报成
+    mode_restore_failed。
+    """
+    # 两次 DO_SET_MODE 都让心跳停留在 AUTO：目标模式永远不确认
+    session, _ = make_goto_session(mode_plan=[PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_MAIN_MODE_AUTO])
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=50.0, east_m=0.0, down_m=-10.0,   # 到不了，走超时路径
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+
+    restored = result["restored"]
+    assert restored["restored"] is True, f"AUTO 是安全模式，应收敛成功：{restored}"
+    assert restored["accepted_fallback"] is True, "应标记为接受了回退模式"
+    assert restored["observed_main_mode"] == PX4_CUSTOM_MAIN_MODE_AUTO
+    assert restored["observed_main_mode_name"] == "AUTO"
+    assert restored["still_in_offboard"] is False
+
+
+def test_goto_rejects_when_vehicle_still_in_offboard() -> None:
+    """仍停在 OFFBOARD -> 必须报未收敛。这是最危险的结果，不能被当成成功。"""
+    # 两次 DO_SET_MODE 后心跳仍报 OFFBOARD
+    session, _ = make_goto_session(
+        mode_plan=[PX4_CUSTOM_MAIN_MODE_OFFBOARD, PX4_CUSTOM_MAIN_MODE_OFFBOARD]
+    )
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=50.0, east_m=0.0, down_m=-10.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+
+    restored = result["restored"]
+    assert restored["restored"] is False, "仍在 OFFBOARD 绝不能算收敛成功"
+    assert restored["still_in_offboard"] is True, "必须显式标出仍在 OFFBOARD"
+    assert restored["accepted_fallback"] is False
