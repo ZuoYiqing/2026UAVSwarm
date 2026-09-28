@@ -1182,6 +1182,18 @@ function handleGroundClick(position) {
     // 保持当前高度：点到地面时若直接用 down=0，就变成"飞到地面"了
     sceneNed.down = current.down;
   }
+
+  // 高度下限保护。
+  //
+  // 载具停在地面时 down≈0，若原样采用，目标就变成"飞到 0 米"——
+  // 实际操作上等于命令它贴地/撞地。实测出现过这个提示：
+  //   "UAV-01 → 北 46.0 m，东 71.1 m，高度 -0.0 m（与当前高度相同）"
+  // 因此兜一个最低高度，避免地面点击产生危险目标。
+  const MIN_ALTITUDE_M = 2;
+  if (-sceneNed.down < MIN_ALTITUDE_M) {
+    sceneNed.down = -MIN_ALTITUDE_M;
+  }
+
   stageGotoTarget(sceneNed);
   return { ok: true };
 }
