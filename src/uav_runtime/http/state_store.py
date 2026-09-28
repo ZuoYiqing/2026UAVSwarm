@@ -732,6 +732,14 @@ class RuntimeStateStore:
                     "altitude_reference": calibration.get("altitude_reference") if calibration else None,
                     "origin_continuity": calibration.get("origin_continuity") if calibration else None,
                     "axis_alignment": calibration.get("axis_alignment") if calibration else None,
+                    # 本机 local<->scene 的平移量。发布它是为了让上层能做反向转换：
+                    #   scene_ned = translation_scene_ned_m + vehicle_local_ned   （见下方 scene_pose 计算）
+                    #   vehicle_local_ned = scene_ned - translation_scene_ned_m
+                    # goto 必须做这个转换 —— SET_POSITION_TARGET_LOCAL_NED 收的是
+                    # 每台飞机自己的 vehicle_local_ned，而操作者/前端给的目标通常是
+                    # 共享 scene_ned。少这一步会把目标点按场景坐标直接发给载具，
+                    # 飞到一个完全错误的位置。
+                    "translation_scene_ned_m": calibration.get("translation_scene_ned_m") if calibration else None,
                     "source_timestamp": node.get("last_seen"),
                     "sample_timestamp": node.get("last_seen"),
                     "calibration_source_timestamp": calibration.get("source_timestamp") if calibration else None,

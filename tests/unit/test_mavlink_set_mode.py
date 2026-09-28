@@ -270,3 +270,326 @@ def test_set_mode_requires_connection() -> None:
         assert "connection_required" in str(exc)
     else:
         raise AssertionError("未连接时应抛 RuntimeError")
+
+
+# --- send_position_target 单次 setpoint -----------------------------------
+
+
+class _RecordingMav(_FakeMav):
+    """额外记录 set_position_target_local_ned_send 的调用参数。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.position_targets: list[tuple[float, ...]] = []
+
+    def set_position_target_local_ned_send(self, *args) -> None:
+        self.position_targets.append(tuple(args))
+
+
+def make_session_with_recorder() -> MavlinkBackendSession:
+    session = MavlinkBackendSession.from_config(
+        MavlinkBackendConfig(
+            backend_mode="sitl",
+            backend_enabled=True,
+            transport_endpoint="udpin:127.0.0.1:14540",
+            target_system=1,
+            target_component=1,
+        )
+    )
+    connection = _FakeConnection()
+    connection.mav = _RecordingMav()
+    session.connection = connection
+    session.connected = True
+    session._mavutil = type("FakeMavutil", (), {"mavlink": _RecordingMav()})()
+    return session
+
+
+def test_type_mask_ignores_everything_except_position() -> None:
+    """逐位校验 type_mask。
+
+    这个掩码我手算错过一次（把 3527 写成了 3575），所以必须逐位断言，
+    而不是只比对总数。
+    """
+    from uav_runtime.adapters.mavlink_backend_session import (
+        POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION as MASK,
+    )
+
+    # 必须置 1（忽略）：位置、加速度、偏航、偏航角速度
+    for name, bit in (
+        ("X_IGNORE", 1), ("Y_IGNORE", 2), ("Z_IGNORE", 4),
+        ("AX_IGNORE", 64), ("AY_IGNORE", 128), ("AZ_IGNORE", 256),
+        ("YAW_IGNORE", 1024), ("YAW_RATE_IGNORE", 2048),
+    ):
+        assert MASK & bit, f"{name}({bit}) 应被设置：该字段要被忽略"
+
+    # 必须置 0：速度三轴。语义是"忽略速度"，但保持 0 才是纯位置指令
+    for name, bit in (("VX", 8), ("VY", 16), ("VZ", 32)):
+        assert not MASK & bit, f"{name}({bit}) 不应设置"
+
+    # bit 48 属于 DO_REPOSITION 的 CHANGE_MODE 语义，与 SET_POSITION_TARGET 无关
+    assert not MASK & (1 << 48)
+
+    assert MASK == 3527, f"掩码应为 3527，实际 {MASK}"
+
+
+def test_send_position_target_uses_local_ned_frame_and_exact_position() -> None:
+    session = make_session_with_recorder()
+    session.send_position_target(north_m=1.5, east_m=-2.25, down_m=-3.0)
+
+    sent = session.connection.mav.position_targets
+    assert len(sent) == 1
+    (
+        time_boot_ms, target_system, target_component,
+        coordinate_frame, type_mask,
+        north, east, down,
+        vx, vy, vz, afx, afy, afz, yaw, yaw_rate,
+    ) = sent[0]
+
+    assert target_system == 1
+    assert target_component == 1
+    assert coordinate_frame == 1, "必须是 MAV_FRAME_LOCAL_NED"
+    assert type_mask == 3527
+    assert (north, east, down) == (1.5, -2.25, -3.0), "位置必须原样送达，不得做任何换算"
+    assert (vx, vy, vz) == (0.0, 0.0, 0.0)
+    assert (afx, afy, afz) == (0.0, 0.0, 0.0)
+    assert (yaw, yaw_rate) == (0.0, 0.0)
+    assert isinstance(time_boot_ms, int) and time_boot_ms >= 0
+
+
+def test_send_position_target_time_boot_ms_is_monotonic() -> None:
+    session = make_session_with_recorder()
+    session.send_position_target(north_m=0.0, east_m=0.0, down_m=-3.0)
+    time.sleep(0.02)
+    session.send_position_target(north_m=0.1, east_m=0.0, down_m=-3.0)
+
+    stamps = [row[0] for row in session.connection.mav.position_targets]
+    assert len(stamps) == 2
+    assert stamps[0] <= stamps[1], "time_boot_ms 必须单调不减"
+
+
+def test_send_position_target_accepts_explicit_time_boot_ms() -> None:
+    session = make_session_with_recorder()
+    session.send_position_target(north_m=0.0, east_m=0.0, down_m=0.0, time_boot_ms=12345)
+    assert session.connection.mav.position_targets[0][0] == 12345
+
+
+def test_send_position_target_requires_connection() -> None:
+    session = MavlinkBackendSession.from_config(
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
+    )
+    try:
+        session.send_position_target(north_m=0.0, east_m=0.0, down_m=0.0)
+    except RuntimeError as exc:
+        assert "connection_required" in str(exc)
+    else:
+        raise AssertionError("未连接时应抛 RuntimeError")
+
+
+# --- goto(): 完整流程与收敛保证 -------------------------------------------
+
+
+class _GotoMav(_RecordingMav):
+    """可脚本化的假 MAV：按命令号返回预设 ACK 结果。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ack_by_command: dict[int, int] = {}   # command -> result
+        self.stop_mode_command: int | None = None  # 一旦发出该命令就不再自动 ACK
+
+    def command_long_send(self, target_system, target_component, command, confirmation, *params) -> None:
+        super().command_long_send(target_system, target_component, command, confirmation, *params)
+        command = int(command)
+        if self.stop_mode_command is not None and command == self.stop_mode_command:
+            return  # 模拟"这条命令永远不被 ACK"
+        result = self.ack_by_command.get(command, 0)
+
+
+class _FakeLocalPositionMsg:
+    def __init__(self, z: float, x: float = 0.0, y: float = 0.0) -> None:
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def get_type(self) -> str:
+        return "LOCAL_POSITION_NED"
+
+
+class _AutoAckConnection(_FakeConnection):
+    """发命令后自动回 ACK，并按每次 DO_SET_MODE 推进一次模式剧本。
+
+    关键点：必须**按 DO_SET_MODE 命令**推进，而不是一看到有命令就推进。
+    否则预置 setpoint 阶段就会把整个模式剧本放完，等真正切 OFFBOARD 时
+    心跳早已变成别的模式 —— 这是测试脚手架自身的时序错误，不是被测代码的问题。
+    """
+
+    def __init__(self, session_holder: dict) -> None:
+        super().__init__()
+        self.mav = _GotoMav()
+        self._holder = session_holder
+        self._mode_plan: list[int] = []
+        self._handled_mode_commands = 0
+
+    def recv_match(self, *args, **kwargs) -> Any:
+        time.sleep(0.005)
+        session = self._holder.get("session")
+        if session is None:
+            return None
+
+        mode_commands = [c for c in self.mav.commands if c[0] == DO_SET_MODE]
+        if len(mode_commands) > self._handled_mode_commands:
+            self._handled_mode_commands = len(mode_commands)
+            index = self._handled_mode_commands - 1
+            session.dispatch_message(_FakeAck(DO_SET_MODE, self.mav.ack_by_command.get(DO_SET_MODE, 0)))
+            if index < len(self._mode_plan):
+                mode = self._mode_plan[index]
+                # 直接在当前线程喂心跳：测试要的是确定性时序，不需要额外线程。
+                feed_heartbeat(session, main=mode)
+        return None
+
+
+def make_goto_session(*, mode_plan: list[int], offboard_ack_result: int = 0):
+    holder: dict[str, Any] = {}
+    session = MavlinkBackendSession.from_config(
+        MavlinkBackendConfig(
+            backend_mode="sitl", backend_enabled=True,
+            transport_endpoint="udpin:127.0.0.1:14540",
+            target_system=1, target_component=1,
+        )
+    )
+    connection = _AutoAckConnection(holder)
+    connection.mav.ack_by_command[DO_SET_MODE] = offboard_ack_result
+    connection._mode_plan = mode_plan
+    session.connection = connection
+    session.connected = True
+    session._mavutil = type("FakeMavutil", (), {"mavlink": connection.mav})()
+    holder["session"] = session
+    return session, connection
+
+
+def _feed_local_position(session: MavlinkBackendSession, *, x: float, y: float, z: float) -> None:
+    session.dispatch_message(_FakeLocalPositionMsg(z, x=x, y=y))
+
+
+def test_goto_reaches_target_logs_stream_and_restores_mode() -> None:
+    # 剧本按"第 N 次 DO_SET_MODE"推进：第 1 次进 OFFBOARD，第 2 次（收尾）切回 POSCTL。
+    session, connection = make_goto_session(
+        mode_plan=[PX4_CUSTOM_MAIN_MODE_OFFBOARD, PX4_CUSTOM_MAIN_MODE_POSCTL]
+    )
+    # 起点：原点；目标：北 2 米、高度 3 米（down = -3）
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    # 用"固定次数 + 每轮多喂几条"的方式推进位置，避免后台线程与收尾阶段赛跑。
+    # 位置喂到目标点后就停，且不在 goto 返回后继续写入。
+    stop = threading.Event()
+
+    def feed_positions() -> None:
+        seq = [(0.0, 0.0, 0.0), (1.0, 0.0, -1.5), (2.0, 0.0, -3.0), (2.0, 0.0, -3.0)]
+        for x, y, z in seq:
+            for _ in range(15):
+                if stop.is_set():
+                    return
+                _feed_local_position(session, x=x, y=y, z=z)
+                time.sleep(0.02)
+
+    feeder = threading.Thread(target=feed_positions, daemon=True)
+    feeder.start()
+
+    result = session.goto(
+        north_m=2.0, east_m=0.0, down_m=-3.0,
+        tolerance_m=0.3, hold_s=0.15, timeout_s=5.0, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+    stop.set()
+    feeder.join(timeout=1.0)
+
+    # 到达判定
+    assert result["arrival"] is not None
+    assert result["arrival"]["observed"] is True, f"应判定到达，实际 {result['arrival']}"
+    # 流确实在持续发送
+    assert result["stream"]["setpoints"] > 10, f"setpoint 流太少：{result['stream']}"
+    # 模式：先确认进 OFFBOARD
+    assert result["mode_result"]["confirmed"] is True
+    assert result["mode_result"]["observed_main_mode"] == PX4_CUSTOM_MAIN_MODE_OFFBOARD
+    # **关键**：收尾必须切回安全模式
+    assert result["restored"] is not None
+    assert result["restored"]["restored"] is True, "goto 结束后必须切回 POSCTL"
+    assert result["restored"]["main_mode"] == PX4_CUSTOM_MAIN_MODE_POSCTL
+    assert result["failure_reason"] is None
+
+
+def test_goto_returns_failure_when_offboard_not_confirmed() -> None:
+    """心跳始终报 POSCTL —— 进不了 OFFBOARD，必须报失败且不谎报到达。"""
+    session, _ = make_goto_session(mode_plan=[PX4_CUSTOM_MAIN_MODE_POSCTL] * 8)
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=5.0, east_m=0.0, down_m=-3.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=1.0, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+
+    assert result["mode_result"]["confirmed"] is False
+    assert result["failure_reason"] == "offboard_not_confirmed"
+    assert result["arrival"] is None, "没进 OFFBOARD 就不该去等到达"
+    # 即便失败也必须尝试收敛
+    assert result["restored"] is not None
+
+
+def test_goto_reports_arrival_timeout_but_still_restores_mode() -> None:
+    """始终到不了目标 —— 必须报超时，且仍然切回安全模式。"""
+    session, _ = make_goto_session(
+        mode_plan=[PX4_CUSTOM_MAIN_MODE_OFFBOARD, PX4_CUSTOM_MAIN_MODE_POSCTL]
+    )
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    # 确定性投递：固定条数 + 每条后短休眠。
+    # 不能用 `while not stop` 无限循环 —— 那样在 goto 返回后的收尾阶段仍会持续
+    # 投递，把刚恢复的模式覆盖掉，造成测试自身的竞态（曾因此误判为代码缺陷）。
+    stop = threading.Event()
+
+    def feed_far_positions() -> None:
+        for _ in range(120):
+            if stop.is_set():
+                return
+            _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+            time.sleep(0.01)
+
+    feeder = threading.Thread(target=feed_far_positions, daemon=True)
+    feeder.start()
+    try:
+        result = session.goto(
+            north_m=50.0, east_m=0.0, down_m=-10.0,
+            tolerance_m=0.5, hold_s=0.1, timeout_s=0.4, rate_hz=20.0,
+            preset_setpoints=2, preset_interval_s=0.0,
+        )
+    finally:
+        stop.set()
+        feeder.join(timeout=1.0)
+
+    assert result["arrival"]["observed"] is False
+    assert result["failure_reason"] == "arrival_timeout"
+    assert result["restored"]["restored"] is True, "超时也必须切回安全模式"
+
+
+def test_goto_requires_local_position_before_starting() -> None:
+    """还没收到任何 LOCAL_POSITION_NED 时不能起飞位控制。"""
+    session, _ = make_goto_session(mode_plan=[PX4_CUSTOM_MAIN_MODE_OFFBOARD])
+    result = session.goto(
+        north_m=1.0, east_m=0.0, down_m=-2.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.5, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+    assert result["failure_reason"] is not None
+    assert "local_position_required_before_goto" in str(result["failure_reason"])
+
+
+def test_goto_requires_connection() -> None:
+    session = MavlinkBackendSession.from_config(
+        MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udpin:127.0.0.1:14540")
+    )
+    try:
+        session.goto(north_m=0.0, east_m=0.0, down_m=-1.0)
+    except RuntimeError as exc:
+        assert "connection_required" in str(exc)
+    else:
+        raise AssertionError("未连接时应抛 RuntimeError")

@@ -71,6 +71,31 @@ PX4_MAIN_MODE_NAMES = {
 }
 
 
+# --- SET_POSITION_TARGET_LOCAL_NED 的 type_mask ---------------------------
+#
+# type_mask 的语义是"**忽略哪些字段**"（1 = 忽略），不是"使用哪些"。
+# 位置控制（goto）只想要位置生效：
+#
+#   X_IGNORE|Y_IGNORE|Z_IGNORE      = 1|2|4       = 7      ← 位置生效
+#   AX_IGNORE|AY_IGNORE|AZ_IGNORE   = 64|128|256  = 448    ← 忽略加速度
+#   YAW_IGNORE|YAW_RATE_IGNORE      = 1024|2048   = 3072   ← 忽略偏航控制
+#   --------------------------------------------------------
+#   合计                                            = 3527
+#
+# 刻意**不**包含 VX/VY/VZ(8|16|32)：那三位的含义是"忽略速度"，我们确实要忽略
+# 速度分量（只给位置），所以它们保持 0 是正确的 —— 置 1 反而会改变 PX4 对
+# "这是纯位置指令"的判定。
+#
+# 也刻意不使用 bit 48（MAV_DO_REPOSITION_FLAGS_CHANGE_MODE）—— 那是 DO_REPOSITION
+# 的语义，与 SET_POSITION_TARGET 无关。
+#
+# 该值由单元测试逐位校验，避免以后手改出错。
+POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION = 3527
+
+#: MAV_FRAME_LOCAL_NED：绝对位置，原点为载具自己的 EKF 原点
+MAV_FRAME_LOCAL_NED = 1
+
+
 def mav_result_name(result: int | None) -> str:
     if result is None:
         return "MAV_RESULT_TIMEOUT"
@@ -135,7 +160,10 @@ class MavlinkBackendSession:
         default_factory=lambda: threading.Condition(threading.RLock())
     )
     _rx_sequence: int = 0
-    _local_positions: list[tuple[int, float, float, str]] = field(default_factory=list)
+    #: LOCAL_POSITION_NED 样本：(sequence, x_north, y_east, z_down, received_monotonic, received_timestamp)。
+    #: 早期的实现只存了 z（起飞高度观测只需要垂直分量），但 goto 的位置到达判据
+    #: 需要完整三维坐标，因此改为全量保留。
+    _local_positions: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     _armed_states: list[tuple[int, bool, float, str]] = field(default_factory=list)
     _landed_states: list[tuple[int, int, float, str]] = field(default_factory=list)
     _subscribers: dict[int, Callable[[Any], None]] = field(default_factory=dict)
@@ -146,6 +174,9 @@ class MavlinkBackendSession:
     #: 最后一次收到的 HEARTBEAT 里的模式信息：(sequence, base_mode, custom_mode)。
     #: 只保留最新一条 —— 心跳可达 500Hz，堆队列会无界增长。模式确认只需要"当前值"。
     _last_heartbeat_mode: tuple[int, int, int] | None = None
+    #: 会话起点，用于生成 SET_POSITION_TARGET 的 time_boot_ms。
+    #: PX4 不强依赖该值，但按规范应单调递增。
+    _session_started_monotonic: float = field(default_factory=time.monotonic)
     last_receive_error: str | None = None
     last_send_error: str | None = None
     identity_error: dict[str, Any] | None = None
@@ -354,7 +385,14 @@ class MavlinkBackendSession:
                     del self._landed_states[:-512]
             elif kind == "LOCAL_POSITION_NED":
                 self._local_positions.append(
-                    (sequence, float(getattr(message, "z", 0.0)), received_monotonic, received_timestamp)
+                    (
+                        sequence,
+                        float(getattr(message, "x", 0.0)),
+                        float(getattr(message, "y", 0.0)),
+                        float(getattr(message, "z", 0.0)),
+                        received_monotonic,
+                        received_timestamp,
+                    )
                 )
                 if len(self._local_positions) > 1024:
                     del self._local_positions[:-512]
@@ -643,6 +681,53 @@ class MavlinkBackendSession:
             "main_mode_name": None if main is None else PX4_MAIN_MODE_NAMES.get(main, f"MAIN_{main}"),
         }
 
+    def send_position_target(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        time_boot_ms: int | None = None,
+    ) -> None:
+        """发送一条本地位置 setpoint（``vehicle_local_ned``，原点为本机 EKF 原点）。
+
+        ⚠️ 坐标语义：这里的 north/east/down 是**本机 local NED**，不是共享
+        ``scene_ned``。调用方必须先做反向平移转换::
+
+            vehicle_local_ned = scene_ned - translation_scene_ned_m
+
+        该平移量由仿真标定测得，经 ``/api/coordinates/calibration`` 发布，
+        Runtime 在 ``spatial.translation_scene_ned_m`` 中暴露。少这一步会把
+        场景坐标当成本机坐标发出去，飞机将飞向完全错误的位置。
+
+        可单次调用；但 OFFBOARD 模式要求持续流，单次发送不足以维持 ——
+        真正的位置控制见 ``stream_position_target``。
+        """
+        with self.tx_lock:
+            connection = self.connection
+            if connection is None or not self.connected:
+                raise RuntimeError("connection_required")
+            if time_boot_ms is None:
+                time_boot_ms = int((time.monotonic() - self._session_started_monotonic) * 1000) & 0xFFFFFFFF
+            connection.mav.set_position_target_local_ned_send(
+                int(time_boot_ms),
+                self.target_system,
+                self.target_component,
+                MAV_FRAME_LOCAL_NED,
+                POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION,
+                float(north_m),
+                float(east_m),
+                float(down_m),
+                0.0,  # vx —— 被 type_mask 忽略
+                0.0,  # vy —— 被 type_mask 忽略
+                0.0,  # vz —— 被 type_mask 忽略
+                0.0,  # afx
+                0.0,  # afy
+                0.0,  # afz
+                0.0,  # yaw
+                0.0,  # yaw_rate
+            )
+
     def arm(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_COMPONENT_ARM_DISARM", 400)
         ack = self._send_and_wait_ack(command, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], timeout_s=timeout_s)
@@ -668,6 +753,163 @@ class MavlinkBackendSession:
         ack["local_position_cursor"] = observation_cursor
         ack["observation_cursor"] = observation_cursor
         return ack
+
+    def goto(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        tolerance_m: float = 1.0,
+        hold_s: float = 1.0,
+        timeout_s: float = 60.0,
+        rate_hz: float = 10.0,
+        restore_mode: int = PX4_CUSTOM_MAIN_MODE_POSCTL,
+        cancel_event: threading.Event | None = None,
+        preset_setpoints: int = 10,
+        preset_interval_s: float = 0.05,
+    ) -> dict[str, Any]:
+        """飞到本机 local NED 的指定位置并稳定悬停，然后切回 restore_mode。
+
+        ⚠️ 坐标语义：north/east/down 是**本机 vehicle_local_ned**。调用方若拿到的是
+        共享 scene_ned 目标，必须先做反向平移::
+
+            vehicle_local_ned = scene_ned - translation_scene_ned_m
+
+        该平移量取自 Runtime 的 ``/api/vehicle-snapshot`` → ``spatial.translation_scene_ned_m``。
+
+        安全性设计（OFFBOARD 的两个已知陷阱）
+        ------------------------------------
+        1. **setpoint 断流会让 PX4 退出 OFFBOARD。** PX4 在 OFFBOARD 下若约 0.5 秒
+           收不到 setpoint 就会退出该模式（通常转 POSCTL/高度保持悬停，但行为
+           取决于参数）。因此：
+             * 流式循环本身就是 try 体，任何异常都会走 finally；
+             * finally 里**必定**尝试切回 restore_mode，绝不把载具留在 OFFBOARD；
+             * 流循环加锁，避免与命令通道并发写同一 socket。
+
+        2. **必须先有 setpoint 再切 OFFBOARD。** PX4 要求进入 OFFBOARD 前已经收到
+           过位置设定点，否则会拒绝切入。这里先以当前位置预发若干条（保持不动），
+           再切模式并继续流式发送。
+
+        Returns:
+            含 ``mode_result``、``arrival``、``stream``、``restored`` 的证据字典。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        target = (float(north_m), float(east_m), float(down_m))
+        rate_hz = max(float(rate_hz), 1.0)
+        period = 1.0 / rate_hz
+        tolerance = max(float(tolerance_m), 0.0)
+
+        # 起飞/悬停阶段维持 GCS 心跳：与现有 takeoff/land 路径一致。
+        # 这也是本方法最后不主动停它的原因（见下方 finally 的说明）。
+        self.start_gcs_heartbeat()
+
+        stop_stream = threading.Event()
+        stream_stats = {"setpoints": 0, "last_error": None, "errors": 0}
+        mode_result: dict[str, Any] | None = None
+        arrival: dict[str, Any] | None = None
+        restored: dict[str, Any] | None = None
+        cancelled = False
+        # 先给初值：虽然目前所有分支都会赋值，但显式初始化可避免后续改动
+        # 引入 UnboundLocalError（这类错误只在特定分支才暴露，很难查）。
+        failure_reason: str | None = "not_attempted"
+
+        def stream_loop() -> None:
+            """10Hz 位置 setpoint 流。持有 tx_lock 整段，避免与命令通道交错。"""
+            while not stop_stream.is_set():
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                try:
+                    # 传入显式 time_boot_ms=None 让 send_position_target 自行计算
+                    self.send_position_target(
+                        north_m=target[0], east_m=target[1], down_m=target[2]
+                    )
+                    stream_stats["setpoints"] += 1
+                except Exception as exc:  # noqa: BLE001 - 流线程不能因单次失败退出
+                    stream_stats["errors"] += 1
+                    stream_stats["last_error"] = f"{type(exc).__name__}: {exc}"
+                    return
+                stop_stream.wait(period)
+
+        try:
+            # --- 1) 预置 setpoint（用当前位置），让 PX4 接受 OFFBOARD ---
+            current = self.latest_local_position()
+            if current is None:
+                raise RuntimeError("local_position_required_before_goto")
+            for _ in range(max(int(preset_setpoints), 1)):
+                self.send_position_target(
+                    north_m=current[0], east_m=current[1], down_m=current[2]
+                )
+                time.sleep(max(float(preset_interval_s), 0.0))
+
+            # --- 2) 启动流，再切 OFFBOARD ---
+            arrival_start_sequence = self.local_position_cursor()
+            stream_thread = threading.Thread(
+                target=stream_loop, name="mavlink-position-stream", daemon=True
+            )
+            stream_thread.start()
+            time.sleep(0.05)  # 让流先跑起来，避免切模式后出现空档
+
+            mode_result = self.set_mode(
+                main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=3.0, confirm_timeout_s=3.0
+            )
+            if mode_result["confirmed"]:
+                # --- 3) 等待到达 ---
+                arrival = self.observe_arrival(
+                    north_m=target[0], east_m=target[1], down_m=target[2],
+                    tolerance_m=tolerance, hold_s=hold_s, timeout_s=timeout_s,
+                    after_sequence=arrival_start_sequence, cancel_event=cancel_event,
+                )
+                cancelled = arrival.get("reason") == "cancelled"
+                failure_reason = None if arrival.get("observed") else str(arrival.get("reason"))
+            else:
+                failure_reason = "offboard_not_confirmed"
+        except Exception as exc:  # noqa: BLE001 - 任何异常都要走统一收敛
+            failure_reason = f"goto_exception:{type(exc).__name__}:{exc}"
+        finally:
+            # --- 4) 无论成功、超时还是异常，都必须收敛 ---
+            # 顺序很重要：先停流，再切回模式。反过来的话，切模式期间流仍在发
+            # OFFBOARD setpoint，会把载具又拉回位置控制。
+            stop_stream.set()
+            try:
+                restore_result = self.set_mode(
+                    main_mode=restore_mode, timeout_s=3.0, confirm_timeout_s=3.0
+                )
+                restored = {
+                    "restored": bool(restore_result["confirmed"]),
+                    "main_mode": restore_mode,
+                    "main_mode_name": PX4_MAIN_MODE_NAMES.get(restore_mode, str(restore_mode)),
+                    "observed_main_mode": restore_result.get("observed_main_mode"),
+                    "attempted": True,
+                }
+            except Exception as exc:  # noqa: BLE001
+                restored = {
+                    "restored": False,
+                    "main_mode": restore_mode,
+                    "attempted": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+        # 返回值在 finally 之后构造 —— 否则 dict 会在 finally 执行前就被求值，
+        # restored 永远是 None，调用方就拿不到"是否已切回安全模式"这个关键信息。
+        return {
+            "mode_result": mode_result,
+            "arrival": arrival,
+            "stream": dict(stream_stats),
+            "restored": restored,
+            "cancelled": cancelled,
+            "failure_reason": failure_reason,
+        }
+
+    def latest_local_position(self) -> tuple[float, float, float] | None:
+        """最近一次 LOCAL_POSITION_NED 的 (north, east, down)；还没收到则 None。"""
+        with self._rx_condition:
+            if not self._local_positions:
+                return None
+            _, x, y, z, _received, _timestamp = self._local_positions[-1]
+        return (float(x), float(y), float(z))
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_LAND", 21)
@@ -706,7 +948,11 @@ class MavlinkBackendSession:
             while time.monotonic() < deadline:
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                fresh = [(seq, z) for seq, z, _received, _timestamp in self._local_positions if seq > seen_sequence]
+                fresh = [
+                    (sequence, z)
+                    for sequence, _x, _y, z, _received, _timestamp in self._local_positions
+                    if sequence > seen_sequence
+                ]
                 for sequence, z in fresh:
                     seen_sequence = max(seen_sequence, sequence)
                     samples.append(z)
@@ -764,7 +1010,7 @@ class MavlinkBackendSession:
                     cancelled = True
                     break
                 fresh = [row for row in self._local_positions if row[0] > seen_sequence]
-                for sequence, z, received_at, received_timestamp in fresh:
+                for sequence, _x, _y, z, received_at, received_timestamp in fresh:
                     seen_sequence = max(seen_sequence, sequence)
                     altitude = ned_down_z_to_altitude_m(z)
                     samples.append(altitude)
@@ -915,6 +1161,78 @@ class MavlinkBackendSession:
             "freshness_window_ms": freshness_window_ms,
             "completion_reached": complete,
             "cancelled": cancelled,
+        }
+
+    def observe_arrival(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        tolerance_m: float,
+        hold_s: float,
+        timeout_s: float,
+        after_sequence: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """等待载具**持续**处在目标点容差内，返回到达证据。
+
+        为什么要求"持续"而不是"某一刻在容差内"：载具在接近目标时会过冲并来回
+        摆动，单次采样落在容差内不代表已经稳定悬停在目标点。要求连续 hold_s
+        秒说明控制器已经收敛。
+
+        只用**新增**的样本（sequence 大于起点），避免把飞向目标途中的旧位置
+        误当成到达。
+        """
+        start_sequence = self.local_position_cursor() if after_sequence is None else int(after_sequence)
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        hold_s = max(float(hold_s), 0.0)
+        tolerance = max(float(tolerance_m), 0.0)
+        inside_since: float | None = None
+        last_error: float | None = None
+        samples = 0
+
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                return {
+                    "observed": False, "reason": "cancelled", "samples": samples,
+                    "last_error_m": last_error, "start_sequence": start_sequence,
+                }
+            with self._rx_condition:
+                fresh = [row for row in self._local_positions if row[0] > start_sequence]
+            if fresh:
+                _, x, y, z, received_monotonic, _ = fresh[-1]
+                samples = len(fresh)
+                # 三维欧氏距离。三个分量都要算 —— 只比高度会把"高度对了但水平
+                # 还差很远"误判为到达。
+                error = math.sqrt(
+                    (float(x) - float(north_m)) ** 2
+                    + (float(y) - float(east_m)) ** 2
+                    + (float(z) - float(down_m)) ** 2
+                )
+                last_error = error
+                if error <= tolerance:
+                    if inside_since is None:
+                        inside_since = received_monotonic
+                    elif received_monotonic - inside_since >= hold_s:
+                        return {
+                            "observed": True, "reason": "stable_within_tolerance",
+                            "samples": samples, "last_error_m": error,
+                            "hold_s": received_monotonic - inside_since,
+                            "start_sequence": start_sequence,
+                        }
+                else:
+                    inside_since = None
+            if not self.connected and self.last_receive_error:
+                return {
+                    "observed": False, "reason": "receive_loop_failed", "samples": samples,
+                    "last_error_m": last_error, "start_sequence": start_sequence,
+                }
+            time.sleep(0.02)
+
+        return {
+            "observed": False, "reason": "arrival_timeout", "samples": samples,
+            "last_error_m": last_error, "start_sequence": start_sequence,
         }
 
     def local_position_cursor(self) -> int:

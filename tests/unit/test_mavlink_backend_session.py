@@ -133,7 +133,11 @@ def test_ack_result_name_mapping_is_stable() -> None:
 
 
 class _FakeLocalPositionMsg:
-    def __init__(self, z: float) -> None:
+    def __init__(self, z: float, x: float = 0.0, y: float = 0.0) -> None:
+        # x/y 默认 0：多数既有测试只关心垂直分量；goto 的位置到达判据需要三维，
+        # 那些测试会显式传 x/y。
+        self.x = x
+        self.y = y
         self.z = z
 
     def get_type(self) -> str:
