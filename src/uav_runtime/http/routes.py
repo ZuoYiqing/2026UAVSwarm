@@ -15,11 +15,20 @@ from uuid import uuid4
 
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
-from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
+from uav_runtime.agent.executor import RealActionExecutor
+from uav_runtime.agent.lifecycle import PlanApproval, PlanExecutionController, PlanStatus
+from uav_runtime.agent.planner import (
+    MissionIntent,
+    MissionPlan,
+    MissionPlanStep,
+    PLAN_READY,
+    TemplateAgentPlanner,
+)
 from uav_runtime.http.schemas import (
     BackendRequest,
     GotoRequest,
     LandRequest,
+    PlanExecuteRequest,
     PlanMissionRequest,
     RequestValidationError,
     SmokeTakeoffRequest,
@@ -622,6 +631,98 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit a Mission Plan IR for real execution.
+
+    This is the endpoint the algorithm side produces against.  Runtime's job
+    here is deliberately narrow: validate the plan shape, record the operator's
+    approval, then sequence the steps and report exactly what happened.
+
+    It does **not** invent planning strategy and does not weaken any safety
+    check: every step is executed by calling the ordinary action endpoint, so
+    the Policy Gate still evaluates it with live context immediately before
+    MAVLink.  A step whose action has no endpoint is refused rather than
+    skipped, because a step that "succeeds" without doing anything produces a
+    completed-looking plan in which nothing happened.
+
+    Failure policy is abort-on-first-failure (operator decision, 2026-09-28):
+    the first failed step stops the plan, later steps are left unexecuted, and
+    the response names the failing step and the ones that never ran.
+    """
+    req = PlanExecuteRequest.from_json(payload)
+    payload_plan = req.plan
+
+    steps = [
+        MissionPlanStep(
+            step_id=str(raw["step_id"]),
+            action_type=str(raw["action_type"]),
+            node_id=str(raw.get("node_id", "") or ""),
+            params=dict(raw.get("params") or {}),
+            status=str(raw.get("status") or PLAN_READY),
+        )
+        for raw in payload_plan["steps"]
+    ]
+    plan = MissionPlan(
+        plan_id=str(payload_plan["plan_id"]),
+        intent_id=str(payload_plan.get("intent_id") or ""),
+        mission_type=str(payload_plan.get("mission_type") or ""),
+        steps=steps,
+        status=PlanStatus.DRAFT,
+        explanation=str(payload_plan.get("explanation") or ""),
+        created_at=str(payload_plan.get("created_at") or _utc_now()),
+    )
+
+    controller = PlanExecutionController(
+        audit=rt.audit,
+        action_executor=RealActionExecutor(api_base=_self_api_base()),
+    )
+    loaded = controller.load_plan(plan)
+    approval = PlanApproval.create(
+        plan_id=plan.plan_id,
+        operator_id=req.operator_id,
+        decision=req.decision,  # type: ignore[arg-type]
+        reason="http_plan_execute",
+    )
+    approved = controller.approve_plan(loaded, approval)
+
+    if req.decision != "approve":
+        # 显式拒绝也是合法请求：批准被记录，但不执行任何动作。
+        RUNTIME_STATE_STORE.record_event({
+            "type": "agent_plan_execution_declined", "timestamp": _utc_now(),
+            "plan_id": plan.plan_id, "operator_id": req.operator_id,
+        })
+        return {
+            "result": "declined",
+            "failure_reason": "operator_rejected",
+            "plan": approved.to_dict(),
+            "execution_mode": "real",
+            "step_outcomes": [],
+        }
+
+    result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    RUNTIME_STATE_STORE.record_event({
+        "type": "agent_plan_execution_result", "timestamp": _utc_now(),
+        "plan_id": plan.plan_id,
+        "mission_type": plan.mission_type,
+        "operator_id": req.operator_id,
+        "result": result.get("result"),
+        "failure_reason": result.get("failure_reason"),
+        "aborted_at_step": result.get("aborted_at_step"),
+        "step_count": len(plan.steps),
+    })
+    RUNTIME_STATE_STORE.record_plan_result(result)
+    return result
+
+
+def _self_api_base() -> str:
+    """Runtime 自己的 HTTP 基地址（执行器用它调用本进程的动作端点）。
+
+    走本机回环，不对外开放。之所以这样绕一圈而不是直接调后端，是为了让每一步
+    都经过与外部调用完全相同的路径 —— 包括 Policy Gate、动作租约、审计。
+    """
+    return f"http://127.0.0.1:{os.environ.get('UAV_RUNTIME_HTTP_PORT', '8765')}/api"
+
+
 def telemetry_latest(query: str = "") -> dict[str, Any]:
     """Return a cached telemetry snapshot without opening a MAVLink session."""
     node_id = parse_qs(query, keep_blank_values=True).get("node_id", [None])[0] or None
@@ -793,6 +894,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
     if method == "POST" and normalized == "/api/actions/goto":
         result = goto(payload)
         return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/plans/execute":
+        return 200, plans_execute(payload)
     if method == "POST" and normalized == "/api/simulation/evidence":
         return 200, publish_simulation_evidence(payload)
     if method == "POST" and normalized == "/api/coordinates/calibration":

@@ -295,6 +295,96 @@ class GotoRequest(BackendRequest):
 
 
 @dataclass(slots=True)
+class PlanExecuteRequest:
+    """Submit a Mission Plan IR for real execution on Runtime.
+
+    This is the contract the algorithm side produces against: it hands over a
+    structured plan, Runtime sequences it and applies the Policy Gate before
+    every action.
+
+    **Approval is explicit and mandatory.**  It would be convenient to
+    auto-approve a submitted plan, but real execution moves aircraft, so the
+    caller must state the operator identity and an approve decision.  A
+    ``reject`` decision is accepted as a valid request that executes nothing.
+    """
+
+    plan: dict[str, Any]
+    operator_id: str
+    decision: str = "approve"
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "PlanExecuteRequest":
+        plan = payload.get("plan")
+        if not isinstance(plan, dict):
+            raise RequestValidationError(
+                "invalid_parameter", "plan", "plan 必须是对象", value=plan
+            )
+        plan_id = plan.get("plan_id")
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise RequestValidationError(
+                "invalid_parameter", "plan.plan_id", "plan.plan_id 必须是非空字符串",
+                value=plan_id,
+            )
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise RequestValidationError(
+                "invalid_parameter", "plan.steps", "plan.steps 必须是非空数组",
+                value=steps,
+            )
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise RequestValidationError(
+                    "invalid_parameter", f"plan.steps[{index}]", "步骤必须是对象", value=step
+                )
+            if not isinstance(step.get("step_id"), str) or not step["step_id"].strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].step_id",
+                    "每个步骤都需要非空 step_id",
+                    value=step.get("step_id"),
+                )
+            if not isinstance(step.get("action_type"), str) or not step["action_type"].strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].action_type",
+                    "每个步骤都需要非空 action_type",
+                    value=step.get("action_type"),
+                )
+            params = step.get("params", {})
+            if not isinstance(params, dict):
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].params",
+                    "params 必须是对象",
+                    value=params,
+                )
+            node_id = step.get("node_id", "")
+            if not isinstance(node_id, str):
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].node_id",
+                    "node_id 必须是字符串（可以为空，但执行时会被拒绝）",
+                    value=node_id,
+                )
+
+        operator_id = payload.get("operator_id")
+        if not isinstance(operator_id, str) or not operator_id.strip():
+            # Runtime 拒绝匿名执行：真实执行需要可追溯的操作者身份。
+            raise RequestValidationError(
+                "invalid_parameter", "operator_id", "operator_id 必须是非空字符串",
+                value=operator_id,
+            )
+
+        decision = str(payload.get("decision", "approve") or "approve")
+        if decision not in ("approve", "reject"):
+            raise RequestValidationError(
+                "invalid_parameter", "decision", "decision 只能是 approve 或 reject",
+                value=decision,
+            )
+        return cls(plan=dict(plan), operator_id=operator_id.strip(), decision=decision)
+
+
+@dataclass(slots=True)
 class PlanMissionRequest:
     mission_type: str
     source: str = "ground_station"
