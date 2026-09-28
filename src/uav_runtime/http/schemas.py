@@ -246,6 +246,55 @@ class LandRequest(BackendRequest):
 
 
 @dataclass(slots=True)
+class GotoRequest(BackendRequest):
+    """飞到共享 scene_ned 坐标系下的指定点。
+
+    坐标语义：``north_m`` / ``east_m`` / ``down_m`` 是 **scene_ned**（共享场景坐标系，
+    z 向下为正），不是载具本机坐标。Runtime 用标定测得的平移量换算成本机的
+    vehicle_local_ned 再下发：``local = scene - translation_scene_ned_m``。
+
+    **标定无效时动作会被拒绝，不会"尽力而为"地飞。** 缺少平移量却把 scene 坐标
+    当本机坐标发出，飞机会飞到一个偏移量之外的错误位置（UAV-02/03 偏 8 米）。
+    """
+
+    north_m: float = 0.0
+    east_m: float = 0.0
+    down_m: float = -3.0
+    arrival_tolerance_m: float = 1.0
+    hold_s: float = 1.0
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "GotoRequest":
+        base = BackendRequest.from_json(payload)
+
+        def finite_in_range(field: str, default: float, low: float, high: float) -> float:
+            raw = payload.get(field, default)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise RequestValidationError(
+                    "invalid_parameter", field, f"{field} 必须是数字", value=raw
+                )
+            value = float(raw)
+            if not math.isfinite(value) or value < low or value > high:
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    field,
+                    f"{field} 必须在 [{low}, {high}] 内且为有限值",
+                    value=raw,
+                )
+            return value
+
+        return cls(
+            **asdict(base),
+            north_m=finite_in_range("north_m", 0.0, -5000.0, 5000.0),
+            east_m=finite_in_range("east_m", 0.0, -5000.0, 5000.0),
+            # z 向下为正：-500 到 500 对应 ±500 米高度范围
+            down_m=finite_in_range("down_m", -3.0, -500.0, 500.0),
+            arrival_tolerance_m=finite_in_range("arrival_tolerance_m", 1.0, 0.05, 50.0),
+            hold_s=finite_in_range("hold_s", 1.0, 0.0, 30.0),
+        )
+
+
+@dataclass(slots=True)
 class PlanMissionRequest:
     mission_type: str
     source: str = "ground_station"

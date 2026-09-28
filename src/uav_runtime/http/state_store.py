@@ -575,6 +575,18 @@ class RuntimeStateStore:
             return calibration, "stale"
         return calibration, str(calibration.get("status") or "unavailable")
 
+    def coordinate_calibration(self, node_id: str) -> tuple[dict[str, Any] | None, str]:
+        """公开只读访问器：返回本节点的坐标标定与状态。
+
+        供 HTTP 层做 scene_ned -> vehicle_local_ned 的反向转换。
+        之所以单独开一个方法而不直接读内部字典：即使 StateStore 内部改用别处
+        存储或增加缓存，调用方也不需要跟着改。
+
+        ⚠️ 调用方必须检查 status == "calibrated" 再使用标定内容 —— 状态可能是
+        "unavailable"（从未发布）或 "stale"（过期），此时 translation 不可信。
+        """
+        return self._coordinate_calibration(node_id)
+
     def simulation_status(self) -> dict[str, Any]:
         telemetry = self.telemetry_latest()
         rows = self.vehicle_registry.vehicle_rows() if self.vehicle_registry is not None else telemetry.get("nodes", [])

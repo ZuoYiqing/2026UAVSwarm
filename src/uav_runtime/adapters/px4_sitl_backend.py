@@ -8,6 +8,7 @@ admitted by the Runtime control path.
 from __future__ import annotations
 
 import importlib.util
+import math
 import threading
 from typing import Any
 
@@ -508,6 +509,121 @@ class Px4SitlBackend:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
             result["completion_state"] = "failed"
             return self._finish_smoke_result(result)
+
+    def execute_goto_action(
+        self,
+        *,
+        scene_north_m: float,
+        scene_east_m: float,
+        scene_down_m: float,
+        translation_scene_ned_m: dict[str, float],
+        altitude_tolerance_m: float = 1.0,
+        hold_s: float = 1.0,
+        command_timeout_ms: int | None = None,
+        observe_timeout_ms: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """飞到共享 scene_ned 坐标系下的指定点（OFFBOARD 位置控制）。
+
+        为什么必须传入 ``translation_scene_ned_m``
+        ----------------------------------------
+        SET_POSITION_TARGET_LOCAL_NED 收的是**本机 vehicle_local_ned**，而操作者
+        给的目标通常是共享 scene_ned。两者相差一个由仿真标定测得的平移量::
+
+            vehicle_local_ned = scene_ned - translation_scene_ned_m
+
+        **没有这个平移量就不能执行。** 若把 scene_ned 当成本机坐标直接发出，飞机
+        会飞向一个相差该平移量的错误位置 —— 对 UAV-02/UAV-03 而言偏差达 8 米，
+        足以撞上起降坪之外的物体。因此调用方必须先确认标定有效再调用本方法，
+        本方法也会校验平移量的数值合法性。
+        """
+        rejected = self._ensure_sitl_action_allowed("goto")
+        if rejected is not None:
+            return rejected
+        rejected = self._ensure_persistent_session_ready("goto")
+        if rejected is not None:
+            return rejected
+
+        result = self._base_action_result("goto")
+        result["completion_mode"] = "offboard_position_arrival"
+
+        # 平移量必须是三个有限数。缺失或非法一律拒绝，绝不用 0 顶替 ——
+        # 用 0 顶替等于假装 scene 就是 local，正是要避免的那种静默错误。
+        try:
+            offset = (
+                float(translation_scene_ned_m["north"]),
+                float(translation_scene_ned_m["east"]),
+                float(translation_scene_ned_m["down"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            result["failure_reason"] = "calibration_translation_invalid"
+            result["detail"] = f"{type(exc).__name__}: {exc}"
+            return self._finish_smoke_result(result)
+        if not all(math.isfinite(value) for value in offset):
+            result["failure_reason"] = "calibration_translation_not_finite"
+            return self._finish_smoke_result(result)
+
+        target_scene = (float(scene_north_m), float(scene_east_m), float(scene_down_m))
+        local = (
+            target_scene[0] - offset[0],
+            target_scene[1] - offset[1],
+            target_scene[2] - offset[2],
+        )
+        result["target_scene_ned_m"] = {
+            "north": target_scene[0], "east": target_scene[1], "down": target_scene[2],
+        }
+        result["target_vehicle_local_ned_m"] = {
+            "north": local[0], "east": local[1], "down": local[2],
+        }
+        result["calibration_translation_scene_ned_m"] = {
+            "north": offset[0], "east": offset[1], "down": offset[2],
+        }
+
+        # goto 是位置控制，时长由“飞行距离 + 到达保持”决定，不能用固定 observe 超时。
+        timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
+        try:
+            outcome = self.session.goto(
+                north_m=local[0], east_m=local[1], down_m=local[2],
+                tolerance_m=float(altitude_tolerance_m),
+                hold_s=float(hold_s),
+                timeout_s=timeout_s,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["failure_reason"] = f"px4_goto_exception:{type(exc).__name__}"
+            result["completion_state"] = "failed"
+            return self._finish_smoke_result(result)
+
+        # --- 证据展开 -------------------------------------------------------
+        mode_result = outcome.get("mode_result") or {}
+        arrival = outcome.get("arrival") or {}
+        stream = outcome.get("stream") or {}
+        restored = outcome.get("restored") or {}
+
+        result["mode_ack"] = mode_result.get("ack")
+        result["mode_confirmed"] = bool(mode_result.get("confirmed"))
+        result["observed_main_mode"] = mode_result.get("observed_main_mode")
+        result["arrival"] = arrival
+        result["arrival_observed"] = bool(arrival.get("observed"))
+        result["stream_setpoints"] = stream.get("setpoints")
+        result["stream_errors"] = stream.get("errors")
+        result["restored"] = restored
+        result["completion_evidence"] = arrival
+        result["completion_state"] = str(arrival.get("reason") or "unknown")
+
+        # **安全不变量**：无论成功失败，都必须已切回安全模式。
+        # 若收敛失败，即使到达了目标也不能报 pass —— 载具被留在 OFFBOARD
+        # 属于比“没飞到”更严重的问题，必须让上层看见。
+        if not restored.get("restored"):
+            result["failure_reason"] = "mode_restore_failed"
+            return self._finish_smoke_result(result)
+
+        if outcome.get("failure_reason"):
+            result["failure_reason"] = str(outcome["failure_reason"])
+            return self._finish_smoke_result(result)
+
+        result["result"] = "pass"
+        return self._finish_smoke_result(result)
 
     @staticmethod
     def _ack_accepted(ack: dict[str, Any]) -> bool:

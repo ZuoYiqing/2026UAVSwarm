@@ -18,6 +18,7 @@ from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
 from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
 from uav_runtime.http.schemas import (
     BackendRequest,
+    GotoRequest,
     LandRequest,
     PlanMissionRequest,
     RequestValidationError,
@@ -455,6 +456,56 @@ def _execute_flight_action(
                 "completion_mode": "operational_stable_altitude",
                 "_cancel_event": cancel_event,
             }
+        elif action == "goto":
+            assert isinstance(req, GotoRequest)
+            # 取本节点的坐标标定：scene_ned -> 本机 vehicle_local_ned 需要它的平移量。
+            calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(
+                handle.config.node_id
+            )
+            translation = (calibration or {}).get("translation_scene_ned_m")
+            if calibration_status != "calibrated" or not isinstance(translation, dict):
+                # **拒绝执行，而不是"尽力而为"地飞。** 没有可信平移量时把 scene 坐标
+                # 当本机坐标发出去，飞机会飞到偏移量之外的错误位置（UAV-02/03 偏 8 米）。
+                # 这里走与策略拒绝相同的返回形状，让上层能明确区分：
+                # 不是策略拦的，而是坐标换算依据缺失。
+                out = {
+                    **identity,
+                    "action": action,
+                    "result": "fail",
+                    "accepted": False,
+                    "execution_admitted": False,
+                    "status": "rejected",
+                    "lifecycle_status": "policy_rejected",
+                    "failure_reason": "coordinate_calibration_unavailable",
+                    "code": "coordinate_calibration_unavailable",
+                    "calibration_status": calibration_status,
+                    "policy_decision": policy_event,
+                    "ack_evidence": [],
+                    "completion_evidence": None,
+                }
+                RUNTIME_STATE_STORE.transition_action(
+                    action_id, "policy_rejected", **out
+                )
+                VEHICLE_REGISTRY.release_action(handle.config.node_id, action_id)
+                reject_event = _action_audit_event(
+                    "action_result", out, cfg, handle.config.node_id
+                )
+                rt.audit.append(reject_event)
+                RUNTIME_STATE_STORE.record_event(reject_event)
+                return out
+            action_req.params = {
+                # 目标是 scene_ned；换算由后端的 execute_goto_action 完成，
+                # 这里把平移量原样带过去，避免两处各算一遍产生分歧。
+                "scene_north_m": req.north_m,
+                "scene_east_m": req.east_m,
+                "scene_down_m": req.down_m,
+                "translation_scene_ned_m": translation,
+                "altitude_tolerance_m": req.arrival_tolerance_m,
+                "hold_s": req.hold_s,
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "_cancel_event": cancel_event,
+            }
         else:
             action_req.params = {
                 "command_timeout_ms": req.command_timeout_ms,
@@ -532,6 +583,16 @@ def takeoff(payload: dict[str, Any]) -> dict[str, Any]:
 def land(payload: dict[str, Any]) -> dict[str, Any]:
     """Controlled LAND requiring fresh landed-state and disarmed evidence."""
     return _execute_flight_action(LandRequest.from_json(payload), action="land")
+
+
+def goto(payload: dict[str, Any]) -> dict[str, Any]:
+    """飞到共享 scene_ned 坐标系下的指定点（OFFBOARD 位置控制）。
+
+    坐标换算与标定校验在 _execute_flight_action 内完成：本端点收到的目标是
+    scene_ned，必须减掉标定平移量才是 SET_POSITION_TARGET_LOCAL_NED 需要的
+    本机 vehicle_local_ned。
+    """
+    return _execute_flight_action(GotoRequest.from_json(payload), action="goto")
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
@@ -728,6 +789,9 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/actions/land":
         result = land(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/actions/goto":
+        result = goto(payload)
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/simulation/evidence":
         return 200, publish_simulation_evidence(payload)
