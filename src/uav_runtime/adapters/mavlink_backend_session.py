@@ -71,6 +71,33 @@ PX4_MAIN_MODE_NAMES = {
 }
 
 
+# --- PX4 AUTO 子模式 ------------------------------------------------------
+#
+# 同样是 PX4 自己的约定，MAVLink 公共枚举里没有。
+# 源码：px4_custom_mode.h 的 enum PX4_CUSTOM_SUB_MODE_AUTO。
+#
+# **为什么必须区分主模式与子模式**：AUTO(4) 主模式下的子模式行为差异极大 ——
+# MISSION 会飞航线、RTL 会爬升后自主返航并降落。它们都是 main_mode=4，
+# 只看主模式会把"RTL 正在飞"误判成"稳定悬停"。实测踩过这个坑。
+PX4_CUSTOM_SUB_MODE_AUTO_READY = 1
+PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF = 2
+PX4_CUSTOM_SUB_MODE_AUTO_LOITER = 3
+PX4_CUSTOM_SUB_MODE_AUTO_MISSION = 4
+PX4_CUSTOM_SUB_MODE_AUTO_RTL = 5
+PX4_CUSTOM_SUB_MODE_AUTO_LAND = 6
+PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET = 8
+
+PX4_AUTO_SUB_MODE_NAMES = {
+    PX4_CUSTOM_SUB_MODE_AUTO_READY: "AUTO_READY",
+    PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF: "AUTO_TAKEOFF",
+    PX4_CUSTOM_SUB_MODE_AUTO_LOITER: "AUTO_LOITER",
+    PX4_CUSTOM_SUB_MODE_AUTO_MISSION: "AUTO_MISSION",
+    PX4_CUSTOM_SUB_MODE_AUTO_RTL: "AUTO_RTL",
+    PX4_CUSTOM_SUB_MODE_AUTO_LAND: "AUTO_LAND",
+    PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET: "AUTO_FOLLOW_TARGET",
+}
+
+
 # --- SET_POSITION_TARGET_LOCAL_NED 的 type_mask ---------------------------
 #
 # type_mask 的语义是"**忽略哪些字段**"（1 = 忽略，0 = 使用）。这个语义极易搞反，
@@ -133,6 +160,13 @@ def _source_ids(message: Any) -> tuple[int | None, int | None]:
         None if system_id is None else int(system_id),
         None if component_id is None else int(component_id),
     )
+
+
+PINNED_MODES: frozenset[tuple[int, int]] = frozenset({
+    (PX4_CUSTOM_MAIN_MODE_POSCTL, 0),
+    (PX4_CUSTOM_MAIN_MODE_ALTCTL, 0),
+    (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+})
 
 
 @dataclass(slots=True)
@@ -617,18 +651,29 @@ class MavlinkBackendSession:
         ack["command_name"] = "MAV_CMD_DO_SET_MODE"
         ack["requested_main_mode"] = int(main_mode)
         ack["requested_main_mode_name"] = PX4_MAIN_MODE_NAMES.get(int(main_mode), f"MAIN_{int(main_mode)}")
+        ack["requested_sub_mode"] = int(sub_mode)
 
-        confirmed, observed = self.wait_mode(
+        # AUTO 主模式必须连子模式一起确认：LOITER(3) 与 RTL(5) 的 main_mode 都是
+        # AUTO(4)，只比主模式会把"正在返航"当成"稳定悬停"。
+        match_sub = int(main_mode) == PX4_CUSTOM_MAIN_MODE_AUTO
+        confirmed, observed_main, observed_sub = self.wait_mode(
             main_mode=main_mode,
+            sub_mode=sub_mode,
+            match_sub_mode=match_sub,
             timeout_s=confirm_timeout_s,
         )
+        observed_name = (
+            None if observed_main is None
+            else PX4_MAIN_MODE_NAMES.get(int(observed_main), f"MAIN_{int(observed_main)}")
+        )
+        if observed_main == PX4_CUSTOM_MAIN_MODE_AUTO and observed_sub is not None:
+            observed_name = PX4_AUTO_SUB_MODE_NAMES.get(int(observed_sub), f"AUTO_SUB_{int(observed_sub)}")
         return {
             "ack": ack,
             "confirmed": bool(confirmed),
-            "observed_main_mode": observed,
-            "observed_main_mode_name": (
-                None if observed is None else PX4_MAIN_MODE_NAMES.get(int(observed), f"MAIN_{int(observed)}")
-            ),
+            "observed_main_mode": observed_main,
+            "observed_sub_mode": observed_sub,
+            "observed_main_mode_name": observed_name,
         }
 
     @staticmethod
@@ -652,34 +697,69 @@ class MavlinkBackendSession:
             return None
         return (int(custom_mode) >> 16) & 0xFF
 
-    def wait_mode(self, *, main_mode: int, timeout_s: float) -> tuple[bool, int | None]:
-        """等待 HEARTBEAT 报告的目标主模式；返回 (是否确认, 观测到的主模式)。"""
+    @staticmethod
+    def px4_sub_mode_from_custom_mode(custom_mode: int | None) -> int | None:
+        """从 custom_mode 里取出子模式号（bit 24-31）。
+
+        AUTO 主模式下必须看这个值：MISSION(4) 与 RTL(5) 的主模式都是 AUTO，
+        只看主模式无法区分"在飞航线"和"稳定悬停"。
+        """
+        if custom_mode is None:
+            return None
+        return (int(custom_mode) >> 24) & 0xFF
+
+    def wait_mode(
+        self,
+        *,
+        main_mode: int,
+        sub_mode: int = 0,
+        match_sub_mode: bool = False,
+        timeout_s: float,
+    ) -> tuple[bool, int | None, int | None]:
+        """等待 HEARTBEAT 报告的目标模式。
+
+        Returns:
+            ``(是否确认, 观测到的主模式, 观测到的子模式)``
+
+        ``match_sub_mode=True`` 时要求主模式与子模式都相符。对 AUTO 主模式必须
+        这样做 —— AUTO 下的子模式决定实际行为（LOITER 悬停 vs RTL 返航），
+        只比主模式会把 RTL 误判成安全悬停。
+        """
         deadline = time.monotonic() + max(timeout_s, 0.1)
-        observed: int | None = None
+        observed_main: int | None = None
+        observed_sub: int | None = None
         while time.monotonic() < deadline:
             with self._rx_condition:
                 latest = self._last_heartbeat_mode
             if latest is not None:
-                observed = self.px4_main_mode_from_custom_mode(latest[2])
-                if observed == int(main_mode):
-                    return True, observed
+                observed_main = self.px4_main_mode_from_custom_mode(latest[2])
+                observed_sub = self.px4_sub_mode_from_custom_mode(latest[2])
+                if observed_main == int(main_mode):
+                    if not match_sub_mode or observed_sub == int(sub_mode):
+                        return True, observed_main, observed_sub
             time.sleep(0.02)
-        return False, observed
+        return False, observed_main, observed_sub
 
     def current_mode(self) -> dict[str, Any]:
         """返回最近一次 HEARTBEAT 观测到的模式（可能是 None，表示还没收到）。"""
         with self._rx_condition:
             latest = self._last_heartbeat_mode
         if latest is None:
-            return {"sequence": None, "base_mode": None, "custom_mode": None, "main_mode": None}
+            return {"sequence": None, "base_mode": None, "custom_mode": None,
+                    "main_mode": None, "sub_mode": None}
         sequence, base_mode, custom_mode = latest
         main = self.px4_main_mode_from_custom_mode(custom_mode)
+        sub = self.px4_sub_mode_from_custom_mode(custom_mode)
+        name = None if main is None else PX4_MAIN_MODE_NAMES.get(main, f"MAIN_{main}")
+        if main == PX4_CUSTOM_MAIN_MODE_AUTO and sub is not None:
+            name = PX4_AUTO_SUB_MODE_NAMES.get(sub, f"AUTO_SUB_{sub}")
         return {
             "sequence": sequence,
             "base_mode": base_mode,
             "custom_mode": custom_mode,
             "main_mode": main,
-            "main_mode_name": None if main is None else PX4_MAIN_MODE_NAMES.get(main, f"MAIN_{main}"),
+            "sub_mode": sub,
+            "main_mode_name": name,
         }
 
     def send_position_target(
@@ -765,7 +845,18 @@ class MavlinkBackendSession:
         hold_s: float = 1.0,
         timeout_s: float = 60.0,
         rate_hz: float = 10.0,
-        restore_mode: int = PX4_CUSTOM_MAIN_MODE_POSCTL,
+        # 收尾目标模式：AUTO + LOITER（自主定点悬停）。
+        #
+        # 为什么不用 POSCTL：停流后 PX4 自己也会退出 OFFBOARD，两条模式切换
+        # 路径互相竞争，POSCTL 的切换经常拿不到确认（实测两次都如此）。
+        # AUTO_LOITER 是既明确又稳定的悬停状态，且与 takeoff 收尾后载具所停的
+        # 模式一致，因此作为默认值更可靠。
+        #
+        # 注意必须带子模式：AUTO 主模式下子模式决定行为，LOITER(3) 是悬停，
+        # 而 RTL(5) 是自主返航。只给 main_mode=4 而 sub_mode=0 会让 PX4 落到
+        # 未定义子模式（实测会变成 RTL 行为）。
+        restore_mode: int = PX4_CUSTOM_MAIN_MODE_AUTO,
+        restore_sub_mode: int = PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
         cancel_event: threading.Event | None = None,
         preset_setpoints: int = 10,
         preset_interval_s: float = 0.05,
@@ -876,35 +967,43 @@ class MavlinkBackendSession:
             stop_stream.set()
             try:
                 restore_result = self.set_mode(
-                    main_mode=restore_mode, timeout_s=3.0, confirm_timeout_s=3.0
+                    main_mode=restore_mode,
+                    sub_mode=restore_sub_mode,
+                    timeout_s=3.0,
+                    confirm_timeout_s=3.0,
                 )
+                observed_main = restore_result.get("observed_main_mode")
+                observed_sub = restore_result.get("observed_sub_mode")
                 confirmed = bool(restore_result["confirmed"])
-                observed = restore_result.get("observed_main_mode")
-                # 目标模式没确认时，先看是不是"其实已经安全了"。
+
+                # ⚠️ 这里**刻意不做**"任意非 OFFBOARD 就算安全"的宽松判定。
                 #
-                # 实测背景：停流后 PX4 自己也会退出 OFFBOARD（它有自己的回退逻辑），
-                # 于是我们的模式命令与 PX4 的回退会撞在一起。曾观测到：命令切 POSCTL
-                # 未确认，但心跳此时报 AUTO（4）—— 载具其实已经离开了 OFFBOARD，
-                # 处于一个正常的自主悬停模式，是安全的。
+                # 曾经这样做过，结果是错的：AUTO(4) 主模式下，LOITER(3) 是悬停，
+                # 但 **RTL(5) 是自主返航**（会爬升、飞回原点、降落）。两者
+                # main_mode 都是 4，只看主模式会把"正在返航"判成"稳定悬停"。
+                # 实测踩过：goto 报 pass，随后载具自行爬升到 8.5 米飞回原点。
                 #
-                # 因此确认条件是"**已离开 OFFBOARD 且处于已知模式**"，而不是强求
-                # 某一个特定模式。这样既不和 PX4 的回退打架，也不会放过真正的危险
-                # 状态（仍停在 OFFBOARD）。
-                if not confirmed and observed != PX4_CUSTOM_MAIN_MODE_OFFBOARD and observed in PX4_MAIN_MODE_NAMES:
+                # 因此只接受两种情况：
+                #   a) 目标模式被精确确认（含 AUTO 的子模式匹配）；
+                #   b) 观测到的是**白名单内的自主悬停模式**且子模式正确。
+                safe_fallback = (
+                    not confirmed
+                    and (observed_main, observed_sub) in PINNED_MODES
+                )
+                if safe_fallback:
                     confirmed = True
-                    restore_result["accepted_fallback"] = True
+
                 restored = {
                     "restored": confirmed,
                     "main_mode": restore_mode,
                     "main_mode_name": PX4_MAIN_MODE_NAMES.get(restore_mode, str(restore_mode)),
-                    "observed_main_mode": observed,
-                    "observed_main_mode_name": (
-                        None if observed is None
-                        else PX4_MAIN_MODE_NAMES.get(int(observed), f"MAIN_{int(observed)}")
-                    ),
-                    # 仍停在 OFFBOARD 是最危险的结果，必须显式标出来
-                    "still_in_offboard": observed == PX4_CUSTOM_MAIN_MODE_OFFBOARD,
-                    "accepted_fallback": bool(restore_result.get("accepted_fallback")),
+                    "sub_mode": restore_sub_mode,
+                    "observed_main_mode": observed_main,
+                    "observed_sub_mode": observed_sub,
+                    "observed_main_mode_name": restore_result.get("observed_main_mode_name"),
+                    # 仍停在 OFFBOARD 是最危险的结果，必须显式标出
+                    "still_in_offboard": observed_main == PX4_CUSTOM_MAIN_MODE_OFFBOARD,
+                    "accepted_fallback": bool(safe_fallback),
                     "attempted": True,
                 }
             except Exception as exc:  # noqa: BLE001

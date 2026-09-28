@@ -17,6 +17,10 @@ from uav_runtime.adapters.mavlink_backend_session import (
     PX4_CUSTOM_MAIN_MODE_AUTO,
     PX4_CUSTOM_MAIN_MODE_OFFBOARD,
     PX4_CUSTOM_MAIN_MODE_POSCTL,
+    PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+    PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
+    PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+    PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF,
     MavlinkBackendSession,
 )
 
@@ -100,8 +104,19 @@ def pack_mode(main: int, sub: int = 0) -> int:
     return ((sub & 0xFF) << 24) | ((main & 0xFF) << 16)
 
 
-def feed_heartbeat(session: MavlinkBackendSession, *, main: int, sub: int = 0, base_mode: int = 0) -> None:
+def feed_heartbeat(
+    session: MavlinkBackendSession, *, main: int, sub: int = 0, base_mode: int = 0
+) -> None:
     session.dispatch_message(_FakeHeartbeat(custom_mode=pack_mode(main, sub), base_mode=base_mode))
+
+
+def feed_plan_entry(session: MavlinkBackendSession, entry: "int | tuple[int, int]") -> None:
+    """剧本条目可以是 int（主模式）或 (主模式, 子模式)。"""
+    if isinstance(entry, tuple):
+        main, sub = entry
+    else:
+        main, sub = entry, 0
+    feed_heartbeat(session, main=main, sub=sub)
 
 
 # --- current_mode / 位提取 -------------------------------------------------
@@ -245,19 +260,52 @@ def test_wait_mode_returns_immediately_when_already_in_target_mode() -> None:
     session = make_session()
     feed_heartbeat(session, main=PX4_CUSTOM_MAIN_MODE_OFFBOARD)
     started = time.monotonic()
-    confirmed, observed = session.wait_mode(main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=1.0)
+    confirmed, observed_main, observed_sub = session.wait_mode(
+        main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=1.0
+    )
     elapsed = time.monotonic() - started
     assert confirmed is True
-    assert observed == PX4_CUSTOM_MAIN_MODE_OFFBOARD
+    assert observed_main == PX4_CUSTOM_MAIN_MODE_OFFBOARD
+    assert observed_sub == 0
     assert elapsed < 0.5, "已达目标模式时不应等满超时"
 
 
 def test_wait_mode_times_out_and_reports_last_observed() -> None:
     session = make_session()
     feed_heartbeat(session, main=PX4_CUSTOM_MAIN_MODE_POSCTL)
-    confirmed, observed = session.wait_mode(main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=0.15)
+    confirmed, observed_main, observed_sub = session.wait_mode(
+        main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=0.15
+    )
     assert confirmed is False
-    assert observed == PX4_CUSTOM_MAIN_MODE_POSCTL, "超时也要报告最后观测到的模式，便于排障"
+    assert observed_main == PX4_CUSTOM_MAIN_MODE_POSCTL, "超时也要报告最后观测到的模式，便于排障"
+    assert observed_sub == 0
+
+
+def test_wait_mode_distinguishes_auto_sub_modes() -> None:
+    """AUTO 主模式下必须看子模式：LOITER 悬停 vs RTL 返航，main_mode 都是 4。"""
+    session = make_session()
+    feed_heartbeat(session, main=PX4_CUSTOM_MAIN_MODE_AUTO, sub=PX4_CUSTOM_SUB_MODE_AUTO_RTL)
+
+    # 请求 AUTO+LOITER：虽然主模式相符，但子模式不符 -> 不能确认
+    confirmed, main, sub = session.wait_mode(
+        main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+        sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+        match_sub_mode=True,
+        timeout_s=0.15,
+    )
+    assert confirmed is False, "RTL 不能当作 LOITER"
+    assert main == PX4_CUSTOM_MAIN_MODE_AUTO
+    assert sub == PX4_CUSTOM_SUB_MODE_AUTO_RTL
+
+    # 请求 AUTO+RTL 则应确认
+    confirmed, _, sub = session.wait_mode(
+        main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+        sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+        match_sub_mode=True,
+        timeout_s=0.5,
+    )
+    assert confirmed is True
+    assert sub == PX4_CUSTOM_SUB_MODE_AUTO_RTL
 
 
 def test_set_mode_requires_connection() -> None:
@@ -449,9 +497,7 @@ class _AutoAckConnection(_FakeConnection):
             index = self._handled_mode_commands - 1
             session.dispatch_message(_FakeAck(DO_SET_MODE, self.mav.ack_by_command.get(DO_SET_MODE, 0)))
             if index < len(self._mode_plan):
-                mode = self._mode_plan[index]
-                # 直接在当前线程喂心跳：测试要的是确定性时序，不需要额外线程。
-                feed_heartbeat(session, main=mode)
+                feed_plan_entry(session, self._mode_plan[index])
         return None
 
 
@@ -518,10 +564,13 @@ def test_goto_reaches_target_logs_stream_and_restores_mode() -> None:
     # 模式：先确认进 OFFBOARD
     assert result["mode_result"]["confirmed"] is True
     assert result["mode_result"]["observed_main_mode"] == PX4_CUSTOM_MAIN_MODE_OFFBOARD
-    # **关键**：收尾必须切回安全模式
+    # **关键**：收尾必须收敛到安全悬停模式
+    # 默认收尾目标是 AUTO + LOITER（见 goto 的 restore_mode/restore_sub_mode）
     assert result["restored"] is not None
-    assert result["restored"]["restored"] is True, "goto 结束后必须切回 POSCTL"
-    assert result["restored"]["main_mode"] == PX4_CUSTOM_MAIN_MODE_POSCTL
+    assert result["restored"]["restored"] is True, "goto 结束后必须收敛到安全悬停模式"
+    assert result["restored"]["main_mode"] == PX4_CUSTOM_MAIN_MODE_AUTO
+    assert result["restored"]["sub_mode"] == PX4_CUSTOM_SUB_MODE_AUTO_LOITER
+    assert result["restored"]["still_in_offboard"] is False
     assert result["failure_reason"] is None
 
 
@@ -606,30 +655,118 @@ def test_goto_requires_connection() -> None:
 # --- 收敛语义：离开 OFFBOARD 即可，不强制某个特定模式 -----------------------
 
 
-def test_goto_accepts_safe_fallback_when_target_mode_not_confirmed() -> None:
-    """目标模式（POSCTL）没确认，但载具已离开 OFFBOARD -> 视为已收敛。
+def test_goto_rejects_auto_rtl_as_unsafe_fallback() -> None:
+    """⚠️ **AUTO + RTL 绝不能算收敛成功。**
 
-    实测背景：停流后 PX4 自己也会退出 OFFBOARD，我们的模式命令与它的回退会撞
-    在一起。曾观测到命令切 POSCTL 未确认、心跳报 AUTO（4），而载具其实已处于
-    正常自主悬停模式。若坚持"必须等于 POSCTL"，就会把这种安全结果误报成
-    mode_restore_failed。
+    这是实测踩到的真实事故：goto 报 pass，随后载具自行爬升到 8.5 米飞回原点。
+    根因是 RTL 与 AUTO_LOITER 的 main_mode 同为 AUTO(4)，而早期实现只看主模式，
+    把"正在自主返航"误判成"稳定悬停"。
+
+    本测试锁住：observation = (AUTO, RTL) 时必须 restored=False。
     """
-    # 两次 DO_SET_MODE 都让心跳停留在 AUTO：目标模式永远不确认
-    session, _ = make_goto_session(mode_plan=[PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_MAIN_MODE_AUTO])
+    session, _ = make_goto_session(
+        mode_plan=[
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL),
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL),
+        ]
+    )
     _feed_local_position(session, x=0.0, y=0.0, z=0.0)
 
     result = session.goto(
-        north_m=50.0, east_m=0.0, down_m=-10.0,   # 到不了，走超时路径
+        north_m=50.0, east_m=0.0, down_m=-10.0,
         tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
         preset_setpoints=2, preset_interval_s=0.0,
     )
 
     restored = result["restored"]
-    assert restored["restored"] is True, f"AUTO 是安全模式，应收敛成功：{restored}"
-    assert restored["accepted_fallback"] is True, "应标记为接受了回退模式"
+    assert restored["restored"] is False, f"RTL 是自主返航，不是稳定悬停：{restored}"
     assert restored["observed_main_mode"] == PX4_CUSTOM_MAIN_MODE_AUTO
-    assert restored["observed_main_mode_name"] == "AUTO"
+    assert restored["observed_sub_mode"] == PX4_CUSTOM_SUB_MODE_AUTO_RTL
+    assert restored["still_in_offboard"] is False, "确实离开了 OFFBOARD，但落到了不安全的模式"
+
+
+def test_goto_accepts_auto_loiter_as_safe_fallback() -> None:
+    """收尾显式请求 AUTO+LOITER 时应精确确认，不算 fallback。
+
+    AUTO_LOITER 是真正的定点悬停。这里把它作为**目标模式**请求，
+    验证 set_mode 对 AUTO 会连子模式一起匹配。
+    """
+    session, _ = make_goto_session(
+        mode_plan=[
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+        ]
+    )
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=50.0, east_m=0.0, down_m=-10.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+        restore_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+        restore_sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+    )
+
+    restored = result["restored"]
+    assert restored["restored"] is True, f"AUTO_LOITER 应判为收敛：{restored}"
+    assert restored["accepted_fallback"] is False, "精确匹配目标模式，不算 fallback"
     assert restored["still_in_offboard"] is False
+
+
+def test_goto_accepts_auto_loiter_fallback_when_posctl_requested() -> None:
+    """显式请求 POSCTL 但落到 AUTO_LOITER —— 落在白名单内，可判为收敛。
+
+    这个场景对应实测：停流后 PX4 自己退出 OFFBOARD，我们的 POSCTL 命令
+    没拿到确认，但载具其实已进入 AUTO_LOITER。
+    """
+    session, _ = make_goto_session(
+        mode_plan=[
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+            (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+        ]
+    )
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=50.0, east_m=0.0, down_m=-10.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+        restore_mode=PX4_CUSTOM_MAIN_MODE_POSCTL,
+        restore_sub_mode=0,
+    )
+
+    restored = result["restored"]
+    assert restored["restored"] is True
+    assert restored["accepted_fallback"] is True, "未精确匹配目标模式，应标记为 fallback"
+    assert restored["observed_sub_mode"] == PX4_CUSTOM_SUB_MODE_AUTO_LOITER
+
+
+def test_goto_rejects_unknown_sub_mode_fallback() -> None:
+    """AUTO + 未知子模式（0）同样不能算安全 —— 不知道它要做什么。"""
+    session, _ = make_goto_session(
+        mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, 0), (PX4_CUSTOM_MAIN_MODE_AUTO, 0)]
+    )
+    _feed_local_position(session, x=0.0, y=0.0, z=0.0)
+
+    result = session.goto(
+        north_m=50.0, east_m=0.0, down_m=-10.0,
+        tolerance_m=0.5, hold_s=0.1, timeout_s=0.3, rate_hz=20.0,
+        preset_setpoints=2, preset_interval_s=0.0,
+    )
+    assert result["restored"]["restored"] is False
+
+
+def test_pinned_modes_whitelist_contents() -> None:
+    """白名单必须只含真正的定点悬停模式，且绝不含 MISSION/RTL。"""
+    from uav_runtime.adapters.mavlink_backend_session import PINNED_MODES
+
+    assert (PX4_CUSTOM_MAIN_MODE_POSCTL, 0) in PINNED_MODES
+    assert (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER) in PINNED_MODES
+    # 会飞走的模式绝不能在白名单里
+    assert (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL) not in PINNED_MODES
+    assert (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_MISSION) not in PINNED_MODES
+    assert (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF) not in PINNED_MODES
+    assert (PX4_CUSTOM_MAIN_MODE_OFFBOARD, 0) not in PINNED_MODES
 
 
 def test_goto_rejects_when_vehicle_still_in_offboard() -> None:
