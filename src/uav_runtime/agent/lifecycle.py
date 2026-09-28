@@ -57,7 +57,10 @@ class StepStatus:
 
 APPROVAL_APPROVE = "approve"
 APPROVAL_REJECT = "reject"
-SUPPORTED_EXECUTION_MODES = {"dry_run", "fake"}
+#: ``dry_run``/``fake`` simulate step progression; ``real`` actually calls
+#: Runtime action endpoints through an injected executor.  ``real`` is not the
+#: default and must be requested explicitly.
+SUPPORTED_EXECUTION_MODES = {"dry_run", "fake", "real"}
 
 
 @dataclass(slots=True)
@@ -104,16 +107,35 @@ class PlanApproval:
 
 
 class PlanExecutionController:
-    """Minimal controller for approved MissionPlan lifecycle transitions.
+    """Controller for approved MissionPlan lifecycle transitions.
 
-    v0.1 only supports dry_run/fake execution skeletons.  It never creates a
-    MAVLink session, never sends PX4 commands, and never calls real adapters.
-    TODO: wire approved plan steps into RuntimeOrchestrator action execution in
-    a later phase, preserving final Policy Gate checks before each action.
+    Supports three execution modes:
+
+    * ``dry_run`` / ``fake`` — simulate step progression.  No MAVLink session,
+      no PX4 command, no adapter call.  A ``succeeded`` step here means only
+      that the controller accepted the state transition.
+    * ``real`` — hand each step to an injected executor that calls real Runtime
+      action endpoints.  The policy gates still run inside Runtime; this layer
+      never bypasses them.
+
+    **Per-step Policy Gate note**: the planner's precheck is not authorization.
+    In ``real`` mode each step goes through Runtime's own Policy Gate because it
+    is executed by calling the normal action endpoint, which applies the gate
+    with live context immediately before touching MAVLink.
     """
 
-    def __init__(self, *, audit: AuditLog | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        audit: AuditLog | None = None,
+        action_executor: Any = None,
+    ) -> None:
         self.audit = audit or AuditLog()
+        #: Injected executor for ``real`` mode.  Duck-typed: anything with
+        #: ``execute_step(step) -> outcome`` where the outcome exposes ``ok``,
+        #: ``failure_reason`` and ``to_dict()``.  Kept as ``Any`` so the agent
+        #: layer does not depend on the HTTP transport implementation.
+        self.action_executor = action_executor
 
     def load_plan(self, plan: MissionPlan) -> MissionPlan:
         """Validate plan lifecycle state after planning and before approval."""
@@ -225,6 +247,176 @@ class PlanExecutionController:
             return {"result": "completed", "failure_reason": None, "plan": plan.to_dict(), "execution_mode": mode}
         plan.status = PlanStatus.FAILED
         return {"result": "failed", "failure_reason": "step_failed", "plan": plan.to_dict(), "execution_mode": mode}
+
+    # ------------------------------------------------------------------
+    # Real execution
+    # ------------------------------------------------------------------
+
+    def execute_plan_real(
+        self,
+        plan: MissionPlan,
+        *,
+        operator_id: str = "",
+        stop_on_first_failure: bool = True,
+    ) -> dict[str, Any]:
+        """Execute an approved plan by calling real Runtime action endpoints.
+
+        Failure policy (``stop_on_first_failure``, default **True**):
+            The first failed step aborts the plan.  Remaining steps are left
+            ``pending`` and the plan ends ``failed``.  This is the conservative
+            choice: a later step may depend on an earlier one having succeeded,
+            and continuing could put an aircraft in an unintended state.  The
+            plan is never silently "partially completed".
+
+        Why this does not weaken safety:
+            Each step is executed by calling the ordinary action endpoint, so
+            Runtime's Policy Gate still evaluates it with live context right
+            before MAVLink.  This layer adds sequencing and bookkeeping; it does
+            not grant authorization.  A step whose action has no endpoint is
+            refused by the executor rather than skipped.
+
+        Returns a result envelope with per-step outcomes so the caller (and the
+        algorithm side) can see exactly which step failed and why.
+        """
+        if self.action_executor is None:
+            return {
+                "result": "blocked",
+                "failure_reason": "no_action_executor_configured",
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": [],
+            }
+        if not operator_id:
+            return {
+                "result": "blocked",
+                "failure_reason": "operator_id_required_for_real_execution",
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": [],
+            }
+        if plan.status != PlanStatus.APPROVED:
+            return {
+                "result": "blocked",
+                "failure_reason": "plan_not_approved",
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": [],
+            }
+        if self._has_blocked_step(plan) or self._has_confirm_step(plan):
+            plan.status = PlanStatus.BLOCKED
+            return {
+                "result": "blocked",
+                "failure_reason": "step_not_executable",
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": [],
+            }
+
+        # Every step must name its target before anything flies.  Checking up
+        # front means a plan with a missing node_id cannot partially execute and
+        # then abort half way through.
+        untargeted = [s.step_id for s in plan.steps if not str(getattr(s, "node_id", "") or "")]
+        if untargeted:
+            plan.status = PlanStatus.BLOCKED
+            self._append_event(
+                "agent_plan_blocked",
+                plan,
+                execution_mode="real",
+                status=plan.status,
+                reason="step_target_vehicle_missing",
+            )
+            return {
+                "result": "blocked",
+                "failure_reason": "step_target_vehicle_missing",
+                "detail": {"steps_without_target": untargeted},
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": [],
+            }
+
+        plan.status = PlanStatus.EXECUTING
+        self._append_event(
+            "agent_plan_execution_started",
+            plan,
+            execution_mode="real",
+            status=plan.status,
+            operator_id=operator_id,
+        )
+
+        step_outcomes: list[dict[str, Any]] = []
+        for step in plan.steps:
+            if step.status not in {StepStatus.PENDING, StepStatus.READY}:
+                continue
+
+            step.status = StepStatus.RUNNING
+            self._append_event(
+                "agent_plan_step_started",
+                plan,
+                step=step,
+                execution_mode="real",
+                status=step.status,
+            )
+
+            outcome = self.action_executor.execute_step(step)
+            record = outcome.to_dict() if hasattr(outcome, "to_dict") else {"ok": bool(getattr(outcome, "ok", False))}
+            record["step_id"] = step.step_id
+            step_outcomes.append(record)
+
+            if getattr(outcome, "ok", False):
+                self.mark_step_succeeded(
+                    plan, step, mode="real",
+                    reason=str(record.get("result") or "action_completed"),
+                )
+                continue
+
+            self.mark_step_failed(
+                plan, step, mode="real",
+                reason=str(record.get("failure_reason") or "step_failed"),
+            )
+            if stop_on_first_failure:
+                # 传 step=<失败的步骤>，事件里就会带上 step_id 与 action_type，
+                # 便于事后定位是哪一步导致中止。
+                self._append_event(
+                    "agent_plan_aborted",
+                    plan,
+                    step=step,
+                    execution_mode="real",
+                    status=plan.status,
+                    reason="stop_on_first_failure",
+                )
+                return {
+                    "result": "failed",
+                    "failure_reason": str(record.get("failure_reason") or "step_failed"),
+                    "aborted_at_step": step.step_id,
+                    "remaining_steps_pending": [
+                        s.step_id for s in plan.steps if s.status in {StepStatus.PENDING, StepStatus.READY}
+                    ],
+                    "plan": plan.to_dict(),
+                    "execution_mode": "real",
+                    "step_outcomes": step_outcomes,
+                }
+            # stop_on_first_failure=False: keep going, plan stays failed
+            continue
+
+        if all(step.status == StepStatus.SUCCEEDED for step in plan.steps):
+            plan.status = PlanStatus.COMPLETED
+            self._append_event("agent_plan_completed", plan, execution_mode="real", status=plan.status)
+            return {
+                "result": "completed",
+                "failure_reason": None,
+                "plan": plan.to_dict(),
+                "execution_mode": "real",
+                "step_outcomes": step_outcomes,
+            }
+
+        plan.status = PlanStatus.FAILED
+        return {
+            "result": "failed",
+            "failure_reason": "step_failed",
+            "plan": plan.to_dict(),
+            "execution_mode": "real",
+            "step_outcomes": step_outcomes,
+        }
 
     def advance_next_step(self, plan: MissionPlan, mode: str = "dry_run") -> MissionPlanStep | None:
         """Advance the next ready/pending step by simulation only."""

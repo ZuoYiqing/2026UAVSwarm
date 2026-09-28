@@ -70,6 +70,14 @@ class MissionPlanStep:
     step_id: str
     action_type: str
     params: dict[str, Any] = field(default_factory=dict)
+    # Which vehicle this step applies to.
+    #
+    # The v0.1 templates were single-vehicle, so a plan implicitly meant "the
+    # vehicle".  Real multi-vehicle execution needs the target stated
+    # explicitly: without it, an executor would have to guess, and a wrong guess
+    # means flying the wrong aircraft.  Defaults to empty; executors must refuse
+    # to run a step that has no target rather than defaulting to some vehicle.
+    node_id: str = ""
     expected_adapter: str = ""
     required_capability: dict[str, Any] | None = None
     risk_level: int | None = None
