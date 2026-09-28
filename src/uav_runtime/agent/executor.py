@@ -81,11 +81,17 @@ _REGISTRY_SYSTEM_NOT_IMPLEMENTED = frozenset({
     "health_query", "report_status", "sensor_read",
 })
 
-#: Declared flight/system actions awaiting an endpoint.  Refused with a message
-#: that says "not implemented", because that is the literal situation.
+#: Actions that are declared but have no endpoint, and that Runtime would
+#: legitimately execute once an endpoint exists.  Refused with a message saying
+#: "not implemented", because that is the literal situation.
+#:
+#: Includes the payload *sensing/annunciation* actions (camera, gimbal, light,
+#: speaker): those are normal mission capabilities awaiting an endpoint, unlike
+#: the release/weapon actions which are refused as unsupported.
 KNOWN_UNIMPLEMENTED_ACTIONS: frozenset[str] = (
     _REGISTRY_FLIGHT_NOT_IMPLEMENTED
     | _REGISTRY_SYSTEM_NOT_IMPLEMENTED
+    | _REGISTRY_PAYLOAD_NOT_IMPLEMENTED
     | _UPSTREAM_ONLY_NOT_IMPLEMENTED
 )
 

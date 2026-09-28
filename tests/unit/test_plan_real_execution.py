@@ -130,12 +130,17 @@ def test_unknown_parameters_are_dropped_not_forwarded() -> None:
 
 @pytest.mark.parametrize("action_type", sorted(KNOWN_UNIMPLEMENTED_ACTIONS))
 def test_unimplemented_actions_are_refused_not_skipped(action_type: str) -> None:
-    """声明了但没端点的动作必须被拒绝 —— 静默跳过会产生假成功。"""
+    """声明了但没端点的动作必须被拒绝 —— 静默跳过会产生假成功。
+
+    覆盖飞行类、系统类、载荷感知类，以及上游专有的 observe。
+    """
     executor, post = _executor()
     outcome = executor.execute_step(_step(action_type))
 
     assert outcome.ok is False
-    assert outcome.failure_reason == "action_endpoint_not_implemented"
+    assert outcome.failure_reason == "action_endpoint_not_implemented", (
+        f"{action_type} 应报未实现，实际 {outcome.failure_reason}"
+    )
     assert post.calls == [], "被拒绝的步骤不得发出任何请求"
 
 
