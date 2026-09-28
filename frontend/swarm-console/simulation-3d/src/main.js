@@ -581,6 +581,8 @@ async function loadScene(sceneId) {
   const definition = sceneDefinitions[sceneId];
   if (!definition) return;
   vehicleFrame = definition.kind === "reference" ? reconFrame : missionFrame;
+  // 活动帧变了，逆矩阵必须跟着重算，否则取点换算仍基于旧场景的原点
+  refreshSceneNedMatrix();
   if (snapshotState.setScene(definition.liveProfile || DISPLAY_ONLY_SCENE)) clearDisplayedFleet("等待场景快照");
   document.querySelector("#scene-select").value = sceneId;
   const generation = ++sceneLoadGeneration;
@@ -972,13 +974,18 @@ document.querySelector("#speed-select").addEventListener("change", (event) => {
 
 // --- "飞到这里"：点击地面把载具派往该点 ----------------------------------
 //
-// 坐标换算：场景局部 ENU 框（missionFrame）下，ENU 与 scene_ned 是同一组轴
-// 的两种命名 —— ENU.x=东, ENU.y=北, ENU.z=上；scene_ned 则是 north/east/down。
+// 坐标换算：场景局部 ENU 框下，ENU 与 scene_ned 是同一组轴的两种命名 ——
+// ENU.x=东, ENU.y=北, ENU.z=上；scene_ned 则是 north/east/down。
 // 所以 scene_north=ENU.y，scene_east=ENU.x，scene_down=-ENU.z。
 //
-// 这才是正确的方向：Runtime 收到的 north_m/east_m/down_m 就是 scene_ned。
-// 若把经纬高直接当成场景坐标发出去，飞机会飞到完全无关的位置。
-const worldToSceneNedMatrix = Matrix4.inverse(missionFrame, new Matrix4());
+// **用 vehicleFrame 而不是 missionFrame**：vehicleFrame 是可变的活动帧
+// （见其声明处），会随场景切换。硬编码某一个帧在切换场景后就会算错。
+let worldToSceneNedMatrix = Matrix4.inverse(vehicleFrame, new Matrix4());
+
+/** 场景切换后必须重新计算逆矩阵，否则换算基于旧帧。 */
+function refreshSceneNedMatrix() {
+  worldToSceneNedMatrix = Matrix4.inverse(vehicleFrame, new Matrix4());
+}
 
 function worldToSceneNed(worldPosition) {
   const local = Matrix4.multiplyByPoint(
@@ -989,7 +996,56 @@ function worldToSceneNed(worldPosition) {
   return { north: local.y, east: local.x, down: -local.z };
 }
 
+/**
+ * 在点击位置取一个地面点。**按可靠性从高到低依次尝试。**
+ *
+ * 为什么不能只用 `camera.pickEllipsoid`：它把射线投到 WGS84 椭球上，
+ * **完全忽略地形与场景几何**。在有 3D 建筑/瓦片的区域，射线在到达椭球之前
+ * 会先穿过楼体，于是返回一个很远、且屏幕上根本不可见的点。
+ * 实测症状：点击得到距地心 12341 km、高出地表 5978 km 的"点"，进而算出
+ * 几百万米的场景坐标，被参数校验拒绝。
+ *
+ * 正确顺序：
+ *   1. `scene.pickPosition` —— 贴着已渲染几何取值（建筑、网格都能命中），
+ *      需要深度纹理支持；拿到的是最符合"我点的就是这个东西"的答案。
+ *   2. `camera.getPickRay` + `globe.pick` —— 只在地形/椭球上求交，
+ *      比 pickEllipsoid 更尊重地形。
+ *   3. `pickEllipsoid` —— 最后的兜底。
+ *
+ * 返回值带 `via` 字段说明实际用了哪种方式，便于排查。
+ */
+function pickGroundCartesian(position) {
+  const scene = viewer.scene;
+
+  try {
+    if (scene.pickPositionSupported) {
+      const cartesian = scene.pickPosition(position);
+      if (cartesian && Cartesian3.magnitude(cartesian) > 1) {
+        return { cartesian, via: "pickPosition" };
+      }
+    }
+  } catch {
+    // 某些驱动下 pickPosition 会抛错，继续往下试
+  }
+
+  try {
+    const ray = viewer.camera.getPickRay(position);
+    if (ray) {
+      const cartesian = scene.globe.pick(ray, scene);
+      if (cartesian) return { cartesian, via: "globe.pick" };
+    }
+  } catch {
+    // 忽略，落到兜底
+  }
+
+  const fallback = viewer.camera.pickEllipsoid(position, scene.globe.ellipsoid);
+  if (fallback) return { cartesian: fallback, via: "pickEllipsoid" };
+  return null;
+}
+
 let pendingGotoTargetNed = null;
+/** 最近一次在地图上取点的现场记录，便于排查"点到了哪里"。 */
+let lastGroundPick = null;
 
 const gotoTargetEntity = viewer.entities.add({
   id: "goto-target-marker",
@@ -1084,9 +1140,39 @@ elements.gotoCancel?.addEventListener("click", () => {
 
 /** 点到地面时计算目标：保持当前高度，只做水平位移。 */
 function handleGroundClick(position) {
-  const cartesian = viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid);
-  if (!cartesian) return false;
+  const picked = pickGroundCartesian(position);
+  if (!picked) return { ok: false, reason: "没点到地面，请点在网格或楼顶上" };
+  const cartesian = picked.cartesian;
   const sceneNed = worldToSceneNed(cartesian);
+
+  // 记录现场，便于排查"点到了哪里"。通过 window.__uavLastPick 可随时查看。
+  lastGroundPick = {
+    clickedAt: new Date().toISOString(),
+    windowPx: { x: position.x, y: position.y },
+    via: picked.via,
+    world: { x: cartesian.x, y: cartesian.y, z: cartesian.z },
+    worldMagnitudeM: Cartesian3.magnitude(cartesian),
+    sceneNed: { ...sceneNed },
+  };
+  globalThis.__uavLastPick = lastGroundPick;
+
+  // 场景范围检查。
+  //
+  // 这一层不是"多余的防御"，而是必须的：若拿到的点不在本场景坐标系里
+  // （例如误用了另一个场景的锚点），算出来的 north/east 会是几百公里甚至
+  // 上千公里量级。直接发出去只会得到 Runtime 的一句参数越界报错，
+  // 既难看又无法定位。这里当场拒绝，并把实际坐标显示出来便于排查。
+  const LIMIT_M = 5000;
+  const outOfRange = ["north", "east", "down"].filter((k) => Math.abs(sceneNed[k]) > LIMIT_M);
+  if (outOfRange.length) {
+    return {
+      ok: false,
+      reason:
+        `该点不在本场景坐标系内（${outOfRange.join("/")} 超出 ±${LIMIT_M} m）：` +
+        `北 ${sceneNed.north.toFixed(0)}、东 ${sceneNed.east.toFixed(0)}、下 ${sceneNed.down.toFixed(0)}；` +
+        `拾取方式 ${picked.via}，距地心 ${(lastGroundPick.worldMagnitudeM / 1000).toFixed(0)} km`,
+    };
+  }
 
   const record = vehicleLayer
     .getRecords()
@@ -1097,7 +1183,7 @@ function handleGroundClick(position) {
     sceneNed.down = current.down;
   }
   stageGotoTarget(sceneNed);
-  return true;
+  return { ok: true };
 }
 
 const pickHandler = new ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -1110,10 +1196,11 @@ pickHandler.setInputAction((movement) => {
   }
   // 没点到载具 —— 若"飞到这里"已武装，则把该点作为目标
   if (elements.gotoArmed?.checked) {
-    if (handleGroundClick(movement.position)) {
+    const outcome = handleGroundClick(movement.position);
+    if (outcome.ok) {
       showActionResult("已选目标点，点「确认前往」下发", "busy");
     } else {
-      showActionResult("没点到地面，请点在网格上", "error");
+      showActionResult(outcome.reason, "error");
     }
   }
 }, ScreenSpaceEventType.LEFT_CLICK);
