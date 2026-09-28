@@ -307,29 +307,37 @@ def make_session_with_recorder() -> MavlinkBackendSession:
 def test_type_mask_ignores_everything_except_position() -> None:
     """逐位校验 type_mask。
 
-    这个掩码我手算错过一次（把 3527 写成了 3575），所以必须逐位断言，
-    而不是只比对总数。
+    这个掩码我先后搞错过两次（3527 <-> 3576），而且**写错不会报错**：
+    只会表现为"OFFBOARD 被接受、setpoint 正常发出、但载具一动不动，
+    直到超时"。所以必须逐位断言，而不是只比对总数。
+
+    语义关键：置 1 = **忽略**该字段。
+    位置要生效 -> 位置位为 0；速度/加速度/偏航不要 -> 对应位为 1。
     """
     from uav_runtime.adapters.mavlink_backend_session import (
         POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION as MASK,
     )
 
-    # 必须置 1（忽略）：位置、加速度、偏航、偏航角速度
-    for name, bit in (
-        ("X_IGNORE", 1), ("Y_IGNORE", 2), ("Z_IGNORE", 4),
-        ("AX_IGNORE", 64), ("AY_IGNORE", 128), ("AZ_IGNORE", 256),
-        ("YAW_IGNORE", 1024), ("YAW_RATE_IGNORE", 2048),
-    ):
-        assert MASK & bit, f"{name}({bit}) 应被设置：该字段要被忽略"
+    # 必须置 0：位置三轴要生效
+    for name, bit in (("X", 1), ("Y", 2), ("Z", 4)):
+        assert not MASK & bit, f"{name}({bit}) 必须为 0，否则位置不生效"
 
-    # 必须置 0：速度三轴。语义是"忽略速度"，但保持 0 才是纯位置指令
+    # 必须置 1：速度三轴要忽略。
+    # 这是最关键的三个位 —— 漏掉它们会让指令退化为"以 0 速度飞行"（原地悬停）。
     for name, bit in (("VX", 8), ("VY", 16), ("VZ", 32)):
-        assert not MASK & bit, f"{name}({bit}) 不应设置"
+        assert MASK & bit, f"{name}({bit}) 必须为 1，否则退化成速度控制（0 速度=不动）"
 
+    # 必须置 1：加速度与偏航同样忽略
+    for name, bit in (
+        ("AX", 64), ("AY", 128), ("AZ", 256),
+        ("YAW", 1024), ("YAW_RATE", 2048),
+    ):
+        assert MASK & bit, f"{name}({bit}) 必须为 1"
+
+    # 56(速度) + 448(加速度) + 3072(偏航) = 3576
+    assert MASK == 3576, f"掩码应为 3576，实际 {MASK}"
     # bit 48 属于 DO_REPOSITION 的 CHANGE_MODE 语义，与 SET_POSITION_TARGET 无关
     assert not MASK & (1 << 48)
-
-    assert MASK == 3527, f"掩码应为 3527，实际 {MASK}"
 
 
 def test_send_position_target_uses_local_ned_frame_and_exact_position() -> None:
@@ -348,7 +356,7 @@ def test_send_position_target_uses_local_ned_frame_and_exact_position() -> None:
     assert target_system == 1
     assert target_component == 1
     assert coordinate_frame == 1, "必须是 MAV_FRAME_LOCAL_NED"
-    assert type_mask == 3527
+    assert type_mask == 3576
     assert (north, east, down) == (1.5, -2.25, -3.0), "位置必须原样送达，不得做任何换算"
     assert (vx, vy, vz) == (0.0, 0.0, 0.0)
     assert (afx, afy, afz) == (0.0, 0.0, 0.0)

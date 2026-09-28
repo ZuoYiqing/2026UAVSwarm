@@ -73,24 +73,25 @@ PX4_MAIN_MODE_NAMES = {
 
 # --- SET_POSITION_TARGET_LOCAL_NED 的 type_mask ---------------------------
 #
-# type_mask 的语义是"**忽略哪些字段**"（1 = 忽略），不是"使用哪些"。
-# 位置控制（goto）只想要位置生效：
+# type_mask 的语义是"**忽略哪些字段**"（1 = 忽略，0 = 使用）。这个语义极易搞反，
+# 一旦搞反不会报错，只会表现为"命令被接受但载具不动"。
 #
-#   X_IGNORE|Y_IGNORE|Z_IGNORE      = 1|2|4       = 7      ← 位置生效
-#   AX_IGNORE|AY_IGNORE|AZ_IGNORE   = 64|128|256  = 448    ← 忽略加速度
-#   YAW_IGNORE|YAW_RATE_IGNORE      = 1024|2048   = 3072   ← 忽略偏航控制
-#   --------------------------------------------------------
-#   合计                                            = 3527
+# 位置控制（goto）要的是纯位置指令：位置字段生效，其余全部忽略。
 #
-# 刻意**不**包含 VX/VY/VZ(8|16|32)：那三位的含义是"忽略速度"，我们确实要忽略
-# 速度分量（只给位置），所以它们保持 0 是正确的 —— 置 1 反而会改变 PX4 对
-# "这是纯位置指令"的判定。
+#   X_IGNORE|Y_IGNORE|Z_IGNORE      = 1|2|4       = 7      ← 0，位置生效
+#   VX_IGNORE|VY_IGNORE|VZ_IGNORE   = 8|16|32     = 56     ← 1，忽略速度
+#   AX_IGNORE|AY_IGNORE|AZ_IGNORE   = 64|128|256  = 448    ← 1，忽略加速度
+#   YAW_IGNORE|YAW_RATE_IGNORE      = 1024|2048   = 3072   ← 1，忽略偏航
+#   ---------------------------------------------------------
+#   合计                                  56+448+3072 = 3576
 #
-# 也刻意不使用 bit 48（MAV_DO_REPOSITION_FLAGS_CHANGE_MODE）—— 那是 DO_REPOSITION
-# 的语义，与 SET_POSITION_TARGET 无关。
+# **速度位必须是 1。** 若遗漏（掩码变成 3520），语义就从"使用位置"变成
+# "使用速度"，而速度字段填的是 0,0,0 —— PX4 会理解为"以 0 速度飞行"即原地
+# 悬停。实测症状：setpoint 流 10Hz 正常发出、PX4 接受 OFFBOARD、载具位置
+# 一动不动、误差恒定不变、直到超时。
 #
-# 该值由单元测试逐位校验，避免以后手改出错。
-POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION = 3527
+# 该值由单元测试逐位校验（见 tests/unit/test_mavlink_set_mode.py）。
+POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION = 3576
 
 #: MAV_FRAME_LOCAL_NED：绝对位置，原点为载具自己的 EKF 原点
 MAV_FRAME_LOCAL_NED = 1
