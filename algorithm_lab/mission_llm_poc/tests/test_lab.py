@@ -20,6 +20,19 @@ def context():
 
 
 class LabTest(unittest.TestCase):
+    def test_flight_validation_fixture_is_separate_from_inspection(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "flight_validation_only.json"
+        flight = json.loads(path.read_text(encoding="utf-8"))
+        self.assertFalse(context_errors(flight))
+        self.assertIn("不包含观察或巡检完成判定", flight["objective"])
+        self.assertEqual({action for task in flight["tasks"]
+                          for action in task["required_actions"]},
+                         {"TAKEOFF", "GOTO", "LAND"})
+        proposal = reference_proposal(flight)
+        self.assertEqual(proposal["status"], "proposed")
+        self.assertEqual(len({item["node_id"] for item in proposal["assignments"]}), 3)
+        self.assertFalse(proposal["execution_authorized"])
+
     def test_schema_definitions(self):
         for kind in ("context", "proposal"):
             Draft202012Validator.check_schema(schema(kind))

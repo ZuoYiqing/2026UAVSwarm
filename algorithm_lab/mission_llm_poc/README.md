@@ -5,9 +5,12 @@
 4B Q4模型已加载并完成一次真实任务提案；原始JSON有效且三项分配正确，
 但因顶层原因码错误被校验器拒绝。详见[首次提案与加固记录](docs/FIRST_MODEL_REQUEST_20260928.md)。
 
-当前验证：21/21单元测试、40/40框架案例、9/9离线下载器测试通过；
+截至首次本地模型请求的验证：21/21单元测试、40/40框架案例、9/9离线下载器测试通过；
 真实模型1次请求完成但0次被接受。历史证据见docs/verification.json，
 当前证据见[verification_20260928.json](docs/verification_20260928.json)。
+与 Runtime `524cdf8` 的接口约定见[执行接口交接](docs/RUNTIME_EXECUTION_HANDOFF_20260928.md)。
+原三机巡检样例仍是研究提案，包含尚不可执行的观察与返航动作；
+另有[仅飞行验证样例](examples/flight_validation_only.json)供转换器验证，不能报告为巡检完成。
 
 2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
 [参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
