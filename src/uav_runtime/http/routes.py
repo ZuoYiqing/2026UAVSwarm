@@ -673,7 +673,9 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     controller = PlanExecutionController(
-        audit=rt.audit,
+        # 用与动作链路同一个审计文件。注意这里**不能**用 rt：RuntimeOrchestrator
+        # 是按次为单个动作构造的（见 _policy_checked_sitl_action），不是模块级对象。
+        audit=AuditLog(AUDIT_PATH),
         action_executor=RealActionExecutor(api_base=_self_api_base()),
     )
     loaded = controller.load_plan(plan)
