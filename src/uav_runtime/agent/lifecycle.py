@@ -400,7 +400,15 @@ class PlanExecutionController:
 
         if all(step.status == StepStatus.SUCCEEDED for step in plan.steps):
             plan.status = PlanStatus.COMPLETED
-            self._append_event("agent_plan_completed", plan, execution_mode="real", status=plan.status)
+            # 带上 operator_id：事后追查"谁批准了这次飞行"应当能从完成事件直接读到，
+            # 而不是必须回翻 started 事件。
+            self._append_event(
+                "agent_plan_completed",
+                plan,
+                execution_mode="real",
+                status=plan.status,
+                operator_id=operator_id or None,
+            )
             return {
                 "result": "completed",
                 "failure_reason": None,
