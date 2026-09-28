@@ -30,6 +30,47 @@ MAV_RESULT_NAMES = {
 }
 
 
+# --- PX4 自定义飞行模式 ---------------------------------------------------
+#
+# MAVLink 的公共枚举里没有 PX4 的主模式号 —— 它们是 PX4 自己的约定，定义在
+# PX4-Autopilot 的 src/modules/commander/px4_custom_mode.h。要切模式必须自己
+# 带这些常量，不能指望 pymavlink 提供（实测 getattr 取不到）。
+#
+# 值必须与 PX4 源码逐字一致。源码里是自动递增的枚举，**不是** 1/2/3/6/7 这样
+# 跳着的 —— ACRO=5 就夹在 AUTO(4) 和 OFFBOARD(6) 之间。所以每次 PX4 升级后
+# 都要重新核对。tests/unit/test_px4_custom_mode_constants.py 会直接从
+# PX4 头文件解析真实值来校验本表，不一致就会失败。
+#
+# 用法：MAV_CMD_DO_SET_MODE，param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED(1)，
+#       param2 = 主模式号，param3 = 子模式号（无子模式时 0）。
+PX4_CUSTOM_MAIN_MODE_MANUAL = 1
+PX4_CUSTOM_MAIN_MODE_ALTCTL = 2
+PX4_CUSTOM_MAIN_MODE_POSCTL = 3
+PX4_CUSTOM_MAIN_MODE_AUTO = 4
+PX4_CUSTOM_MAIN_MODE_ACRO = 5
+PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6
+PX4_CUSTOM_MAIN_MODE_STABILIZED = 7
+PX4_CUSTOM_MAIN_MODE_RATTITUDE_LEGACY = 8
+PX4_CUSTOM_MAIN_MODE_SIMPLE = 9
+PX4_CUSTOM_MAIN_MODE_TERMINATION = 10
+PX4_CUSTOM_MAIN_MODE_ALTITUDE_CRUISE = 11
+
+#: 主模式 -> 名称，便于证据与日志可读
+PX4_MAIN_MODE_NAMES = {
+    PX4_CUSTOM_MAIN_MODE_MANUAL: "MANUAL",
+    PX4_CUSTOM_MAIN_MODE_ALTCTL: "ALTCTL",
+    PX4_CUSTOM_MAIN_MODE_POSCTL: "POSCTL",
+    PX4_CUSTOM_MAIN_MODE_AUTO: "AUTO",
+    PX4_CUSTOM_MAIN_MODE_ACRO: "ACRO",
+    PX4_CUSTOM_MAIN_MODE_OFFBOARD: "OFFBOARD",
+    PX4_CUSTOM_MAIN_MODE_STABILIZED: "STABILIZED",
+    PX4_CUSTOM_MAIN_MODE_RATTITUDE_LEGACY: "RATTITUDE_LEGACY",
+    PX4_CUSTOM_MAIN_MODE_SIMPLE: "SIMPLE",
+    PX4_CUSTOM_MAIN_MODE_TERMINATION: "TERMINATION",
+    PX4_CUSTOM_MAIN_MODE_ALTITUDE_CRUISE: "ALTITUDE_CRUISE",
+}
+
+
 def mav_result_name(result: int | None) -> str:
     if result is None:
         return "MAV_RESULT_TIMEOUT"
@@ -102,6 +143,9 @@ class MavlinkBackendSession:
     _ack_generations: dict[int, int] = field(default_factory=dict)
     _active_ack_waiters: dict[int, int] = field(default_factory=dict)
     _ack_mailbox: dict[int, tuple[int, int]] = field(default_factory=dict)
+    #: 最后一次收到的 HEARTBEAT 里的模式信息：(sequence, base_mode, custom_mode)。
+    #: 只保留最新一条 —— 心跳可达 500Hz，堆队列会无界增长。模式确认只需要"当前值"。
+    _last_heartbeat_mode: tuple[int, int, int] | None = None
     last_receive_error: str | None = None
     last_send_error: str | None = None
     identity_error: dict[str, Any] | None = None
@@ -295,6 +339,13 @@ class MavlinkBackendSession:
                 self._armed_states.append((sequence, bool(base_mode & armed_flag), received_monotonic, received_timestamp))
                 if len(self._armed_states) > 1024:
                     del self._armed_states[:-512]
+                # 记录当前模式，供 set_mode() 确认切换是否真正生效。
+                # ACK 只表示"命令被接受"，不代表模式已经变了 —— 必须回头看心跳。
+                self._last_heartbeat_mode = (
+                    sequence,
+                    base_mode,
+                    int(getattr(message, "custom_mode", 0) or 0),
+                )
             elif kind == "EXTENDED_SYS_STATE":
                 self._landed_states.append(
                     (sequence, int(getattr(message, "landed_state", 0) or 0), received_monotonic, received_timestamp)
@@ -487,6 +538,110 @@ class MavlinkBackendSession:
         ack["command_name"] = "MAV_CMD_SET_MESSAGE_INTERVAL"
         ack["message_name"] = "EXTENDED_SYS_STATE"
         return ack
+
+    def set_mode(
+        self,
+        *,
+        main_mode: int,
+        sub_mode: int = 0,
+        timeout_s: float = 3.0,
+        confirm_timeout_s: float = 3.0,
+    ) -> dict[str, Any]:
+        """切换 PX4 主飞行模式，并**确认它真的生效**。
+
+        为什么不能只看 ACK：``MAV_CMD_DO_SET_MODE`` 的 ACK 只表示 PX4 接受了这条
+        命令，不表示模式已经切换。PX4 可能因为当前状态（例如 OFFBOARD 缺少
+        setpoint 流、或未解锁）而拒绝实际切换。因此这里在 ACK 之后再回看
+        HEARTBEAT 里的 ``custom_mode``，只有观测到目标模式才算成功。
+
+        Returns:
+            含 ``ack``、``confirmed``、``observed_main_mode`` 的字典。
+
+        Raises:
+            RuntimeError: 连接未建立。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        command = self._mavlink_const("MAV_CMD_DO_SET_MODE", 176)
+        custom_enabled = self._mavlink_const("MAV_MODE_FLAG_CUSTOM_MODE_ENABLED", 1)
+
+        with self.command_lock:
+            self.start_receive_loop()
+            generation = self._begin_ack_wait(command)
+            self.send_command_long(
+                command,
+                [float(custom_enabled), float(main_mode), float(sub_mode), 0.0, 0.0, 0.0, 0.0],
+            )
+            ack = self.wait_command_ack(command, timeout_s=timeout_s, generation=generation)
+
+        ack["command_name"] = "MAV_CMD_DO_SET_MODE"
+        ack["requested_main_mode"] = int(main_mode)
+        ack["requested_main_mode_name"] = PX4_MAIN_MODE_NAMES.get(int(main_mode), f"MAIN_{int(main_mode)}")
+
+        confirmed, observed = self.wait_mode(
+            main_mode=main_mode,
+            timeout_s=confirm_timeout_s,
+        )
+        return {
+            "ack": ack,
+            "confirmed": bool(confirmed),
+            "observed_main_mode": observed,
+            "observed_main_mode_name": (
+                None if observed is None else PX4_MAIN_MODE_NAMES.get(int(observed), f"MAIN_{int(observed)}")
+            ),
+        }
+
+    @staticmethod
+    def px4_main_mode_from_custom_mode(custom_mode: int | None) -> int | None:
+        """从 PX4 HEARTBEAT 的 custom_mode 里取出主模式号。
+
+        位布局来自 PX4 源码 ``src/modules/commander/px4_custom_mode.h``::
+
+            union px4_custom_mode {
+                struct {
+                    uint16_t reserved;      // bit 0-15
+                    uint8_t  main_mode;     // bit 16-23
+                    uint8_t  sub_mode;      // bit 24-31
+                };
+                uint32_t data;
+            };
+
+        所以主模式是 ``(data >> 16) & 0xFF``。
+        """
+        if custom_mode is None:
+            return None
+        return (int(custom_mode) >> 16) & 0xFF
+
+    def wait_mode(self, *, main_mode: int, timeout_s: float) -> tuple[bool, int | None]:
+        """等待 HEARTBEAT 报告的目标主模式；返回 (是否确认, 观测到的主模式)。"""
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        observed: int | None = None
+        while time.monotonic() < deadline:
+            with self._rx_condition:
+                latest = self._last_heartbeat_mode
+            if latest is not None:
+                observed = self.px4_main_mode_from_custom_mode(latest[2])
+                if observed == int(main_mode):
+                    return True, observed
+            time.sleep(0.02)
+        return False, observed
+
+    def current_mode(self) -> dict[str, Any]:
+        """返回最近一次 HEARTBEAT 观测到的模式（可能是 None，表示还没收到）。"""
+        with self._rx_condition:
+            latest = self._last_heartbeat_mode
+        if latest is None:
+            return {"sequence": None, "base_mode": None, "custom_mode": None, "main_mode": None}
+        sequence, base_mode, custom_mode = latest
+        main = self.px4_main_mode_from_custom_mode(custom_mode)
+        return {
+            "sequence": sequence,
+            "base_mode": base_mode,
+            "custom_mode": custom_mode,
+            "main_mode": main,
+            "main_mode_name": None if main is None else PX4_MAIN_MODE_NAMES.get(main, f"MAIN_{main}"),
+        }
 
     def arm(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_COMPONENT_ARM_DISARM", 400)
