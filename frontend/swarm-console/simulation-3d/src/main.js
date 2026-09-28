@@ -359,7 +359,20 @@ function refreshSelectedTelemetry() {
     : "未提供";
 }
 
-function setSelectedVehicle(vehicleId) {
+/**
+ * 选择载具。
+ *
+ * 两侧各有自己的选中项：主控制台的节点列表、三维视图的下拉框与点选。
+ * 任一侧切换时另一侧原本不会跟随，表现为"右边选了 UAV-02，左边还停在前一台"。
+ *
+ * 同步规则：把"由谁发起"讲清楚，避免来回弹。
+ *   - 用户在本视图内操作（下拉框、点选载具）→ 通知父页面（notifyParent=true）
+ *   - 父页面推过来 → 只在本视图应用，不再回推（notifyParent=false）
+ *
+ * `notifyParent` 是**显式参数**而不是靠全局状态猜：靠状态猜的同步逻辑很容易
+ * 因为时序（父页面消息到达时刚好有一次本视图操作在途）形成环路。
+ */
+function setSelectedVehicle(vehicleId, { notifyParent = true } = {}) {
   vehicleLayer.setSelected(vehicleId);
   // 不要无条件回写 .value —— vehicleId 无效时 setSelected() 会把内部选择置空，
   // 而给 <select> 赋空值会让浏览器自动选中第一个 option，造成选择被静默顶掉。
@@ -371,6 +384,19 @@ function setSelectedVehicle(vehicleId) {
     viewer.trackedEntity =
       vehicleLayer.getSelectedRecord()?.worldPosition ? vehicleLayer.getSelectedRecord().entity : undefined;
   }
+  if (notifyParent) {
+    notifyParentOfSelection(vehicleLayer.selectedVehicleId || null);
+  }
+}
+
+/** 把本视图的选中项推给父页面（独立打开时是空操作）。 */
+function notifyParentOfSelection(nodeId) {
+  if (window.parent === window) return;
+  const parentOrigin = document.referrer ? new URL(document.referrer).origin : "*";
+  window.parent.postMessage(
+    { type: "uav-swarm/selection-changed", payload: { nodeId: nodeId || null } },
+    parentOrigin,
+  );
 }
 
 function connectionLabel(status) {
@@ -1260,6 +1286,8 @@ window.addEventListener("message", createParentMessageHandler({
   expectedOrigin: document.referrer ? new URL(document.referrer).origin : null,
   onSnapshot: payload => applyExternalSnapshot(payload, "parent"),
   onMode: mode => mode === "demo" ? useDemo() : useLive(),
+  // 父页面切换选中载具：只在本视图应用，**不回推**（否则两边互相触发成环）
+  onSelectVehicle: nodeId => setSelectedVehicle(nodeId || "", { notifyParent: false }),
   onError: error => { elements.error.textContent = `载具快照无效：${error.message}`; elements.error.hidden = false; },
 }));
 
