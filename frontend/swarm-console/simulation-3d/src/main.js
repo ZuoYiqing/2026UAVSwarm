@@ -1,4 +1,5 @@
 import {
+  Cartesian2,
   Cartesian3,
   Cartographic,
   Cesium3DTileset,
@@ -9,6 +10,7 @@ import {
   GridImageryProvider,
   HeadingPitchRange,
   JulianDate,
+  LabelStyle,
   Math as CesiumMath,
   Matrix4,
   ScreenSpaceEventHandler,
@@ -36,6 +38,8 @@ import {
   Radio,
   ArrowUp,
   ArrowDown,
+  Navigation,
+  X,
 } from "lucide";
 import { DemoVehicleFeed } from "./demo-vehicle-feed.js";
 import { VEHICLE_CONTRACT_VERSION } from "./vehicle-contract.js";
@@ -125,6 +129,10 @@ const elements = {
   takeoffButton: document.querySelector("#action-takeoff"),
   landButton: document.querySelector("#action-land"),
   actionResult: document.querySelector("#action-result"),
+  gotoArmed: document.querySelector("#goto-armed"),
+  gotoConfirm: document.querySelector("#goto-confirm"),
+  gotoCancel: document.querySelector("#goto-cancel"),
+  gotoTarget: document.querySelector("#goto-target"),
 };
 
 const viewer = new Viewer("cesium-container", {
@@ -706,6 +714,8 @@ createIcons({
     Radio,
     ArrowUp,
     ArrowDown,
+    Navigation,
+    X,
   },
 });
 document
@@ -829,6 +839,10 @@ function describeActionOutcome(result) {
     return `失败 · ${result.error}${result.message && result.message !== result.error ? ` · ${result.message}` : ""}`;
   }
   const s = result.summary || {};
+  // goto 的证据结构与起飞/降落不同，单独描述
+  if (s.goto) {
+    return describeGotoOutcome(s);
+  }
   const acks = [
     s.acks?.arm ? `ARM ${s.acks.arm.resultName || s.acks.arm.result}` : null,
     s.acks?.takeoff ? `TAKEOFF ${s.acks.takeoff.resultName || s.acks.takeoff.result}` : null,
@@ -842,6 +856,42 @@ function describeActionOutcome(result) {
     .join(" · ");
 }
 
+/**
+ * 描述 goto 的结果。
+ *
+ * 这里刻意把"到达"与"收敛"分开显示，因为它们是两件独立的事：
+ * 飞机可能飞到了目标点，但收尾没切出 OFFBOARD（危险），必须让操作者看见。
+ */
+function describeGotoOutcome(s) {
+  const g = s.goto || {};
+  const parts = [];
+  parts.push(`成功 · ${g.completionState || s.status || s.result}`);
+  if (g.arrivalErrorM !== null && g.arrivalErrorM !== undefined) {
+    parts.push(`偏差 ${Number(g.arrivalErrorM).toFixed(2)} m`);
+  }
+  parts.push(g.modeConfirmed ? "OFFBOARD 已确认" : "OFFBOARD 未确认");
+  if (g.streamSetpoints !== null && g.streamSetpoints !== undefined) {
+    parts.push(`setpoint ${g.streamSetpoints}`);
+  }
+  const r = g.restored;
+  if (r) {
+    if (r.stillInOffboard) {
+      // 最危险的结果：飞机还停在 OFFBOARD
+      parts.push("⚠️ 仍停在 OFFBOARD");
+    } else if (r.restored) {
+      parts.push(`已收敛 ${r.observedMainModeName || r.mainMode || ""}`.trim());
+    } else {
+      parts.push("⚠️ 未收敛到安全模式");
+    }
+  } else {
+    parts.push("⚠️ 无收敛证据");
+  }
+  if (s.policyDecision?.decisionCode) {
+    parts.push(`policy ${s.policyDecision.decisionCode}`);
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
 function showActionResult(text, state = "busy") {
   elements.actionResult.hidden = false;
   elements.actionResult.textContent = text;
@@ -851,6 +901,8 @@ function showActionResult(text, state = "busy") {
 function setActionBusy(busy, label = "") {
   elements.takeoffButton.disabled = busy;
   elements.landButton.disabled = busy;
+  if (elements.gotoConfirm) elements.gotoConfirm.disabled = busy;
+  if (elements.gotoCancel) elements.gotoCancel.disabled = busy;
   elements.vehicleSelect.disabled = busy || vehicleLayer.getRecords().length === 0;
   if (busy) {
     showActionResult(label, "busy");
@@ -918,14 +970,157 @@ document.querySelector("#speed-select").addEventListener("change", (event) => {
   viewer.clock.multiplier = Number(event.target.value);
 });
 
+// --- "飞到这里"：点击地面把载具派往该点 ----------------------------------
+//
+// 坐标换算：场景局部 ENU 框（missionFrame）下，ENU 与 scene_ned 是同一组轴
+// 的两种命名 —— ENU.x=东, ENU.y=北, ENU.z=上；scene_ned 则是 north/east/down。
+// 所以 scene_north=ENU.y，scene_east=ENU.x，scene_down=-ENU.z。
+//
+// 这才是正确的方向：Runtime 收到的 north_m/east_m/down_m 就是 scene_ned。
+// 若把经纬高直接当成场景坐标发出去，飞机会飞到完全无关的位置。
+const worldToSceneNedMatrix = Matrix4.inverse(missionFrame, new Matrix4());
+
+function worldToSceneNed(worldPosition) {
+  const local = Matrix4.multiplyByPoint(
+    worldToSceneNedMatrix,
+    worldPosition,
+    new Cartesian3(),
+  );
+  return { north: local.y, east: local.x, down: -local.z };
+}
+
+let pendingGotoTargetNed = null;
+
+const gotoTargetEntity = viewer.entities.add({
+  id: "goto-target-marker",
+  show: false,
+  position: sceneOrigin,
+  point: {
+    pixelSize: 12,
+    color: Color.fromCssColorString("#ff9f43"),
+    outlineColor: Color.WHITE,
+    outlineWidth: 2,
+    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+  },
+  label: {
+    text: "",
+    font: "13px sans-serif",
+    fillColor: Color.WHITE,
+    outlineColor: Color.fromCssColorString("#1b1f24"),
+    outlineWidth: 3,
+    style: LabelStyle.FILL_AND_OUTLINE,
+    pixelOffset: new Cartesian2(0, -22),
+    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+  },
+});
+
+/** 把标记放到目标点并显示确认条；点第二次则覆盖上一次的目标。 */
+function stageGotoTarget(sceneNed) {
+  pendingGotoTargetNed = sceneNed;
+  const altitudeM = -sceneNed.down;
+  // 标记画在地面上（down=0），高度用标签表达，避免标记悬空难对准
+  const worldPosition = Matrix4.multiplyByPoint(
+    missionFrame,
+    new Cartesian3(sceneNed.east, sceneNed.north, 0),
+    new Cartesian3(),
+  );
+  gotoTargetEntity.position = worldPosition;
+  gotoTargetEntity.show = true;
+  gotoTargetEntity.label.text =
+    `目标 N${sceneNed.north.toFixed(1)} E${sceneNed.east.toFixed(1)} H${altitudeM.toFixed(1)}m`;
+
+  const nodeId = selectedNodeId() || "（未选载具）";
+  elements.gotoTarget.hidden = false;
+  elements.gotoTarget.textContent =
+    `${nodeId} → 北 ${sceneNed.north.toFixed(1)} m，东 ${sceneNed.east.toFixed(1)} m，` +
+    `高度 ${altitudeM.toFixed(1)} m（与当前高度相同）`;
+}
+
+function cancelGotoTarget() {
+  pendingGotoTargetNed = null;
+  gotoTargetEntity.show = false;
+  elements.gotoTarget.hidden = true;
+}
+
+async function confirmGotoTarget() {
+  if (!pendingGotoTargetNed) return;
+  const nodeId = selectedNodeId();
+  if (!nodeId) {
+    showActionResult("请先选择一个载具", "error");
+    return;
+  }
+  if (snapshotState.mode === "demo") {
+    showActionResult("当前为 DEMO 演示数据，不能下发飞行动作", "error");
+    return;
+  }
+
+  const target = pendingGotoTargetNed;
+  setActionBusy(
+    true,
+    `${nodeId} 飞往 北${target.north.toFixed(1)} 东${target.east.toFixed(1)} ` +
+      `高${(-target.down).toFixed(1)}m…（等待到达，可能需要数十秒）`,
+  );
+  try {
+    const result = await flightActionClient.goto({
+      nodeId,
+      northM: target.north,
+      eastM: target.east,
+      downM: target.down,
+    });
+    showActionResult(`${nodeId} 飞往目标：${describeActionOutcome(result)}`, result.ok ? "ok" : "error");
+    if (result.ok) cancelGotoTarget();
+  } finally {
+    setActionBusy(false);
+  }
+}
+
+elements.gotoConfirm?.addEventListener("click", () => {
+  void confirmGotoTarget();
+});
+elements.gotoCancel?.addEventListener("click", () => {
+  cancelGotoTarget();
+  showActionResult("已取消目标点", "ok");
+});
+
+/** 点到地面时计算目标：保持当前高度，只做水平位移。 */
+function handleGroundClick(position) {
+  const cartesian = viewer.camera.pickEllipsoid(position, viewer.scene.globe.ellipsoid);
+  if (!cartesian) return false;
+  const sceneNed = worldToSceneNed(cartesian);
+
+  const record = vehicleLayer
+    .getRecords()
+    .find((r) => r.vehicle.id === vehicleLayer.selectedVehicleId);
+  const current = record?.vehicle?.position;
+  if (current && Number.isFinite(current.down)) {
+    // 保持当前高度：点到地面时若直接用 down=0，就变成"飞到地面"了
+    sceneNed.down = current.down;
+  }
+  stageGotoTarget(sceneNed);
+  return true;
+}
+
 const pickHandler = new ScreenSpaceEventHandler(viewer.scene.canvas);
 pickHandler.setInputAction((movement) => {
   const picked = viewer.scene.pick(movement.position);
   const vehicleId = vehicleLayer.vehicleIdFromPickedEntity(picked?.id);
   if (vehicleId) {
     setSelectedVehicle(vehicleId);
+    return;
+  }
+  // 没点到载具 —— 若"飞到这里"已武装，则把该点作为目标
+  if (elements.gotoArmed?.checked) {
+    if (handleGroundClick(movement.position)) {
+      showActionResult("已选目标点，点「确认前往」下发", "busy");
+    } else {
+      showActionResult("没点到地面，请点在网格上", "error");
+    }
   }
 }, ScreenSpaceEventType.LEFT_CLICK);
+
+elements.gotoArmed?.addEventListener("change", () => {
+  if (!elements.gotoArmed.checked) cancelGotoTarget();
+});
 
 viewer.clock.onTick.addEventListener((clock) => {
   updateDemo(clock);

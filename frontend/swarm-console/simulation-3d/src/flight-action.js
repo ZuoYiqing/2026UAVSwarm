@@ -105,6 +105,44 @@ export function summarizeActionResult(raw) {
     thresholdReached: raw.threshold_reached ?? null,
     altitude,
     policyDecision: policy,
+    // --- goto 专用证据 ---------------------------------------------------
+    // 这几个字段是判断 goto 是否真的成功的**必要**信息，缺一不可：
+    //   modeConfirmed    —— PX4 是否真的进了 OFFBOARD（不只看命令 ACK）
+    //   arrivalObserved  —— 是否持续落在容差内（不是"某一刻路过"）
+    //   arrivalErrorM    —— 实际偏差，用于判断"到了"还是"几乎到了"
+    //   restored         —— 收尾是否收敛到安全的定点悬停模式
+    //   stillInOffboard  —— 若为 true 说明载具还停在 OFFBOARD，**危险状态**
+    goto: raw.action === "goto"
+      ? {
+          modeConfirmed: typeof raw.mode_confirmed === "boolean" ? raw.mode_confirmed : null,
+          observedMainMode: raw.observed_main_mode ?? null,
+          arrivalObserved: typeof raw.arrival_observed === "boolean" ? raw.arrival_observed : null,
+          completionState: raw.completion_state ?? null,
+          arrivalErrorM: raw.arrival?.last_error_m ?? null,
+          arrivalReason: raw.arrival?.reason ?? null,
+          streamSetpoints: raw.stream_setpoints ?? null,
+          streamErrors: raw.stream_errors ?? null,
+          targetSceneNedM: raw.target_scene_ned_m ?? null,
+          // restored 可能整个缺失（早退路径），此时给 null 而不是伪造成安全
+          restored: raw.restored
+            ? {
+                restored: typeof raw.restored.restored === "boolean" ? raw.restored.restored : null,
+                mainMode: raw.restored.main_mode ?? null,
+                subMode: raw.restored.sub_mode ?? null,
+                observedMainModeName: raw.restored.observed_main_mode_name ?? null,
+                observedSubMode: raw.restored.observed_sub_mode ?? null,
+                stillInOffboard:
+                  typeof raw.restored.still_in_offboard === "boolean"
+                    ? raw.restored.still_in_offboard
+                    : null,
+                acceptedFallback:
+                  typeof raw.restored.accepted_fallback === "boolean"
+                    ? raw.restored.accepted_fallback
+                    : null,
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -210,6 +248,36 @@ export function createFlightActionClient({
     /** 发起降落（要求落地且 disarmed 的证据）。 */
     land({ nodeId, signal } = {}) {
       return post("/actions/land", { node_id: nodeId ?? null }, { nodeId, kind: "land", signal });
+    },
+
+    /**
+     * 飞到共享 scene_ned 坐标系下的指定点（OFFBOARD 位置控制）。
+     *
+     * ⚠️ 坐标是 **scene_ned**（北/东/下，z 向下为正），不是载具本机坐标。
+     * Runtime 会用标定测得的平移量换算成本机坐标再下发；**标定过期或未发布时
+     * 会被直接拒绝**（coordinate_calibration_unavailable），不会"尽力而为"地飞。
+     *
+     * @param {object} options
+     * @param {string} options.nodeId       目标载具
+     * @param {number} options.northM       scene_ned 北向，米
+     * @param {number} options.eastM        scene_ned 东向，米
+     * @param {number} options.downM        scene_ned 向下为正，所以 -3 表示高度 3 米
+     * @param {number} [options.arrivalToleranceM=1] 到达判据容差（三维距离）
+     * @param {number} [options.holdS=1]    需要在容差内持续多久才算到达
+     */
+    goto({ nodeId, northM = 0, eastM = 0, downM = -3, arrivalToleranceM = 1, holdS = 1, signal } = {}) {
+      return post(
+        "/actions/goto",
+        {
+          node_id: nodeId ?? null,
+          north_m: northM,
+          east_m: eastM,
+          down_m: downM,
+          arrival_tolerance_m: arrivalToleranceM,
+          hold_s: holdS,
+        },
+        { nodeId, kind: "goto", signal },
+      );
     },
 
     abort: abortFlightAction,

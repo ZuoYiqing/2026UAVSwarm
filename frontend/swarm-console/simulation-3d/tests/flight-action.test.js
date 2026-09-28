@@ -7,6 +7,44 @@ import {
   summarizeActionResult,
 } from "../src/flight-action.js";
 
+// --- goto 的真实响应样本（取自 2026-09-28 活体验证）-------------------------
+const OK_GOTO = {
+  action: "goto",
+  action_id: "act_5c4238ce67e0",
+  accepted: true,
+  status: "succeeded",
+  result: "pass",
+  failure_reason: null,
+  node_id: "UAV-01",
+  mode_confirmed: true,
+  observed_main_mode: 6,
+  arrival_observed: true,
+  completion_state: "stable_within_tolerance",
+  stream_setpoints: 34,
+  stream_errors: 0,
+  target_scene_ned_m: { north: 4.0, east: 0.0, down: -3.0 },
+  target_vehicle_local_ned_m: { north: 3.98, east: 0.02, down: -3.0 },
+  arrival: {
+    observed: true,
+    reason: "stable_within_tolerance",
+    samples: 34,
+    last_error_m: 0.14446003259954177,
+    hold_s: 1.600130609999951,
+  },
+  restored: {
+    restored: true,
+    main_mode: 4,
+    main_mode_name: "AUTO",
+    sub_mode: 3,
+    observed_main_mode: 4,
+    observed_sub_mode: 3,
+    observed_main_mode_name: "AUTO_LOITER",
+    still_in_offboard: false,
+    accepted_fallback: false,
+    attempted: true,
+  },
+};
+
 /** 造一个假的 fetch，记录调用参数，返回预设响应。 */
 function fakeFetch({ status = 200, body = {}, throwError = null, delayMs = 0 } = {}) {
   const calls = [];
@@ -183,6 +221,125 @@ test("a second takeoff for the same node is tracked separately per node", async 
   assert.deepEqual(listInflightActions().sort(), ["takeoff:UAV-01", "takeoff:UAV-02"]);
 
   await Promise.all([a, b]);
+  assert.deepEqual(listInflightActions(), []);
+});
+
+// --- goto ----------------------------------------------------------------
+
+test("goto posts scene_ned coordinates to /actions/goto", async () => {
+  const fetchImpl = fakeFetch({ body: OK_GOTO });
+  const client = createFlightActionClient({ fetchImpl });
+
+  const result = await client.goto({ nodeId: "UAV-01", northM: 4, eastM: -2, downM: -5 });
+
+  assert.equal(result.ok, true);
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.match(fetchImpl.calls[0].url, /\/actions\/goto$/);
+  const body = JSON.parse(fetchImpl.calls[0].init.body);
+  assert.deepEqual(body, {
+    node_id: "UAV-01",
+    north_m: 4,
+    east_m: -2,
+    down_m: -5,
+    arrival_tolerance_m: 1,
+    hold_s: 1,
+  });
+});
+
+test("goto exposes the evidence needed to tell success from a silent no-op", async () => {
+  const fetchImpl = fakeFetch({ body: OK_GOTO });
+  const client = createFlightActionClient({ fetchImpl });
+
+  const { ok, summary } = await client.goto({ nodeId: "UAV-01", northM: 4 });
+
+  assert.equal(ok, true);
+  assert.equal(summary.goto.modeConfirmed, true, "必须暴露 OFFBOARD 是否真的进了");
+  assert.equal(summary.goto.arrivalObserved, true);
+  assert.ok(Math.abs(summary.goto.arrivalErrorM - 0.1445) < 0.001, "必须暴露实际偏差");
+  assert.equal(summary.goto.streamSetpoints, 34);
+  assert.equal(summary.goto.restored.restored, true);
+  assert.equal(summary.goto.restored.stillInOffboard, false);
+  // 子模式必须可见 —— RTL(5) 与 LOITER(3) 的主模式相同，只看主模式会误判
+  assert.equal(summary.goto.restored.observedSubMode, 3);
+});
+
+test("goto flags a vehicle left in OFFBOARD via stillInOffboard", async () => {
+  const dangerous = {
+    ...OK_GOTO,
+    result: "fail",
+    accepted: false,
+    failure_reason: "mode_restore_failed",
+    restored: { ...OK_GOTO.restored, restored: false, still_in_offboard: true, observed_main_mode: 6, observed_sub_mode: 0 },
+  };
+  const client = createFlightActionClient({ fetchImpl: fakeFetch({ body: dangerous }) });
+
+  const result = await client.goto({ nodeId: "UAV-01" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "mode_restore_failed");
+  assert.equal(result.summary.goto.restored.stillInOffboard, true, "危险状态必须能读到");
+});
+
+test("goto carries AUTO sub_mode so RTL is distinguishable from LOITER", async () => {
+  // AUTO + RTL(5)：主模式与 LOITER 相同，只有子模式能区分
+  const rtl = {
+    ...OK_GOTO,
+    result: "fail",
+    accepted: false,
+    failure_reason: "mode_restore_failed",
+    restored: {
+      ...OK_GOTO.restored,
+      restored: false,
+      observed_main_mode: 4,
+      observed_sub_mode: 5,
+      observed_main_mode_name: "AUTO_RTL",
+    },
+  };
+  const client = createFlightActionClient({ fetchImpl: fakeFetch({ body: rtl }) });
+
+  const { summary } = await client.goto({ nodeId: "UAV-01" });
+
+  assert.equal(summary.goto.restored.observedSubMode, 5, "RTL 必须能从子模式识别出来");
+  assert.equal(summary.goto.restored.observedMainModeName, "AUTO_RTL");
+  assert.equal(summary.goto.restored.restored, false);
+});
+
+test("goto rejection for missing calibration surfaces the reason", async () => {
+  const rejected = {
+    action: "goto",
+    result: "fail",
+    accepted: false,
+    status: "rejected",
+    failure_reason: "coordinate_calibration_unavailable",
+    code: "coordinate_calibration_unavailable",
+    calibration_status: "stale",
+  };
+  const client = createFlightActionClient({ fetchImpl: fakeFetch({ body: rejected }) });
+
+  const result = await client.goto({ nodeId: "UAV-01" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "coordinate_calibration_unavailable");
+});
+
+test("goto defaults down_m to -3 (3 m altitude, z is positive down)", async () => {
+  const fetchImpl = fakeFetch({ body: OK_GOTO });
+  const client = createFlightActionClient({ fetchImpl });
+
+  await client.goto({ nodeId: "UAV-01" });
+
+  const body = JSON.parse(fetchImpl.calls[0].init.body);
+  assert.equal(body.down_m, -3, "z 向下为正，-3 才是高度 3 米");
+});
+
+test("goto is tracked as its own in-flight kind", async () => {
+  const fetchImpl = fakeFetch({ body: OK_GOTO, delayMs: 40 });
+  const client = createFlightActionClient({ fetchImpl });
+
+  const pending = client.goto({ nodeId: "UAV-01" });
+  assert.deepEqual(listInflightActions(), ["goto:UAV-01"]);
+
+  await pending;
   assert.deepEqual(listInflightActions(), []);
 });
 

@@ -849,3 +849,19 @@ select {
   background: #0c2d3a38;
 }
 
+/* --- "飞到这里" 的目标确认区 ------------------------------------------- */
+
+#goto-target {
+  margin-top: 2px;
+  /* 目标点信息用琥珀色，与动作结果（绿/红/蓝）区分开，
+     避免"已选点"与"已下发"混淆 */
+  border-left-color: #ff9f43;
+  color: #ffdcb0;
+  background: #3d2a0e38;
+}
+
+/* 确认/取消按钮：跟随 action-row 的排布 */
+#goto-actions {
+  margin-top: 2px;
+}
+
