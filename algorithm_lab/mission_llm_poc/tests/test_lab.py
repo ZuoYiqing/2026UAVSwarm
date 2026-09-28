@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 from jsonschema import Draft202012Validator
 from uavswarm_llm_lab.benchmark import cases, case_context, run_model_benchmark, run_scaffold
-from uavswarm_llm_lab.contracts import ContractError, canonical_json, digest, parse_json, schema
+from uavswarm_llm_lab.contracts import (ContractError, canonical_json, digest,
+                                        parse_json, schema, schema_errors)
 from uavswarm_llm_lab.local_model_client import LocalModelClient, ModelError, _NoRedirect
 from uavswarm_llm_lab.mission_planner import evaluate_raw, plan_with_client, reference_proposal
 from uavswarm_llm_lab.semantic_validator import context_errors, validate_proposal
@@ -22,6 +23,33 @@ class LabTest(unittest.TestCase):
     def test_schema_definitions(self):
         for kind in ("context", "proposal"):
             Draft202012Validator.check_schema(schema(kind))
+
+    def test_schema_enforces_status_reason_and_assignment_scopes(self):
+        c = context()
+        proposed = reference_proposal(c)
+        self.assertFalse(schema_errors(proposed, "proposal"))
+        proposed["reason_code"] = "ASSIGNED"
+        self.assertTrue(schema_errors(proposed, "proposal"))
+
+        rejected = reference_proposal(c)
+        rejected.update(status="rejected", reason_code="REQUEST_REJECTED",
+                        assignments=[], unassigned_tasks=[
+                            {"task_id": task["task_id"],
+                             "reason_code": "REQUEST_REJECTED",
+                             "explanation": "Rejected fixture."}
+                            for task in c["tasks"]])
+        self.assertFalse(schema_errors(rejected, "proposal"))
+        rejected["unassigned_tasks"][0]["reason_code"] = "ASSIGNED"
+        self.assertTrue(schema_errors(rejected, "proposal"))
+
+    def test_prompt_forbids_unproved_geometry_and_maps_reason_codes(self):
+        prompt = (Path(__file__).resolve().parents[1] / "src" /
+                  "uavswarm_llm_lab" / "prompts" /
+                  "mission_planner_system.txt").read_text(encoding="utf-8")
+        for required in ("proposed/MISSION_PROPOSED", "ASSIGNED is only valid",
+                         "Do not claim a direct/clear/safe path",
+                         "overall constraint satisfaction"):
+            self.assertIn(required, prompt)
 
     def test_strict_json(self):
         for raw in ('{"a":1,"a":2}', '{"n":NaN}', '{"n":1e999}',

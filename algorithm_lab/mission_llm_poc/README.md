@@ -1,18 +1,24 @@
 # Mission LLM Lab v0.1
 
-独立的任务提案实验模块。当前完成 Step 1–2；尚未下载或运行大模型。
+独立的任务提案实验模块。已完成Step 1–2及Step 3的D盘下载、校验和首次模型加载。
+2026-09-22：[本地准备与资源实测](docs/LOCAL_MODEL_PREPARATION_20260922.md)。
+4B Q4模型已加载并完成一次真实任务提案；原始JSON有效且三项分配正确，
+但因顶层原因码错误被校验器拒绝。详见[首次提案与加固记录](docs/FIRST_MODEL_REQUEST_20260928.md)。
 
-验证结果：19/19 单元测试、40/40 框架案例、5/5 规则基线演示通过。
-证据见 docs/verification.json 与 docs/scaffold_validation.json。
+当前验证：21/21单元测试、40/40框架案例、9/9离线下载器测试通过；
+真实模型1次请求完成但0次被接受。历史证据见docs/verification.json，
+当前证据见[verification_20260928.json](docs/verification_20260928.json)。
 
 2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
 [参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
 早期报告和verification.json是当时的历史记录，不表示当前Git提交状态。
 首轮待批准的[下载清单](docs/DOWNLOAD_PROPOSAL_20260920.json)已固定文件版本、大小和发布方哈希，
-三个主要制品合计约3.39GB；尚未下载或在本地校验这些制品。
+三个主要制品合计约3.39GB；现已获批准、下载并在本地校验。
+原清单保持历史提案状态，实际进度见[准备记录](docs/local_model_preparation_20260922.json)。
 
 部署要求：所有任务推理完全离线，禁止闭源云模型调用、云端回退和自动联网下载。
-制品准备阶段与断网部署阶段分开验收。现有模块没有下载器，也尚未验证真实推理引擎离线冷启动。
+制品准备阶段与断网部署阶段分开验收。独立准备脚本显式下载批准制品，
+推理启动不自动联网取件；尚未完成隔离网络的真实引擎冷启动验收。
 
 输入结构化任务、自然语言目标和集群快照，输出受 JSON Schema 及语义校验约束的
 Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解自然语言。
@@ -48,6 +54,10 @@ python -m venv .venv
 运行时依赖为 jsonschema 及其锁定的间接依赖；测试使用 Python unittest。
 依赖文件锁定版本但未锁定下载制品哈希；模型部署阶段再记录完整制品清单。
 
+本地实验脚本会显式从本模块的 `src` 加载当前源码，并把主动配置的临时目录和缓存放在
+D盘 `artifacts` 下，因此修改实验代码后无需为了试跑反复构建安装包。
+直接执行Python测试时，先把 `PYTHONPATH` 设为本模块的 `src`；不要使用系统临时目录构建。
+
 ## 模块与契约
 
 - src/uavswarm_llm_lab/schemas：输入、输出 JSON Schema，拒绝额外字段。
@@ -79,7 +89,7 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 无人平台上是伴随计算机加载本地权重，不是把聊天页面或大模型装进飞控。
 现有前端不变；如何集成由Integration Owner决定。
 
-先确定模型版本、量化、权重路径、许可证和推理框架，再另行批准下载。
+首轮模型、量化和便携引擎已固定并获批；新增制品仍须先确认。
 已有经过确认的本机模型服务时，可显式运行：
 
 ```powershell
@@ -87,7 +97,8 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab benchmark --local-model --base-url http://127.0.0.1:18080/v1 --model APPROVED_MODEL_ID --output results/model-run-001.json
 ```
 
-上述地址仅为待配置示例，当前未启动服务。客户端只支持 HTTP literal loopback；
+本机已在该地址完成一次加载及任务请求，当前服务已停止；重新启动仍要求至少5GiB可用RAM。
+客户端只支持 HTTP literal loopback；
 不使用环境代理、不跟随重定向、不重试、不发送 tools。
 默认请求约束 JSON；如服务不支持会明确失败。--unconstrained 仅用于显式对比。
 后续需按实际推理框架验证 schema 子集兼容性、模型身份和推理设置。
@@ -96,7 +107,7 @@ loopback限制只约束本适配器，不能证明其后面的服务不会联网
 关闭遥测及自动更新，并在隔离网络环境完成冷启动测试。
 
 记录原始文本、输入/提示词/输出哈希、服务返回模型名、token usage 和端到端耗时。
-尚未采集首 token 延迟、峰值显存、权重 revision 或 GPU 吞吐；未知值保持 null。
+单请求已采集总耗时、服务端吞吐及资源点样；首token、可靠峰值和p50/p95仍未知。
 seed 和 temperature=0 不保证不同硬件/推理实现逐字一致。
 当前不做自动修复；原始成功率和未来修复后成功率应分别统计。
 

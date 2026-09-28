@@ -1,0 +1,109 @@
+{
+  "recorded_date": "2026-09-22",
+  "status": "PREPARED_SINGLE_REQUEST_COMPLETED_VALIDATOR_REJECTED",
+  "approved_download": true,
+  "storage_drive": "D:",
+  "source_manifest": "DOWNLOAD_PROPOSAL_20260920.json",
+  "artifacts_verified": true,
+  "payload_total_bytes": 3386449166,
+  "model": {
+    "id": "Qwen3.5-4B-Q4_K_M",
+    "publisher": "unsloth",
+    "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+    "size_bytes": 2740937888,
+    "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+  },
+  "engine": {
+    "release": "b10964",
+    "reported_version": "0.4.1-dev",
+    "reported_commit": "b29c606e2",
+    "cuda_build": "12.4",
+    "version_check_passed": true,
+    "device_check_passed": true,
+    "extracted_file_count": 55,
+    "extracted_bytes": 1167991069
+  },
+  "hardware": {
+    "cpu": "Intel Core i7-13620H",
+    "cores": 10,
+    "logical_processors": 16,
+    "total_memory_kib": 16494648,
+    "gpu": "RTX 4050 Laptop GPU",
+    "gpu_memory_total_mib": 6141,
+    "driver": "566.24"
+  },
+  "load_smoke": {
+    "started_utc": "2026-09-22T00:37:15.2476665Z",
+    "run_directory": "artifacts/runs/20260922T003715214Z",
+    "process_id_at_test": 32040,
+    "health": "ok",
+    "model_loaded": true,
+    "task_inference_requests": 0,
+    "context_tokens": 4096,
+    "parallel_requests": 1,
+    "cpu_threads": 4,
+    "reasoning": "off",
+    "gpu_memory_used_mib_at_observation": 2901,
+    "gpu_memory_free_mib_at_observation": 3021,
+    "gpu_temperature_c_at_observation": 44,
+    "host_free_memory_kib_at_observation": 604648,
+    "process_working_set_bytes": 3177582592,
+    "process_private_memory_bytes": 3761233920,
+    "termination_reason": "Stopped only this model after host free RAM fell below the acceptable reserve",
+    "process_left_running": false
+  },
+  "offline": {
+    "explicit_local_model_path": true,
+    "engine_offline_flag": true,
+    "loopback_only": true,
+    "external_tools_enabled": false,
+    "cloud_fallback": false,
+    "network_isolation_test_passed": false,
+    "note": "Offline flag and local loading are verified; an OS-isolated cold-start/outbound-network acceptance test is not yet performed."
+  },
+  "cache_policy": {
+    "scope": "Child experiment processes only; no permanent system settings",
+    "paths_on_d": [
+      "TEMP",
+      "TMP",
+      "CUDA_CACHE_PATH",
+      "LLAMA_CACHE",
+      "HF_HOME",
+      "XDG_CACHE_HOME"
+    ],
+    "c_drive_installation_performed": false,
+    "note": "No guarantee that Windows itself writes no logs/pagefile data to C:; system paging settings were not changed."
+  },
+  "post_smoke_safety_changes": {
+    "minimum_startup_free_ram_gib": 5,
+    "stop_during_startup_below_free_ram_gib": 1.5,
+    "guard_scope": "startup_only",
+    "cors": "explicit loopback origin; credentials disabled",
+    "active_inference_monitoring": "single-request sampling with 1.5 GiB RAM, 85 C, and 120 s stop conditions"
+  },
+  "user_next_step": "One request completed after RAM was released; hardened contract rerun remains pending.",
+  "first_inference": {
+    "context": "examples/three_uav_inspection.json",
+    "schema_valid_under_then_current_schema": true,
+    "accepted": false,
+    "errors": ["STATUS_REASON_MISMATCH"],
+    "correct_assignments": 3,
+    "total_assignments": 3,
+    "unproved_claims_observed": ["Direct path available", "All constraints are met"],
+    "prompt_tokens": 1763,
+    "completion_tokens": 596,
+    "total_tokens": 2359,
+    "execution_authorized": false,
+    "runtime_or_flight_called": false
+  },
+  "model_quality_metrics": {"attempted": 1, "accepted": 0, "schema_valid": 1},
+  "task_latency_ms": 12196.197699995537,
+  "task_tokens_per_second": 53.87,
+  "full_benchmark_completed": false,
+  "limitations": [
+    "Health success is not task-inference success",
+    "GPU and host RAM values are point observations, not sampled peaks",
+    "New memory guard must not be described as end-to-end inference supervision",
+    "Model weights, binaries and original engine logs remain local ignored artifacts"
+  ]
+}
