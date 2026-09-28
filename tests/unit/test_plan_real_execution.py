@@ -21,8 +21,10 @@ import pytest
 from uav_runtime.agent.executor import (
     IMPLEMENTED_ACTIONS,
     KNOWN_UNIMPLEMENTED_ACTIONS,
+    KNOWN_UNSUPPORTED_ACTIONS,
     RealActionExecutor,
     StepOutcome,
+    _UNSAFE_PAYLOAD_ACTIONS,
 )
 from uav_runtime.agent.lifecycle import (
     PlanApproval,
@@ -157,7 +159,86 @@ def test_implemented_actions_all_have_endpoints() -> None:
     """已实现列表必须与真实端点一致，防止把没端点的动作写进去。"""
     for action, endpoint in IMPLEMENTED_ACTIONS.items():
         assert endpoint.startswith("/actions/"), action
-    assert set(IMPLEMENTED_ACTIONS) & set(KNOWN_UNIMPLEMENTED_ACTIONS) == set()
+    assert set(IMPLEMENTED_ACTIONS) & set(KNOWN_UNSUPPORTED_ACTIONS) == set()
+
+
+# --- 大小写：上游规划层惯用大写，端点用小写 --------------------------------
+
+
+@pytest.mark.parametrize(
+    "upper,lower",
+    [("TAKEOFF", "takeoff"), ("GOTO", "goto"), ("LAND", "land")],
+)
+def test_uppercase_action_names_resolve_to_the_same_endpoint(upper: str, lower: str) -> None:
+    """大写动作名必须能正确识别。
+
+    上游 proposal schema 用大写（TAKEOFF/GOTO/OBSERVE）。若查表区分大小写，
+    TAKEOFF 会被报成 unknown_action_type —— 拒绝对了，理由却错了，调用方会以为
+    是自己拼写问题。
+    """
+    executor, post = _executor()
+    outcome = executor.execute_step(_step(upper, north_m=1, down_m=-3))
+
+    assert outcome.ok is True, f"{upper} 应被当作可执行动作，实际 {outcome.failure_reason}"
+    assert post.calls[0][0].endswith(IMPLEMENTED_ACTIONS[lower])
+
+
+def test_uppercase_unimplemented_action_reports_not_implemented_not_unknown() -> None:
+    """大写 OBSERVE 必须报「未实现」，而不是「未知动作」。"""
+    executor, post = _executor()
+    outcome = executor.execute_step(_step("OBSERVE"))
+    assert outcome.failure_reason == "action_endpoint_not_implemented"
+    assert outcome.raw["detail"]["requested_action_type"] == "OBSERVE", "必须保留调用方原始拼写"
+    assert post.calls == []
+
+
+# --- 高风险载荷动作：措辞必须与"尚未实现"区分 ------------------------------
+
+
+@pytest.mark.parametrize("action_type", sorted(_UNSAFE_PAYLOAD_ACTIONS))
+def test_payload_weapon_actions_are_refused_as_unsupported_not_as_todo(action_type: str) -> None:
+    """attack/strike/drop/deploy/payload_release 必须报 action_not_supported。
+
+    这些动作在注册表里 risk_level=10。若报成 action_endpoint_not_implemented
+    （"尚未实现"），措辞会读成"以后会开放"—— 那是错误的暗示。它们没有端点，
+    而且本执行路径不提供该能力。
+    """
+    executor, post = _executor()
+    outcome = executor.execute_step(_step(action_type))
+
+    assert outcome.ok is False
+    assert outcome.failure_reason == "action_not_supported", (
+        f"{action_type} 应报 action_not_supported，实际 {outcome.failure_reason}"
+    )
+    assert outcome.failure_reason != "action_endpoint_not_implemented", "不得暗示这是待办项"
+    assert post.calls == [], "被拒绝的高风险动作绝不能发出请求"
+
+
+def test_every_registry_declared_action_is_covered_by_a_refusal_reason() -> None:
+    """注册表里每个动作都必须落到 已实现 / 未实现 / 高风险 三者之一。
+
+    手工维护的列表会漂移：注册表声明 21 个动作，早期手工列表漏了 10 个
+    （包含全部 5 个 risk_level=10 的载荷动作），那些动作被报成 unknown_action_type，
+    读起来像"你拼错了"。这个测试防止再次漂移。
+    """
+    import re
+    from pathlib import Path
+
+    registry = Path(__file__).resolve().parents[2] / "src" / "uav_runtime" / "policy" / "action_registry.py"
+    registered = set(re.findall(r'action_type="([A-Za-z0-9_]+)"', registry.read_text(encoding="utf-8")))
+    assert registered, "未能从注册表解析出任何动作"
+
+    covered = set(IMPLEMENTED_ACTIONS) | set(KNOWN_UNSUPPORTED_ACTIONS)
+    uncovered = sorted(registered - covered)
+    assert uncovered == [], f"这些注册表动作没有明确的拒绝理由（会报成拼写错误）: {uncovered}"
+
+
+def test_unknown_action_is_still_unknown() -> None:
+    """真正不存在的动作仍应报 unknown_action_type，与"已声明但未实现"区分开。"""
+    executor, post = _executor()
+    outcome = executor.execute_step(_step("teleport"))
+    assert outcome.failure_reason == "unknown_action_type"
+    assert post.calls == []
 
 
 # --- executor: failure detection ------------------------------------------

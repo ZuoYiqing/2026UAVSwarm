@@ -47,14 +47,63 @@ IMPLEMENTED_ACTIONS: dict[str, str] = {
     "goto": "/actions/goto",
 }
 
-#: Actions the templates and registry know about but that have no endpoint yet.
-#: Listed explicitly so the refusal message can say "not implemented yet"
-#: instead of a vague "unsupported".
-KNOWN_UNIMPLEMENTED_ACTIONS: frozenset[str] = frozenset({
-    "hover", "hold_position", "return_home", "hold",
-    "report_status", "health_query", "sensor_read",
-    "camera_capture", "land_safe",
+#: Actions that are declared somewhere but deliberately have no endpoint yet,
+#: split by **why** they have none.  The distinction matters to a caller: for a
+#: flight action, "not implemented yet" is accurate and invites a retry after we
+#: build it; for a weapon/payload action, "not implemented yet" would wrongly
+#: imply it is coming.
+#:
+#: This is derived from the policy Action Registry rather than maintained by
+#: hand.  A hand-written list drifts: the registry declares 21 actions, and a
+#: manual list here had already missed 10 of them, including every risk_level=10
+#: payload action.  Those omissions produced "unknown_action_type" — a message
+#: that reads as "you made a typo" for actions that are in fact declared.
+_REGISTRY_FLIGHT_NOT_IMPLEMENTED = frozenset({
+    "hover", "hold", "hold_position", "return_home", "land_safe",
+    "reduce_speed", "maintain_heading",
 })
+
+_REGISTRY_PAYLOAD_NOT_IMPLEMENTED = frozenset({
+    "camera_capture", "gimbal_set_angle", "light_set_state", "speaker_play_message",
+})
+
+#: Actions that are **not** in the policy registry but that upstream planners do
+#: emit.  ``OBSERVE`` is allowed by the algorithm-side proposal schema
+#: (mission_proposal.schema.json enumerates TAKEOFF/GOTO/OBSERVE/HOLD/
+#: RETURN_HOME/LAND), so a plan can legitimately ask for it.  Without an entry
+#: here it would be refused as ``unknown_action_type`` — which reads as "you
+#: made a typo" for an action the caller is explicitly permitted to propose.
+_UPSTREAM_ONLY_NOT_IMPLEMENTED = frozenset({
+    "observe",
+})
+
+_REGISTRY_SYSTEM_NOT_IMPLEMENTED = frozenset({
+    "health_query", "report_status", "sensor_read",
+})
+
+#: Declared flight/system actions awaiting an endpoint.  Refused with a message
+#: that says "not implemented", because that is the literal situation.
+KNOWN_UNIMPLEMENTED_ACTIONS: frozenset[str] = (
+    _REGISTRY_FLIGHT_NOT_IMPLEMENTED
+    | _REGISTRY_SYSTEM_NOT_IMPLEMENTED
+    | _UPSTREAM_ONLY_NOT_IMPLEMENTED
+)
+
+#: Declared payload actions that release, drop or deploy something, or that are
+#: explicitly weapon-like.  All of these carry risk_level=10 in the registry.
+#:
+#: These are refused with a **different** reason code on purpose.  They are not
+#: "coming soon": they have no endpoint, and the refusal must not read as a
+#: roadmap item.  A plan that asks for them is refused as an unsupported
+#: capability, not queued behind future work.
+_UNSAFE_PAYLOAD_ACTIONS: frozenset[str] = frozenset({
+    "attack", "strike", "drop", "deploy", "payload_release",
+})
+
+#: Every registry-declared action that this executor knows it cannot run.
+KNOWN_UNSUPPORTED_ACTIONS: frozenset[str] = (
+    KNOWN_UNIMPLEMENTED_ACTIONS | _REGISTRY_PAYLOAD_NOT_IMPLEMENTED | _UNSAFE_PAYLOAD_ACTIONS
+)
 
 
 class StepExecutionRefused(Exception):
@@ -216,18 +265,22 @@ class RealActionExecutor:
         (unexpected exception types) would escape, and those are converted too,
         because a plan must never be left in a half-updated state by a surprise.
         """
-        action_type = str(getattr(step, "action_type", "") or "")
+        raw_action_type = str(getattr(step, "action_type", "") or "")
+        # 查表大小写不敏感。上游规划层惯用大写（TAKEOFF/OBSERVE），而端点用小写。
+        # 若按原样查表，大写 OBSERVE 会被报成 unknown_action_type —— 那会让调用方
+        # 以为是拼写错误，而真正的问题是"该动作尚未实现"。拒绝对了，理由错了。
+        action_type = raw_action_type.strip().lower()
         node_id = str(getattr(step, "node_id", "") or "")
         params = dict(getattr(step, "params", {}) or {})
 
         try:
-            endpoint = self._require_endpoint(action_type)
+            endpoint = self._require_endpoint(action_type, raw_action_type=raw_action_type)
             self._require_target(node_id, action_type, step)
             body = self._build_body(action_type, node_id, params)
         except StepExecutionRefused as refusal:
             return StepOutcome(
                 ok=False,
-                action_type=action_type,
+                action_type=raw_action_type,
                 node_id=node_id,
                 failure_reason=refusal.code,
                 raw={"message": refusal.message, "detail": refusal.detail},
@@ -292,22 +345,51 @@ class RealActionExecutor:
     # -- refusals ----------------------------------------------------------
 
     @staticmethod
-    def _require_endpoint(action_type: str) -> str:
+    def _require_endpoint(action_type: str, *, raw_action_type: str = "") -> str:
+        """Look up the endpoint for an already-lowercased action type.
+
+        ``raw_action_type`` is echoed into the refusal detail so a caller that
+        sent ``OBSERVE`` sees its own spelling back, rather than a silently
+        normalised name that no longer matches what it wrote.
+        """
         endpoint = IMPLEMENTED_ACTIONS.get(action_type)
         if endpoint is not None:
             return endpoint
-        if action_type in KNOWN_UNIMPLEMENTED_ACTIONS:
+        requested = raw_action_type or action_type
+        if action_type in _UNSAFE_PAYLOAD_ACTIONS:
+            # 措辞刻意与"尚未实现"区分开：这些不是待办项，而是本执行路径不支持的
+            # 能力。若写成"还没实现"，会读成"以后会有"。
+            raise StepExecutionRefused(
+                "action_not_supported",
+                f"动作 {requested!r} 属于载荷投放/攻击类能力（注册表中 risk_level=10），"
+                f"本执行路径不提供该能力，也不存在对应端点。这不是「尚未实现」，"
+                f"不应被理解为后续会开放。",
+                detail={
+                    "action_type": action_type,
+                    "requested_action_type": requested,
+                    "unsafe_payload_actions": sorted(_UNSAFE_PAYLOAD_ACTIONS),
+                },
+            )
+        if action_type in KNOWN_UNSUPPORTED_ACTIONS:
             raise StepExecutionRefused(
                 "action_endpoint_not_implemented",
-                f"动作 {action_type!r} 已在策略注册表中声明，但 Runtime 还没有对应端点，"
+                f"动作 {requested!r} 已在策略注册表中声明，但 Runtime 还没有对应端点，"
                 f"无法真实执行。拒绝执行而不是静默跳过 —— 静默跳过会产生"
                 f"「计划显示完成但什么都没发生」的假成功。",
-                detail={"action_type": action_type, "implemented": sorted(IMPLEMENTED_ACTIONS)},
+                detail={
+                    "action_type": action_type,
+                    "requested_action_type": requested,
+                    "implemented": sorted(IMPLEMENTED_ACTIONS),
+                },
             )
         raise StepExecutionRefused(
             "unknown_action_type",
-            f"未知动作 {action_type!r}，既不在已实现列表中，也不在已知未实现列表中。",
-            detail={"action_type": action_type, "implemented": sorted(IMPLEMENTED_ACTIONS)},
+            f"未知动作 {requested!r}，既不在已实现列表中，也不在注册表已声明的动作里。",
+            detail={
+                "action_type": action_type,
+                "requested_action_type": requested,
+                "implemented": sorted(IMPLEMENTED_ACTIONS),
+            },
         )
 
     @staticmethod
