@@ -10,10 +10,18 @@
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic"/>
     <scene>
-      <grid>true</grid>
+      <!-- grid 关闭、shadows 关闭：降低 GUI 渲染负担。
+           本项目在 WSL 里用 Mesa 的 D3D12 后端渲染，而它选用了 Intel 集显
+           （OpenGL renderer 报 "D3D12 (Intel(R) UHD Graphics)"），
+           gz sim -g 单进程曾占到约 95% 单核 CPU。
+           关掉这两项是减负手段之一（效果需实测确认，不能假定它解决了问题）。
+
+           需要演示效果时改回：<grid>true</grid>、<shadows>true</shadows>，
+           并相应把下面 light 的 <cast_shadows> 打开。 -->
+      <grid>false</grid>
       <ambient>0.4 0.4 0.4 1</ambient>
       <background>0.65 0.72 0.78 1</background>
-      <shadows>true</shadows>
+      <shadows>false</shadows>
     </scene>
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model>
@@ -24,7 +32,8 @@
     </spherical_coordinates>
 
     <light name="sun" type="directional">
-      <cast_shadows>true</cast_shadows>
+      <!-- 与 <shadows> 保持一致：关阴影时这里也关，避免只改一处造成困惑。 -->
+      <cast_shadows>false</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
@@ -33,12 +42,17 @@
 
     <model name="ground_plane">
       <static>true</static>
+      <!-- 地面 2000×2000（覆盖 ±1000 m）。
+           原先只有 100×100，即仅覆盖 ±50 m —— 而 350 m 外的城市街区
+           （city-block-4-3，中心 y=350，最远点 y≈473）落在地面之外，
+           楼群悬在虚空里：视觉上朝北看不到地面，物理上那片区域下方也没有地面。
+           取 ±1000 m 有充足余量。 -->
       <link name="link">
         <collision name="collision">
-          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <geometry><plane><normal>0 0 1</normal><size>2000 2000</size></plane></geometry>
         </collision>
         <visual name="visual">
-          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <geometry><plane><normal>0 0 1</normal><size>2000 2000</size></plane></geometry>
           <material><ambient>0.25 0.35 0.25 1</ambient><diffuse>0.35 0.45 0.35 1</diffuse></material>
         </visual>
       </link>
