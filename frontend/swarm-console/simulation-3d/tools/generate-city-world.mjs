@@ -27,7 +27,8 @@
  *   node tools/generate-city-world.mjs [--block block-4-3] [--out 路径.sdf]
  *   node tools/generate-city-world.mjs --list        # 列出候选街区
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createCityLayout, CITY, terrainHeight } from "../src/city-layout.js";
 
 const args = process.argv.slice(2);
@@ -77,62 +78,107 @@ if (picked.length === 0) {
   process.exit(1);
 }
 
-const out = getArg("--out", `/tmp/city-${blockId}.sdf`);
+const out = getArg("--out", null);
+const mergeInto = getArg("--merge-into", null);
 
 const esc = (s) => String(s).replace(/[<>&]/g, "");
 const heights = picked.map((b) => b.height);
+const modelName = `city-${block.id}`;
 
-const lines = [];
-lines.push(`<?xml version="1.0"?>`);
-lines.push(`<!--`);
-lines.push(`  由 frontend/swarm-console/simulation-3d/src/city-layout.js 生成，请勿手改。`);
-lines.push(`  街区: ${esc(block.id)}  中心 ENU(${block.x}, ${block.y})  尺寸 ${block.width.toFixed(0)}×${block.depth.toFixed(0)} m`);
-lines.push(`  建筑: ${picked.length} 栋  高度 ${Math.min(...heights)}~${Math.max(...heights)} m`);
-lines.push(`  生成日期: ${new Date().toISOString().slice(0, 10)}`);
-lines.push(``);
-lines.push(`  坐标：ENU 米，与前端 CITY.layout 完全一致（x=东, y=北, z=上）。`);
-lines.push(`  每栋楼带 <collision>，飞机撞上会被真实阻挡，不会穿模。`);
-lines.push(`-->`);
-lines.push(`<sdf version="1.9">`);
-lines.push(`  <world name="city_${esc(block.id).replace(/-/g, "_")}">`);
-lines.push(`    <model name="city-block">`);
-lines.push(`      <static>true</static>`);
-lines.push(`      <pose>0 0 0 0 0 0</pose>`);
+// 合并标记：用它界定"由本生成器写入的区段"，使重复运行是幂等的。
+// 手改这段没有意义 —— 下次运行会被覆盖，正确做法是改 city-layout.js 再重跑。
+const MARK_BEGIN = `    <!-- BEGIN GENERATED city-world: ${modelName} (改 city-layout.js 后重跑生成器) -->`;
+const MARK_END = `    <!-- END GENERATED city-world: ${modelName} -->`;
 
-for (const b of picked) {
-  const h = Number(b.height);
-  const w = Number(b.width);
-  const d = Number(b.depth);
-  // 建筑底面贴地，所以中心高度 = h/2
-  lines.push(`      <link name="link-${esc(b.id)}">`);
-  lines.push(
-    `        <pose>${b.x.toFixed(3)} ${b.y.toFixed(3)} ${(h / 2).toFixed(3)} 0 0 0</pose>`,
-  );
-  lines.push(`        <collision name="collision">`);
-  lines.push(`          <geometry><box><size>${w.toFixed(3)} ${d.toFixed(3)} ${h.toFixed(3)}</size></box></geometry>`);
-  lines.push(`        </collision>`);
-  lines.push(`        <visual name="visual">`);
-  lines.push(`          <geometry><box><size>${w.toFixed(3)} ${d.toFixed(3)} ${h.toFixed(3)}</size></box></geometry>`);
-  // 与前端同色系，便于目视核对两边的楼是不是同一栋
-  const color =
-    b.style === "glass"
-      ? "0.55 0.68 0.78 1"
-      : b.style === "brick"
-        ? "0.60 0.45 0.38 1"
-        : "0.78 0.79 0.81 1";
-  lines.push(`          <material><ambient>${color}</ambient><diffuse>${color}</diffuse></material>`);
-  lines.push(`        </visual>`);
-  lines.push(`      </link>`);
+/** 生成 <model> 片段（用于合并进已有世界）。 */
+function buildModelLines(indent = "    ") {
+  const lines = [];
+  lines.push(`${indent}<model name="${esc(modelName)}">`);
+  lines.push(`${indent}  <static>true</static>`);
+  lines.push(`${indent}  <pose>0 0 0 0 0 0</pose>`);
+  for (const b of picked) {
+    const h = Number(b.height);
+    const w = Number(b.width);
+    const d = Number(b.depth);
+    // 建筑底面贴地，所以中心高度 = h/2
+    lines.push(`${indent}  <link name="link-${esc(b.id)}">`);
+    lines.push(
+      `${indent}    <pose>${b.x.toFixed(3)} ${b.y.toFixed(3)} ${(h / 2).toFixed(3)} 0 0 0</pose>`,
+    );
+    lines.push(`${indent}    <collision name="collision">`);
+    lines.push(
+      `${indent}      <geometry><box><size>${w.toFixed(3)} ${d.toFixed(3)} ${h.toFixed(3)}</size></box></geometry>`,
+    );
+    lines.push(`${indent}    </collision>`);
+    lines.push(`${indent}    <visual name="visual">`);
+    lines.push(
+      `${indent}      <geometry><box><size>${w.toFixed(3)} ${d.toFixed(3)} ${h.toFixed(3)}</size></box></geometry>`,
+    );
+    // 与前端同色系，便于目视核对两边的楼是不是同一栋
+    const color =
+      b.style === "glass"
+        ? "0.55 0.68 0.78 1"
+        : b.style === "brick"
+          ? "0.60 0.45 0.38 1"
+          : "0.78 0.79 0.81 1";
+    lines.push(`${indent}      <material><ambient>${color}</ambient><diffuse>${color}</diffuse></material>`);
+    lines.push(`${indent}    </visual>`);
+    lines.push(`${indent}  </link>`);
+  }
+  lines.push(`${indent}</model>`);
+  return lines;
 }
 
-lines.push(`    </model>`);
-lines.push(`  </world>`);
-lines.push(`</sdf>`);
-lines.push(``);
+const headerLines = [
+  `<!--`,
+  `  由 frontend/swarm-console/simulation-3d/src/city-layout.js 生成，请勿手改。`,
+  `  街区: ${esc(block.id)}  中心 ENU(${block.x}, ${block.y})  尺寸 ${block.width.toFixed(0)}×${block.depth.toFixed(0)} m`,
+  `  建筑: ${picked.length} 栋  高度 ${Math.min(...heights)}~${Math.max(...heights)} m`,
+  `  生成日期: ${new Date().toISOString().slice(0, 10)}`,
+  ``,
+  `  坐标：ENU 米，与前端 CITY.layout 完全一致（x=东, y=北, z=上）。`,
+  `  每栋楼带 <collision>，飞机撞上会被真实阻挡，不会穿模。`,
+  `-->`,
+];
 
-writeFileSync(out, lines.join("\n"), "utf8");
+if (mergeInto) {
+  // 合并模式：把 model 片段插入已有世界的 </world> 之前。
+  // 幂等 —— 先删掉此前由本生成器写入的区段（按标记定位），再插入新的。
+  const worldPath = resolve(mergeInto);
+  if (!existsSync(worldPath)) {
+    console.error(`目标世界不存在: ${worldPath}`);
+    process.exit(1);
+  }
+  const original = readFileSync(worldPath, "utf8");
+  const beginIdx = original.indexOf(MARK_BEGIN);
+  const endIdx = original.indexOf(MARK_END);
+  let stripped = original;
+  if (beginIdx >= 0 && endIdx > beginIdx) {
+    stripped = original.slice(0, beginIdx) + original.slice(endIdx + MARK_END.length + 1);
+  }
+  const closeIdx = stripped.lastIndexOf("</world>");
+  if (closeIdx < 0) {
+    console.error(`目标世界缺少 </world>，无法合并: ${worldPath}`);
+    process.exit(1);
+  }
+  const block = [MARK_BEGIN, ...headerLines.map((l) => `    ${l}`), ...buildModelLines("    "), MARK_END, ""].join("\n");
+  const merged = stripped.slice(0, closeIdx) + block + "\n" + stripped.slice(closeIdx);
+  writeFileSync(worldPath, merged, "utf8");
+  console.log(`已合并进 ${worldPath}`);
+  console.log(`  model      : ${modelName}${beginIdx >= 0 ? "（替换了此前的同名区段）" : "（新增）"}`);
+} else {
+  const target = out || `/tmp/city-${blockId}.sdf`;
+  const lines = [`<?xml version="1.0"?>`, ...headerLines];
+  lines.push(`<sdf version="1.9">`);
+  lines.push(`  <world name="city_${esc(block.id).replace(/-/g, "_")}">`);
+  lines.push(...buildModelLines("    "));
+  lines.push(`  </world>`);
+  lines.push(`</sdf>`);
+  lines.push(``);
+  writeFileSync(target, lines.join("\n"), "utf8");
+  console.log(`已生成 ${target}`);
+}
 
-console.log(`已生成 ${out}`);
 console.log(`  街区        : ${block.id}  中心 ENU(${block.x}, ${block.y})`);
 console.log(`  建筑        : ${picked.length} 栋`);
 console.log(`  高度范围    : ${Math.min(...heights)} ~ ${Math.max(...heights)} m`);
