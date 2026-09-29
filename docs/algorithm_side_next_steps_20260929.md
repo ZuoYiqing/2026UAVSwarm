@@ -141,20 +141,50 @@ gcs_local_port / spawn_ned / runtime_dir
 **没有**：续航、电池容量、最大速度、速度包线、传感器、相机、视场、分辨率、载荷。
 
 唯一的机型信息是 `"px4_sim_model": "gz_x500"`（PX4 标准多旋翼 SITL 模型）
-与 `"airframe_autostart": 4001`。三台**完全相同**。
+与 `"airframe_autostart": 4001`。三台实例使用同一模型配置，但节点、端口和出生位置不同。
 
-`docs/hardware_capability_mapping_template.md` 是一份**空模板**（所有字段为 `TBD`），
-不是已填写的清点。
+`docs/hardware_capability_mapping_template.md` 是带字段说明和占位示例的模板，
+关键机型与模块信息仍为 `TBD`，不是已填写并验收的硬件清点。
 
-**集成侧能确认的仅此**：仿真模型自带传感器为 IMU / 磁力计 / 气压计 / GPS，
-**没有相机模型**。但这只能说明"仿真里没有"，**不能说明真机有没有** ——
-我们不应从仿真配置推断真机能力。
+**仅凭本仓库配置能确认的是**：三机配置**没有声明相机或成像指标**。
+
+> **注意不要越界**：飞机模型不在本仓库 —— `x500` 由 PX4 在**外部 `PX4-Autopilot`
+> 安装目录**中生成（本仓库自己的文档 `docs/px4_gazebo_scenario_v0_1.md:63` 写明
+> "The x500 vehicle is still spawned by PX4"）。因此"本仓库配置未声明相机"
+> **不等于**"仿真一定没有相机"，也不等于任何关于真机的结论。
+
+**外部 PX4 模型静态核查**（本机 WSL `/home/zyq/PX4-Autopilot`，提交 `171f0f38cf`，2026-09-29）：
+
+```
+我们配置的 gz_x500  →  x500/model.sdf 引用 model://x500_base
+x500_base/model.sdf  →  声明 air_pressure / magnetometer / imu / navsat
+                       未声明相机传感器
+```
+
+**同一 PX4 checkout 另有可评估的传感器/云台变体**：
+
+| 变体 | 组成 |
+| --- | --- |
+| `x500_mono_cam` | `x500` + `model://mono_cam` |
+| `x500_depth` | `x500` + `model://OakD-Lite`（深度相机） |
+| `x500_gimbal` | `x500` + `model://gimbal` |
+
+同一模型目录还包含 LiDAR、vision、flow 等其他变体；这些名称本身不构成任务所需传感器已经可用的证据。
+
+因此当前 `gz_x500` 的 SDF **未声明相机**，不能把它当成已具备成像能力；
+其他变体的存在也说明不能把整个 PX4 仿真体系判为"物理上不支持"。
+切换变体后仍须验证启动兼容性、图像输出、标定与算法接入，才能把感知任务标为仿真中可用。
+
+**如果你们的算法需要成像数据，请明确提出**（需要什么、精度要求、用于什么判断），
+我方可以评估换用带相机的仿真变体。**但请注意**：换变体属于仿真配置决定，
+且**仿真里能成像不能证明真机能成像** —— 真机能力仍待机型负责人确认
+（见 `docs/OPEN_vehicle_capability_semantics_ownership.md`）。
 
 **因此：你们目前无法区分"能拍"与"拍得清"——这项数据集成侧提供不了，
 需要真机参数或明确的仿真假设。**
 
-> **已上报定责**：本项已写成待定责文件
-> `docs/OPEN_vehicle_capability_semantics_ownership.md`，提交总体集成负责人裁定
+> **已形成定责建议**：本项已写成待定责文件
+> `docs/OPEN_vehicle_capability_semantics_ownership.md`，供总体集成负责人裁定
 > 由谁负责产出、以及"仿真值是否代表真机"。
 >
 > **最急的一条是过渡期口径**：在参数确定前，**是否允许你们基于显式假设推进**
