@@ -9,7 +9,7 @@ import { defineConfig } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: /console-integration\.spec\.js$/,
+  testMatch: /(console-integration|selection-sync|console-dom-probe)\.spec\.js$/,
   timeout: 90000,
   workers: 1,
   use: {

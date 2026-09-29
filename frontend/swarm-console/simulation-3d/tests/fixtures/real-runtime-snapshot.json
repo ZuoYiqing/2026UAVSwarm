@@ -1,0 +1,326 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-29T12:50:40.196468Z",
+  "full_state": true,
+  "source": {
+    "id": "runtime-fusion",
+    "kind": "simulation",
+    "label": "PX4 SITL / Runtime"
+  },
+  "scene_id": "simple_recon_v0_1",
+  "frame": {
+    "type": "NED"
+  },
+  "coordinate_contract": {
+    "version": "1.0",
+    "public_frame": "scene_ned",
+    "local_frame": "vehicle_local_ned",
+    "units": "m",
+    "z_convention": "positive_down",
+    "altitude_reference": "scene_origin_z_down",
+    "transform_owner": "runtime",
+    "calibration_producer": "simulation"
+  },
+  "vehicles": [
+    {
+      "id": "UAV-01",
+      "display_name": "UAV-01",
+      "vehicle_type": "multirotor",
+      "model": "x500",
+      "source": {
+        "id": "px4-sitl-1",
+        "kind": "simulation",
+        "label": "PX4 SITL"
+      },
+      "connected": true,
+      "pose": {
+        "frame": "NED",
+        "position_m": {
+          "x": 59.29711300576825,
+          "y": 12.04867390769154,
+          "z": 0.017942645554228604
+        },
+        "attitude_deg": {
+          "roll": -0.179000315043258,
+          "pitch": -0.8867825631280903,
+          "yaw": -2.36509024423055
+        }
+      },
+      "pose_source": "runtime_scene_calibration",
+      "spatial": {
+        "contract_version": "1.0",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "calibration_version": "ec000aaba80d212c24e57452:2026-09-29T12:50:30.024232+00:00",
+        "public_frame": "scene_ned",
+        "local_frame": "vehicle_local_ned",
+        "units": "m",
+        "z_convention": "positive_down",
+        "attitude_convention": "roll_pitch_yaw_deg_ned_frd",
+        "calibration_status": "calibrated",
+        "public_position_usable": true,
+        "local_origin_id": "ec000aaba80d212c24e57452",
+        "scene_origin": {
+          "kind": "gazebo_world_ned",
+          "north_m": 0.0,
+          "east_m": 0.0,
+          "down_m": 0.0
+        },
+        "altitude_reference": "scene_origin_z_down",
+        "origin_continuity": "verified",
+        "axis_alignment": "ned_aligned",
+        "translation_scene_ned_m": {
+          "north": -0.006029541839172481,
+          "east": 0.06722954886585686,
+          "down": -0.014104655976609409
+        },
+        "source_timestamp": "2026-09-29T12:50:40.190135+00:00",
+        "sample_timestamp": "2026-09-29T12:50:40.190135+00:00",
+        "calibration_source_timestamp": "2026-09-29T12:50:30.024232+00:00",
+        "calibration_age_ms": 9958,
+        "calibration_valid_for_ms": 59799,
+        "sample_age_ms": 5,
+        "stale": false,
+        "scene_pose": {
+          "frame": "scene_ned",
+          "position_m": {
+            "x": 59.29711300576825,
+            "y": 12.04867390769154,
+            "z": 0.017942645554228604
+          },
+          "attitude_deg": {
+            "roll": -0.179000315043258,
+            "pitch": -0.8867825631280903,
+            "yaw": -2.36509024423055
+          }
+        },
+        "raw_vehicle_local_pose": {
+          "frame": "vehicle_local_ned",
+          "position_m": {
+            "x": 59.30314254760742,
+            "y": 11.981444358825684,
+            "z": 0.03204730153083801
+          },
+          "attitude_deg": {
+            "roll": -0.179000315043258,
+            "pitch": -0.8867825631280903,
+            "yaw": -2.36509024423055
+          }
+        }
+      },
+      "velocity_mps": {
+        "north": 0.014019598253071308,
+        "east": 0.001601141644641757,
+        "up": -0.000353912910213694
+      },
+      "telemetry": {
+        "armed": false,
+        "mode": "LOITER",
+        "battery_percent": 100,
+        "ground_speed_mps": 0.014110733139838134,
+        "stale": false,
+        "age_ms": 5
+      }
+    },
+    {
+      "id": "UAV-02",
+      "display_name": "UAV-02",
+      "vehicle_type": "multirotor",
+      "model": "x500",
+      "source": {
+        "id": "px4-sitl-2",
+        "kind": "simulation",
+        "label": "PX4 SITL"
+      },
+      "connected": true,
+      "pose": {
+        "frame": "NED",
+        "position_m": {
+          "x": -0.05403046792856044,
+          "y": 8.023031852080038,
+          "z": -2.757832836678382
+        },
+        "attitude_deg": {
+          "roll": -0.13354364520867773,
+          "pitch": -0.24205112529296796,
+          "yaw": 5.7791229482644
+        }
+      },
+      "pose_source": "runtime_scene_calibration",
+      "spatial": {
+        "contract_version": "1.0",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "calibration_version": "9b76a69c3a9712d1dc36cd9e:2026-09-29T12:50:30.113610+00:00",
+        "public_frame": "scene_ned",
+        "local_frame": "vehicle_local_ned",
+        "units": "m",
+        "z_convention": "positive_down",
+        "attitude_convention": "roll_pitch_yaw_deg_ned_frd",
+        "calibration_status": "calibrated",
+        "public_position_usable": true,
+        "local_origin_id": "9b76a69c3a9712d1dc36cd9e",
+        "scene_origin": {
+          "kind": "gazebo_world_ned",
+          "north_m": 0.0,
+          "east_m": 0.0,
+          "down_m": 0.0
+        },
+        "altitude_reference": "scene_origin_z_down",
+        "origin_continuity": "verified",
+        "axis_alignment": "ned_aligned",
+        "translation_scene_ned_m": {
+          "north": 0.006563282399265104,
+          "east": 8.016924840270093,
+          "down": -0.05264599280631205
+        },
+        "source_timestamp": "2026-09-29T12:50:40.189571+00:00",
+        "sample_timestamp": "2026-09-29T12:50:40.189571+00:00",
+        "calibration_source_timestamp": "2026-09-29T12:50:30.113610+00:00",
+        "calibration_age_ms": 9956,
+        "calibration_valid_for_ms": 59874,
+        "sample_age_ms": 6,
+        "stale": false,
+        "scene_pose": {
+          "frame": "scene_ned",
+          "position_m": {
+            "x": -0.05403046792856044,
+            "y": 8.023031852080038,
+            "z": -2.757832836678382
+          },
+          "attitude_deg": {
+            "roll": -0.13354364520867773,
+            "pitch": -0.24205112529296796,
+            "yaw": 5.7791229482644
+          }
+        },
+        "raw_vehicle_local_pose": {
+          "frame": "vehicle_local_ned",
+          "position_m": {
+            "x": -0.060593750327825546,
+            "y": 0.0061070118099451065,
+            "z": -2.7051868438720703
+          },
+          "attitude_deg": {
+            "roll": -0.13354364520867773,
+            "pitch": -0.24205112529296796,
+            "yaw": 5.7791229482644
+          }
+        }
+      },
+      "velocity_mps": {
+        "north": 0.004363402258604765,
+        "east": 0.004457857459783554,
+        "up": -0.0033493805676698685
+      },
+      "telemetry": {
+        "armed": true,
+        "mode": "LOITER",
+        "battery_percent": 51,
+        "ground_speed_mps": 0.006237930137645423,
+        "stale": false,
+        "age_ms": 6
+      }
+    },
+    {
+      "id": "UAV-03",
+      "display_name": "UAV-03",
+      "vehicle_type": "multirotor",
+      "model": "x500",
+      "source": {
+        "id": "px4-sitl-3",
+        "kind": "simulation",
+        "label": "PX4 SITL"
+      },
+      "connected": true,
+      "pose": {
+        "frame": "NED",
+        "position_m": {
+          "x": -0.01333193372607231,
+          "y": -7.979724004640877,
+          "z": 0.006956385730661593
+        },
+        "attitude_deg": {
+          "roll": 0.038517337710086134,
+          "pitch": -0.027085143501638664,
+          "yaw": 5.666543074609195
+        }
+      },
+      "pose_source": "runtime_scene_calibration",
+      "spatial": {
+        "contract_version": "1.0",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "calibration_version": "8361165f528556919c60db16:2026-09-29T12:50:30.224127+00:00",
+        "public_frame": "scene_ned",
+        "local_frame": "vehicle_local_ned",
+        "units": "m",
+        "z_convention": "positive_down",
+        "attitude_convention": "roll_pitch_yaw_deg_ned_frd",
+        "calibration_status": "calibrated",
+        "public_position_usable": true,
+        "local_origin_id": "8361165f528556919c60db16",
+        "scene_origin": {
+          "kind": "gazebo_world_ned",
+          "north_m": 0.0,
+          "east_m": 0.0,
+          "down_m": 0.0
+        },
+        "altitude_reference": "scene_origin_z_down",
+        "origin_continuity": "verified",
+        "axis_alignment": "ned_aligned",
+        "translation_scene_ned_m": {
+          "north": 0.029276875,
+          "east": -7.965335625,
+          "down": 0.029968934415735445
+        },
+        "source_timestamp": "2026-09-29T12:50:40.193478+00:00",
+        "sample_timestamp": "2026-09-29T12:50:40.193478+00:00",
+        "calibration_source_timestamp": "2026-09-29T12:50:30.224127+00:00",
+        "calibration_age_ms": 9954,
+        "calibration_valid_for_ms": 59982,
+        "sample_age_ms": 2,
+        "stale": false,
+        "scene_pose": {
+          "frame": "scene_ned",
+          "position_m": {
+            "x": -0.01333193372607231,
+            "y": -7.979724004640877,
+            "z": 0.006956385730661593
+          },
+          "attitude_deg": {
+            "roll": 0.038517337710086134,
+            "pitch": -0.027085143501638664,
+            "yaw": 5.666543074609195
+          }
+        },
+        "raw_vehicle_local_pose": {
+          "frame": "vehicle_local_ned",
+          "position_m": {
+            "x": -0.04260880872607231,
+            "y": -0.014388379640877247,
+            "z": -0.023012548685073853
+          },
+          "attitude_deg": {
+            "roll": 0.038517337710086134,
+            "pitch": -0.027085143501638664,
+            "yaw": 5.666543074609195
+          }
+        }
+      },
+      "velocity_mps": {
+        "north": -0.0013799428706988692,
+        "east": 0.00714661180973053,
+        "up": 0.001130959833972156
+      },
+      "telemetry": {
+        "armed": false,
+        "mode": "LOITER",
+        "battery_percent": 100,
+        "ground_speed_mps": 0.007278619559049127,
+        "stale": false,
+        "age_ms": 2
+      }
+    }
+  ]
+}

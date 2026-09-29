@@ -1546,9 +1546,25 @@ function ensureShell() {
   const host = document.getElementById("app");
   if (!host) return;
   if (host.dataset?.shellMounted === "1") return;
+
+  // ⚠️ 外壳结构必须与 CSS 的网格定义严格对应，否则整页布局会错位。
+  //
+  // `.shell` 是 CSS Grid（styles.css:46）：
+  //     grid-template-columns: 252px minmax(0, 1fr);
+  //     grid-template-rows: 64px 1fr;
+  // 且**只有 `.topbar` 有显式定位**（grid-column: 1 / -1），
+  // `.sidebar` 与 `.content` 都靠**自动落格**：第 1 个位置被 topbar 占掉整行后，
+  // sidebar 落 [第2行第1列]、content 落 [第2行第2列]。
+  //
+  // 因此直接子元素的**数量与顺序**都不能变。曾经把 sidebar 和 content 各包一层
+  // 无类名的 #slot-* 容器，结果自动落格全乱：sidebar 被拉成横跨整行的 64px 条，
+  // content 被挤成 224px 窄列，整页无法使用（实测截图确认）。
+  //
+  // 现在的做法：**语义元素仍是网格项**（保持原版顺序与数量），slot 作为它们内部的
+  // 容器。末尾那个 .toast-stack 是 position:fixed，不参与网格流，保持它在最后。
   host.innerHTML = `<div class="shell">
-    <div id="slot-topbar"></div>
-    <div id="slot-sidebar"></div>
+    <header class="topbar" id="slot-topbar"></header>
+    <aside class="sidebar" id="slot-sidebar"></aside>
     <main class="content"><div id="slot-content"></div></main>
     <div id="slot-toast"></div>
   </div>`;
