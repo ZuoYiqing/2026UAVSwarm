@@ -302,6 +302,12 @@ class PlanExecuteRequest:
     structured plan, Runtime sequences it and applies the Policy Gate before
     every action.
 
+    **Scene identity is required.**  ``plan.scene_id`` and ``plan.map_version``
+    must be present and non-empty.  Runtime refuses a plan it cannot check
+    against its own active scene, because coordinates only mean something
+    relative to a scene: a plan built for one map executed against another
+    would fly to positions derived from the wrong reference.
+
     **Approval is explicit and mandatory.**  It would be convenient to
     auto-approve a submitted plan, but real execution moves aircraft, so the
     caller must state the operator identity and an approve decision.  A
@@ -325,6 +331,17 @@ class PlanExecuteRequest:
                 "invalid_parameter", "plan.plan_id", "plan.plan_id 必须是非空字符串",
                 value=plan_id,
             )
+        # 场景身份：必填。缺失的计划无法与 Runtime 的活动场景核对，
+        # 而"无法核对"正是最该拒绝的情况 —— 不能因为字段缺少就跳过校验。
+        for field in ("scene_id", "map_version"):
+            value = plan.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.{field}",
+                    f"plan.{field} 必须是非空字符串（执行前要与 Runtime 的活动场景核对）",
+                    value=value,
+                )
         steps = plan.get("steps")
         if not isinstance(steps, list) or not steps:
             raise RequestValidationError(

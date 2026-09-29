@@ -652,6 +652,33 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     req = PlanExecuteRequest.from_json(payload)
     payload_plan = req.plan
 
+    # --- 场景身份核对：在任何一步起飞之前 -------------------------------
+    #
+    # 坐标只在某个场景里有意义。一份为 A 地图生成的计划若在 B 地图上执行，
+    # 就会飞到由错误基准推导出的位置；而这类错误不会在动作层报错 ——
+    # 飞机会老老实实飞到那个（错误的）坐标，动作还报 pass。
+    #
+    # 因此这里在**进入执行器之前**核对一次，并在任何 step 下发前拒绝整份计划。
+    # 对照基准取 VEHICLE_REGISTRY.scene_id —— 那是 Runtime 实际加载的场景
+    # （由 scenes/<id>/scene.json 决定），不是调用方声明的。
+    scene_check = _check_plan_scene_identity(payload_plan)
+    if scene_check is not None:
+        RUNTIME_STATE_STORE.record_event({
+            "type": "agent_plan_rejected_scene_identity",
+            "timestamp": _utc_now(),
+            "plan_id": payload_plan.get("plan_id"),
+            "failure_reason": scene_check["failure_reason"],
+            "detail": scene_check["detail"],
+        })
+        return {
+            "result": "blocked",
+            "failure_reason": scene_check["failure_reason"],
+            "detail": scene_check["detail"],
+            "plan": payload_plan,
+            "execution_mode": "real",
+            "step_outcomes": [],
+        }
+
     steps = [
         MissionPlanStep(
             step_id=str(raw["step_id"]),
@@ -714,6 +741,62 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     })
     RUNTIME_STATE_STORE.record_plan_result(result)
     return result
+
+
+def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
+    """核对计划声明的场景身份与 Runtime 的活动场景。
+
+    Returns:
+        ``None`` 表示一致、可以执行；否则返回含 ``failure_reason`` 与 ``detail``
+        的字典，调用方据此拒绝整份计划。
+
+    为什么必须在这里挡下：坐标只在某个场景里有意义。一份为 A 地图生成的计划
+    若在 B 地图上执行，飞机会飞到由错误基准推导出的位置，**而且动作层不会报错** ——
+    它会老老实实飞到那个错误坐标并报 pass。这类"看起来成功"的错误正是本项目
+    反复想避免的。
+
+    对照基准是 ``VEHICLE_REGISTRY.scene_id``：那是 Runtime 实际加载的场景
+    （由 ``scenarios/<id>/scene.json`` 决定），不是调用方声明的。
+    """
+    active_scene = str(getattr(VEHICLE_REGISTRY, "scene_id", "") or "")
+    if not active_scene:
+        # Runtime 自己都不知道在用哪张地图 —— 无法核对就不能执行。
+        return {
+            "failure_reason": "scene_identity_unavailable",
+            "detail": {"reason": "runtime_active_scene_id_missing"},
+        }
+
+    if str(plan.get("scene_id")) != active_scene:
+        return {
+            "failure_reason": "scene_id_mismatch",
+            "detail": {
+                "plan_scene_id": plan.get("scene_id"),
+                "active_scene_id": active_scene,
+            },
+        }
+
+    # map_version 以当前节点的标定为准（它是坐标换算实际依据的那份地图版本）。
+    # 没有可用标定时不做判断 —— 那属于 coordinate_calibration_unavailable，
+    # 应由 goto 自己在执行时报告，不在这里冒充场景不匹配。
+    node_ids = {str(step.get("node_id") or "") for step in plan.get("steps", [])}
+    node_ids.discard("")
+    for node_id in sorted(node_ids):
+        calibration, status = RUNTIME_STATE_STORE.coordinate_calibration(node_id)
+        if status != "calibrated" or not isinstance(calibration, dict):
+            continue
+        calibrated_map = str(calibration.get("map_version") or "")
+        if calibrated_map and str(plan.get("map_version")) != calibrated_map:
+            return {
+                "failure_reason": "map_version_mismatch",
+                "detail": {
+                    "plan_map_version": plan.get("map_version"),
+                    "active_map_version": calibrated_map,
+                    "node_id": node_id,
+                },
+            }
+        break
+
+    return None
 
 
 def _self_api_base() -> str:

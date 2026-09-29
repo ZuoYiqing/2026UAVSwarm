@@ -27,6 +27,9 @@ def _plan_payload(**overrides) -> dict:
         "mission_type": "inspection_snapshot",
         "created_at": "2026-09-28T00:00:00+00:00",
         "explanation": "http contract test",
+        # 场景身份必填：执行前要与 Runtime 的活动场景核对。
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
         "steps": [
             {"step_id": "s1", "action_type": "takeoff", "node_id": "UAV-01", "params": {"altitude_m": 3}},
             {"step_id": "s2", "action_type": "goto", "node_id": "UAV-01", "params": {"north_m": 4, "down_m": -3}},
@@ -75,6 +78,103 @@ def test_reject_decision_is_accepted_by_the_schema() -> None:
 def test_invalid_payloads_are_rejected(payload: dict) -> None:
     with pytest.raises(RequestValidationError):
         PlanExecuteRequest.from_json(payload)
+
+
+# --- 场景身份：缺失或不一致必须拒绝 ---------------------------------------
+
+
+@pytest.mark.parametrize("field", ["scene_id", "map_version"])
+@pytest.mark.parametrize("bad", [None, "", "   ", 123])
+def test_scene_identity_is_required_and_must_be_a_nonempty_string(field: str, bad) -> None:
+    """缺失场景身份的计划不能执行。
+
+    不能因为"字段没填"就跳过校验 —— 无法核对的计划正是最该拒绝的情况。
+    """
+    payload = _plan_payload()
+    payload["plan"][field] = bad
+    with pytest.raises(RequestValidationError):
+        PlanExecuteRequest.from_json(payload)
+
+
+def test_present_scene_identity_parses_through() -> None:
+    req = PlanExecuteRequest.from_json(_plan_payload())
+    assert req.plan["scene_id"] == "simple_recon_v0_1"
+    assert req.plan["map_version"] == "simple_recon_v0_1-map-1"
+
+
+class _FakeRegistry:
+    def __init__(self, scene_id: str) -> None:
+        self.scene_id = scene_id
+
+
+def _check(payload_plan: dict, *, active_scene: str = "simple_recon_v0_1",
+           calibration: dict | None = None, status: str = "calibrated"):
+    """在受控的注册表/标定状态下运行场景核对。"""
+    from uav_runtime.http import routes
+
+    original_registry = routes.VEHICLE_REGISTRY
+    original_store = routes.RUNTIME_STATE_STORE
+
+    class _Store:
+        def coordinate_calibration(self, node_id):
+            return calibration, (status if calibration else "unavailable")
+
+    routes.VEHICLE_REGISTRY = _FakeRegistry(active_scene)
+    routes.RUNTIME_STATE_STORE = _Store()
+    try:
+        return routes._check_plan_scene_identity(payload_plan)
+    finally:
+        routes.VEHICLE_REGISTRY = original_registry
+        routes.RUNTIME_STATE_STORE = original_store
+
+
+def test_matching_scene_identity_passes() -> None:
+    result = _check({
+        "scene_id": "simple_recon_v0_1", "map_version": "simple_recon_v0_1-map-1",
+        "steps": [{"node_id": "UAV-01"}],
+    }, calibration={"map_version": "simple_recon_v0_1-map-1"})
+    assert result is None, f"一致时不应拒绝，实际 {result}"
+
+
+def test_scene_id_mismatch_is_refused() -> None:
+    result = _check({
+        "scene_id": "qinglan_city_v1", "map_version": "simple_recon_v0_1-map-1",
+        "steps": [{"node_id": "UAV-01"}],
+    })
+    assert result is not None
+    assert result["failure_reason"] == "scene_id_mismatch"
+    assert result["detail"]["plan_scene_id"] == "qinglan_city_v1"
+    assert result["detail"]["active_scene_id"] == "simple_recon_v0_1"
+
+
+def test_map_version_mismatch_is_refused() -> None:
+    result = _check({
+        "scene_id": "simple_recon_v0_1", "map_version": "qinglan-city-1",
+        "steps": [{"node_id": "UAV-01"}],
+    }, calibration={"map_version": "simple_recon_v0_1-map-1"})
+    assert result is not None
+    assert result["failure_reason"] == "map_version_mismatch"
+    assert result["detail"]["plan_map_version"] == "qinglan-city-1"
+    assert result["detail"]["active_map_version"] == "simple_recon_v0_1-map-1"
+
+
+def test_unavailable_active_scene_is_refused_not_skipped() -> None:
+    """Runtime 自己都不知道活动场景时，不能"跳过校验"继续执行。"""
+    result = _check({
+        "scene_id": "simple_recon_v0_1", "map_version": "simple_recon_v0_1-map-1",
+        "steps": [{"node_id": "UAV-01"}],
+    }, active_scene="")
+    assert result is not None
+    assert result["failure_reason"] == "scene_identity_unavailable"
+
+
+def test_no_calibration_does_not_report_map_mismatch() -> None:
+    """没有标定时不冒充"地图版本不匹配" —— 那是 goto 自己该报的原因。"""
+    result = _check({
+        "scene_id": "simple_recon_v0_1", "map_version": "any-version",
+        "steps": [{"node_id": "UAV-01"}],
+    }, calibration=None)
+    assert result is None, "缺标定不应被报成场景不匹配"
 
 
 def test_step_without_node_id_is_allowed_by_schema_but_execution_refuses_it() -> None:
