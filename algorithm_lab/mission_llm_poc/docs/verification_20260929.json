@@ -1,0 +1,74 @@
+{
+  "recorded_date": "2026-09-29",
+  "worktree_branch": "codex/algorithm-lab-local-llm-poc",
+  "scope": "Objective-to-task baseline, local-model grounding candidate, simple_recon converter handoff, raw model safety replay",
+  "checks": {
+    "python_unit_tests": {"passed": 29, "total": 29},
+    "scaffold_cases": {"passed": 40, "total": 40},
+    "runtime_converter_contract_tests": {"passed": 15, "total": 15},
+    "simple_recon_handoff_converter": {
+      "accepted": true,
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "takeoff_altitude_m_explicit": 3,
+      "steps": ["takeoff:UAV-01", "goto:UAV-01:N60:E12:D-20", "land:UAV-01"],
+      "runtime_execution_called": false
+    },
+    "artifact_check_only": {
+      "passed": true,
+      "engine_version": "0.4.1-dev build 10964 commit b29c606e2",
+      "gpu": "RTX 4050 Laptop"
+    }
+  },
+  "model": {
+    "alias": "qwen3.5-4b-q4-lab",
+    "weight_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+    "offline_flag": true,
+    "network_isolation_verified": false,
+    "mission_rerun": {
+      "artifact": "artifacts/runs/request-20260929T145638765Z/proposal.json",
+      "resources": "artifacts/runs/request-20260929T145638765Z/resources.json",
+      "input_hash": "25d702ae3ac49734bdedcbb97f744b6d2a34481df64acddf5759e7fe21fced76",
+      "prompt_hash": "4469b8cc1309c32eb61c184399158cb606e120b33c5d99a597082871bd79d928",
+      "output_hash": "9fe210811cfb52b0ed8a5b886b54dd7f6acd21753fa763c16ee72d4729849940",
+      "schema_valid": true,
+      "reason_code_corrected": true,
+      "assignment_count": 3,
+      "then_current_validator_accepted": true,
+      "safety_replay_accepted": false,
+      "safety_replay_errors": ["UNPROVEN_ENERGY_CLAIM", "UNPROVEN_ROUTE_CLAIM"],
+      "accepted_proposal_after_replay": null,
+      "latency_ms": 13347.3026000138,
+      "prompt_tokens": 1991,
+      "completion_tokens": 628,
+      "min_host_free_kib": 1980072,
+      "max_whole_gpu_used_mib": 2914,
+      "max_temperature_c": 60,
+      "server_stopped_after_request": true
+    },
+    "objective_grounding": {
+      "artifact": "artifacts/runs/request-20260929T145917705Z/proposal.json",
+      "resources": "artifacts/runs/request-20260929T145917705Z/resources.json",
+      "input_hash": "cb4d811dac5d87b2741ddfb7fe527d60b1df7c700d4d55238ebfea4ca3a3082c",
+      "prompt_hash": "72f01df428c378ac6da19aa384290b80c709acb5e8409abeca983e95ac410f90",
+      "accepted": true,
+      "intent_type": "flight_validation",
+      "region_id": "verified-flight-route-001",
+      "matched_text_exact": true,
+      "execution_ready": false,
+      "latency_ms": 2921.20149999391,
+      "prompt_tokens": 110,
+      "completion_tokens": 123,
+      "min_host_free_kib": 2023916,
+      "max_whole_gpu_used_mib": 2912,
+      "max_temperature_c": 56,
+      "server_stopped_after_request": true
+    }
+  },
+  "limits": [
+    "Synthetic handoff snapshot is not live telemetry or authorization",
+    "One objective sample is not semantic accuracy evidence",
+    "Claim filters cover known phrases and are not a safety proof",
+    "No Runtime execution, Policy decision, or vehicle command was sent"
+  ]
+}

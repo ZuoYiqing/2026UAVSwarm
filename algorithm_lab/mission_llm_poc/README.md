@@ -11,6 +11,13 @@
 与 Runtime `524cdf8` 的接口约定见[执行接口交接](docs/RUNTIME_EXECUTION_HANDOFF_20260928.md)。
 原三机巡检样例仍是研究提案，包含尚不可执行的观察与返航动作；
 另有[仅飞行验证样例](examples/flight_validation_only.json)供转换器验证，不能报告为巡检完成。
+2026-09-29 新增[目标语义绑定与集成交接](docs/INTENT_GROUNDING_HANDOFF_20260929.md)：
+新输入不带 `tasks[]`，由目标与带来源的场景可供性派生任务；
+[simple_recon_v0_1 输入](examples/simple_recon_flight_intent.json)和
+[转换器可读输出](examples/simple_recon_flight_handoff.json)均为合成飞行验证证据。
+本地 4B Q4 模型已真实运行一次受限目标绑定（通过）和一次加固后三机提案（原文含未经证明的
+路径/能源结论，离线回放已拒绝）。本轮记录见
+[verification_20260929.json](docs/verification_20260929.json)；29/29 单元测试通过。
 
 2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
 [参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
@@ -34,6 +41,7 @@ Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解�
 ```powershell
 Set-Location 'D:\2026UAVSwarm-worktrees\algorithm-lab-local-llm-poc\algorithm_lab\mission_llm_poc'
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/three_uav_inspection.json
+.\.venv\Scripts\python.exe -m uavswarm_llm_lab ground examples/simple_recon_flight_intent.json
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/uav02_offline.json
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/policy_denied.json
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -73,8 +81,10 @@ D盘 `artifacts` 下，因此修改实验代码后无需为了试跑反复构建
 - tests：单元验证，无网络/飞控/模型权重依赖。
 - docs：代码审计、硬件核查及 Algorithm Delivery Report。
 
-输入必须提供权威 task/action/waypoint 清单。第一版只让模型提出分配并解释，
-尚未实现从自然语言自由生成任务图、覆盖路径或坐标。模型不得发明新航点。
+原有 `demo` / `infer` 路径仍以结构化 task/action/waypoint 清单为权威输入。
+新增 `ground` 路径从明确标签的自然语言目标派生 `tasks[]`，不生成新坐标；
+`ground-model` 允许本地模型提出语义绑定候选，但真实模型结果仍待复跑。
+两条路径的能力指标分别记录，不能把规则绑定结果当作模型理解能力。
 同一节点可承担多个任务；输出不是并发飞行时间表。
 规则基线按 task_id 排序，选择已分任务最少的合格节点，以 node_id 打破平局；
 这是参考方法，不能证明分配最优或穷尽所有可行解。

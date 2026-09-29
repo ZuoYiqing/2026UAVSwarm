@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$LaunchRecord,
     [string]$ContextFile = 'examples/three_uav_inspection.json',
+    [ValidateSet('infer', 'ground-model')][string]$Mode = 'infer',
     [switch]$KeepServer
 )
 $ErrorActionPreference = 'Stop'
@@ -24,7 +25,7 @@ $env:PYTHONPATH = Join-Path $moduleRoot 'src'
 $outputPath = Join-Path $runRoot 'proposal.json'
 $python = Join-Path $moduleRoot '.venv/Scripts/python.exe'
 # Current checkout paths contain no spaces; quote each argument for portable launches.
-$argumentValues = @('-m','uavswarm_llm_lab','infer',$contextPath,'--base-url','http://127.0.0.1:18080/v1',
+$argumentValues = @('-m','uavswarm_llm_lab',$Mode,$contextPath,'--base-url','http://127.0.0.1:18080/v1',
     '--model','qwen3.5-4b-q4-lab','--max-tokens','1024','--timeout-s','90','--output',$outputPath)
 $quotedArguments = @($argumentValues | ForEach-Object { '"' + $_ + '"' })
 $client = Start-Process -FilePath $python -ArgumentList $quotedArguments -WorkingDirectory $moduleRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'client.stdout.log') -RedirectStandardError (Join-Path $runRoot 'client.stderr.log')
@@ -55,7 +56,7 @@ try {
         Stop-Process -Id $server.Id
         $serverStoppedAfterRequest = $true
     }
-    $report = [ordered]@{kind='single_request_resource_samples'; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
+    $report = [ordered]@{kind='single_request_resource_samples'; mode=$Mode; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $runRoot 'resources.json') -Encoding utf8
 }
 Write-Output "REQUEST_ARTIFACTS=$runRoot"

@@ -11,6 +11,8 @@ from uavswarm_llm_lab.benchmark import cases, case_context, run_model_benchmark,
 from uavswarm_llm_lab.contracts import (ContractError, canonical_json, digest,
                                         parse_json, schema, schema_errors)
 from uavswarm_llm_lab.local_model_client import LocalModelClient, ModelError, _NoRedirect
+from uavswarm_llm_lab.intent_grounder import (derive_context, derive_proposal,
+                                               ground_with_client, request_errors)
 from uavswarm_llm_lab.mission_planner import evaluate_raw, plan_with_client, reference_proposal
 from uavswarm_llm_lab.semantic_validator import context_errors, validate_proposal
 
@@ -20,6 +22,108 @@ def context():
 
 
 class LabTest(unittest.TestCase):
+    def test_objective_generates_tasks_without_input_tasks(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"
+        request = json.loads(path.read_text(encoding="utf-8"))
+        self.assertNotIn("tasks", request)
+        self.assertFalse(request_errors(request))
+        result = derive_proposal(request)
+        task = result["context"]["tasks"][0]
+        self.assertEqual(task["region_id"], "verified-flight-route-001")
+        self.assertEqual(task["required_actions"], ["TAKEOFF", "GOTO", "LAND"])
+        self.assertEqual(task["waypoint_ids"], ["WP-VERIFIED-60-12-20"])
+        self.assertEqual(result["grounding"]["bindings"][0]["matched_text"],
+                         "verified-flight-route-001")
+        self.assertFalse(validate_proposal(result["context"], result["proposal"]))
+
+    def test_simple_recon_handoff_matches_reproducible_generation(self):
+        examples = Path(__file__).resolve().parents[1] / "examples"
+        request = json.loads((examples / "simple_recon_flight_intent.json").read_text(encoding="utf-8"))
+        handoff = json.loads((examples / "simple_recon_flight_handoff.json").read_text(encoding="utf-8"))
+        generated = derive_proposal(request)
+        self.assertEqual(handoff["input_hash"], digest(request))
+        for key in ("context", "grounding", "proposal", "execution_ready"):
+            self.assertEqual(handoff[key], generated[key])
+        self.assertFalse(handoff["execution_ready"])
+
+    def test_external_tasks_and_ungrounded_references_are_rejected(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"
+        request = json.loads(path.read_text(encoding="utf-8"))
+        request["tasks"] = []
+        self.assertIn("EXTERNAL_TASKS_FORBIDDEN", request_errors(request)[0])
+        del request["tasks"]
+        request["objective"] = "对未知区域做飞行验证：起飞、前往航点、降落"
+        with self.assertRaisesRegex(ContractError, "REGION_REFERENCE_UNRESOLVED"):
+            derive_context(request)
+        request["objective"] = "对 verified-flight-route-001 做飞行验证，起飞后前往航点，不要降落"
+        with self.assertRaisesRegex(ContractError, "FLIGHT_ACTION_CONTRADICTION"):
+            derive_context(request)
+
+    def test_objective_binding_order_and_unsupported_recon_are_explicit(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"
+        request = json.loads(path.read_text(encoding="utf-8"))
+        request["waypoints"].append({"waypoint_id": "WP-SECOND", "position_m":
+                                      {"north_m": 61, "east_m": 12, "down_m": -20}})
+        request["regions"].append({"region_id": "second-route", "labels": ["second-route"],
+                                    "waypoint_ids": ["WP-SECOND"],
+                                    "source_reference": "test fixture"})
+        request["objective"] = "飞行验证：起飞后先前往 second-route，再前往 verified-flight-route-001，最后降落"
+        derived, report = derive_context(request)
+        self.assertEqual([task["region_id"] for task in derived["tasks"]],
+                         ["second-route", "verified-flight-route-001"])
+        self.assertEqual([row["matched_text"] for row in report["bindings"]],
+                         ["second-route", "verified-flight-route-001"])
+        request["objective"] = "对 verified-flight-route-001 做巡检"
+        derived, report = derive_context(request)
+        self.assertEqual(report["intent_type"], "reconnaissance")
+        self.assertIn("OBSERVE", derived["tasks"][0]["required_actions"])
+        self.assertIn("RETURN_HOME", derived["tasks"][0]["required_actions"])
+
+    def test_local_model_grounding_keeps_raw_evidence_and_rejects_invented_ids(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"
+        request = json.loads(path.read_text(encoding="utf-8"))
+        client = MagicMock(model="fixture")
+        candidate = {"intent_type": "flight_validation", "bindings": [
+            {"region_id": "verified-flight-route-001",
+             "matched_text": "verified-flight-route-001"}],
+            "explanation": "The explicit route ID names the supplied flight route."}
+        client.complete.return_value = {"content": canonical_json(candidate),
+                                        "model": "fixture", "usage": None}
+        with patch("uavswarm_llm_lab.intent_grounder.perf_counter", side_effect=[0, 0.1]):
+            result = ground_with_client(request, client)
+        self.assertTrue(result["accepted"])
+        self.assertFalse(result["execution_ready"])
+        self.assertEqual(result["raw_output"], canonical_json(candidate))
+        self.assertFalse(result["grounding"]["requires_human_semantic_review"])
+        self.assertFalse(validate_proposal(result["context"], result["proposal"]))
+        self.assertTrue(client.complete.call_args.kwargs["constrained"])
+
+        candidate["bindings"][0]["region_id"] = "invented-route"
+        client.complete.return_value["content"] = canonical_json(candidate)
+        with patch("uavswarm_llm_lab.intent_grounder.perf_counter", side_effect=[0, 0.1]):
+            rejected = ground_with_client(request, client)
+        self.assertFalse(rejected["accepted"])
+        self.assertIsNone(rejected["proposal"])
+        self.assertIn("UNKNOWN_REGION_ID:invented-route", rejected["errors"])
+
+    def test_local_model_grounding_nonexact_reference_needs_review(self):
+        path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"
+        request = json.loads(path.read_text(encoding="utf-8"))
+        request["objective"] = "对北侧路线做飞行验证：起飞、前往航点、降落"
+        candidate = {"intent_type": "flight_validation", "bindings": [
+            {"region_id": "verified-flight-route-001", "matched_text": "北侧路线"}],
+            "explanation": "Candidate semantic mapping."}
+        client = MagicMock(model="fixture")
+        client.complete.return_value = {"content": canonical_json(candidate),
+                                        "model": "fixture", "usage": None}
+        with patch("uavswarm_llm_lab.intent_grounder.perf_counter", side_effect=[0, 0.1]):
+            result = ground_with_client(request, client)
+        self.assertFalse(result["accepted"])
+        self.assertTrue(result["grounding"]["requires_human_semantic_review"])
+        self.assertFalse(result["execution_ready"])
+        self.assertIsNone(result["proposal"])
+        self.assertIn("SEMANTIC_BINDING_REVIEW_REQUIRED", result["errors"])
+
     def test_flight_validation_fixture_is_separate_from_inspection(self):
         path = Path(__file__).resolve().parents[1] / "examples" / "flight_validation_only.json"
         flight = json.loads(path.read_text(encoding="utf-8"))
@@ -63,6 +167,21 @@ class LabTest(unittest.TestCase):
                          "Do not claim a direct/clear/safe path",
                          "overall constraint satisfaction"):
             self.assertIn(required, prompt)
+
+    def test_unproven_route_and_energy_claims_reject_candidate(self):
+        c = context()
+        p = reference_proposal(c)
+        p["assignments"][0]["explanation"] = "Direct path feasible within constraints."
+        p["warnings"].append("Assume sufficient based on battery %.")
+        evaluation = evaluate_raw(c, canonical_json(p))
+        self.assertTrue(evaluation["schema_valid"])
+        self.assertFalse(evaluation["accepted"])
+        self.assertIsNone(evaluation["accepted_proposal"])
+        self.assertIn("UNPROVEN_ROUTE_CLAIM", evaluation["errors"])
+        self.assertIn("UNPROVEN_ENERGY_CLAIM", evaluation["errors"])
+        p["assignments"][0]["explanation"] = "Route feasibility not verified."
+        p["warnings"][-1] = "Energy sufficiency not calculated."
+        self.assertFalse(validate_proposal(c, p))
 
     def test_strict_json(self):
         for raw in ('{"a":1,"a":2}', '{"n":NaN}', '{"n":1e999}',
