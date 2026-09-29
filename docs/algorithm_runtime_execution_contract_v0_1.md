@@ -101,6 +101,8 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `plan_id` | string | **是** | 非空。用于审计与后续按计划查询。 |
+| `scene_id` | string | **是** | 非空。必须与 Runtime 的活动场景一致，见 5.3。 |
+| `map_version` | string | **是** | 非空。必须与当前标定的地图版本一致，见 5.3。 |
 | `intent_id` | string | 否 | 上游意图标识，便于串联。 |
 | `mission_type` | string | 否 | 任务类型标签，仅用于显示与审计。 |
 | `explanation` | string | 否 | 人类可读说明。 |
@@ -222,15 +224,34 @@ Runtime 的策略注册表声明了 **21 个动作**，其中只有 4 个有真�
 
 之所以在起飞前全量校验：否则会出现"飞了第 1 步才发现第 2 步没目标"。
 
-### 5.3 场景一致性（如算法侧携带 `scene_id` / `map_version`）
+### 5.3 场景身份必须携带且必须一致（**已实现**，2026-09-28）
 
-算法侧 proposal schema 里有 `scene_id` 与 `map_version`。**这些字段目前不在
-`/api/plans/execute` 的请求体内**，Runtime 也不会据此校验。
+`plan.scene_id` 与 `plan.map_version` 是**必填**的非空字符串，Runtime 会在执行前
+与自己的**活动场景**核对：
 
-若要把它们纳入契约（推荐），规则应当是：**与 Runtime 当前标定的 `scene_id` 不一致时拒绝执行**。
-否则算法侧可能基于 A 场景的地图规划，而 Runtime 在 B 场景里飞。**该字段的加入需双方确认后实现。**
+| 情况 | 原因码 |
+| --- | --- |
+| `scene_id` 与 Runtime 实际加载的场景不一致 | `scene_id_mismatch` |
+| `map_version` 与当前标定的地图版本不一致 | `map_version_mismatch` |
+| Runtime 无法确定自己的活动场景 | `scene_identity_unavailable` |
 
-### 5.4 计划必须经审批
+**任一情况都在任何一步起飞前拒绝整份计划。**
+
+对照基准是 Runtime **实际加载**的场景（由 `scenarios/<id>/scene.json` 决定），
+不是计划里声明的 —— 拿调用方的声明去核对调用方等于没校验。
+
+为什么必须挡在这里：坐标只在某个场景里有意义。为 A 地图生成的计划若在 B 地图上
+执行，飞机会飞到由错误基准推导出的位置，**而动作层不会报错** —— 它会老老实实
+飞到那个错误坐标并返回 `pass`。
+
+> 缺失字段同样被拒绝（HTTP 400）。不能因为"字段没填"就跳过校验：无法核对的
+> 计划正是最该拒绝的情况。
+
+**一个刻意的克制**：没有标定时**不**报 `map_version_mismatch`。缺标定是 `goto`
+自己该报的 `coordinate_calibration_unavailable`，在此冒充"地图不匹配"会把调用方
+引向错误的排查方向。
+
+#### 5.4 计划必须经审批
 
 `decision: "reject"` 时不执行任何动作，返回：
 
@@ -379,9 +400,31 @@ Runtime 的策略注册表声明了 **21 个动作**，其中只有 4 个有真�
 | --- | --- |
 | `HOLD` / `RETURN_HOME` 端点 | 未实现；注册表已声明 |
 | `OBSERVE` 端点 | 未实现；需要感知载荷接口定义 |
-| `scene_id` / `map_version` 纳入请求并校验 | 未实现；见 5.3 |
-| proposal → plan 的转换器 | 未实现；A→C→B 计划中的 C |
+| `scene_id` / `map_version` 纳入请求并校验 | ✅ **已实现**（2026-09-28，见 5.3） |
+| proposal → plan 的转换器 | ✅ **已实现**：`frontend/swarm-console/simulation-3d/tools/proposal-to-plan.mjs`（尚未接 CLI/HTTP） |
 | 计划级反馈回调（Runtime → 算法侧推送） | 未实现；当前算法侧需轮询 `GET /api/actions/recent` 或重读计划结果 |
+
+### 转换器（`proposal-to-plan.mjs`）
+
+把提案展开成可提交的 plan。**先全量校验，任一问题就拒绝整份提案**并指出具体的
+task / action / waypoint 与原因 —— 绝不静默跳过，也绝不提交"可执行子集"充当原任务。
+
+```js
+import { proposalToPlan, ProposalRejected } from "./tools/proposal-to-plan.mjs";
+
+try {
+  const { plan, notes } = proposalToPlan(proposal, context, { takeoffAltitudeM: 5 });
+  // plan 可直接作为 POST /api/plans/execute 的 plan 字段
+} catch (error) {
+  if (error instanceof ProposalRejected) {
+    return error.toResponse();   // { result:"blocked", failure_reason, detail:{violations} }
+  }
+  throw error;
+}
+```
+
+**`takeoffAltitudeM` 必须显式传入**，不从 `context.constraints.min_altitude_m` 推断 ——
+那是"允许的最低高度"约束，不是任务要求的高度。
 
 ---
 
