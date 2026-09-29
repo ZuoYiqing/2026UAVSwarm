@@ -1,0 +1,379 @@
+{
+  "format": "uavswarm-scene-affordances",
+  "format_version": "0.1",
+  "status": "exported_from_physics_pending_review",
+  "note": "本清单描述**物理世界里实际存在的东西**，供算法把自然语言指代绑定到具体实体。所有坐标与尺寸由世界文件导出，未新增人工语义标签 —— 命名与区域划分需由负责方给出并签字，凭空命名会让算法把假设当已知。",
+  "scene_identity": {
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "public_frame": "scene_ned",
+    "origin": {
+      "lat_deg": 47.3979709,
+      "lon_deg": 8.5461639,
+      "alt_m": 0
+    },
+    "home": {
+      "x_m": 0,
+      "y_m": 0,
+      "z_m": 0
+    },
+    "axis_convention": {
+      "frame": "scene_ned",
+      "north": "+x 方向的分量名为 north_m",
+      "east": "+y 方向的分量名为 east_m",
+      "down": "down_m 向下为正（与 z 向上相反）"
+    }
+  },
+  "coordinate_note": "本清单用 scene_ned 的 north_m / east_m / down_m。世界文件里是 ENU（x=东, y=北, z=上），导出时已换算：north_m = y, east_m = x, down_m = -z。",
+  "source_files": {
+    "world": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+    "scene_declaration": "scenarios/simple_recon_v0_1/scene.json",
+    "harness_config": "simulation/px4_gazebo/config/three_uav_sitl.json"
+  },
+  "exported_on": "2026-09-29",
+  "exporter": "_ops/export-scene-affordances.py",
+  "coverage": {
+    "complete_physical_map": false,
+    "scope": "物理世界已加载的实体；不含未导入的视觉专用几何",
+    "not_included": [
+      "前端 city-layout.js 的其余 255 栋楼（视觉存在、物理未导入）",
+      "qianlan_city_v1 场景的任何几何（physics_status=not_imported）",
+      "任何人工区域命名或任务区划分"
+    ],
+    "important": "地面为 2000×2000 m 平面（±1000 m），之外没有地面。地形处处为 0 m，无山地起伏。"
+  },
+  "obstacles": [
+    {
+      "object_id": "link-block-4-3-0-0",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 268.0,
+      "center_east_m": -199.75,
+      "size_north_m": 48.915,
+      "size_east_m": 67.62,
+      "height_m": 20.0,
+      "base_down_m": -0.0,
+      "top_down_m": -20.0,
+      "distance_from_origin_m": 334.3,
+      "bearing_from_origin": "北西",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-1-0",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 268.0,
+      "center_east_m": -73.25,
+      "size_north_m": 50.736,
+      "size_east_m": 70.151,
+      "height_m": 23.0,
+      "base_down_m": -0.0,
+      "top_down_m": -23.0,
+      "distance_from_origin_m": 277.8,
+      "bearing_from_origin": "北西",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-2-0",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 268.0,
+      "center_east_m": 53.25,
+      "size_north_m": 38.62,
+      "size_east_m": 80.361,
+      "height_m": 32.0,
+      "base_down_m": -0.0,
+      "top_down_m": -32.0,
+      "distance_from_origin_m": 273.2,
+      "bearing_from_origin": "北",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-3-0",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 268.0,
+      "center_east_m": 179.75,
+      "size_north_m": 41.528,
+      "size_east_m": 68.417,
+      "height_m": 22.0,
+      "base_down_m": -0.0,
+      "top_down_m": -22.0,
+      "distance_from_origin_m": 322.7,
+      "bearing_from_origin": "北东",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-0-1",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 350.0,
+      "center_east_m": -199.75,
+      "size_north_m": 40.734,
+      "size_east_m": 79.971,
+      "height_m": 19.0,
+      "base_down_m": -0.0,
+      "top_down_m": -19.0,
+      "distance_from_origin_m": 403.0,
+      "bearing_from_origin": "北西",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-1-1",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 350.0,
+      "center_east_m": -73.25,
+      "size_north_m": 41.103,
+      "size_east_m": 60.923,
+      "height_m": 41.0,
+      "base_down_m": -0.0,
+      "top_down_m": -41.0,
+      "distance_from_origin_m": 357.6,
+      "bearing_from_origin": "北",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-2-1",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 350.0,
+      "center_east_m": 53.25,
+      "size_north_m": 50.366,
+      "size_east_m": 72.854,
+      "height_m": 52.0,
+      "base_down_m": -0.0,
+      "top_down_m": -52.0,
+      "distance_from_origin_m": 354.0,
+      "bearing_from_origin": "北",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-3-1",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 350.0,
+      "center_east_m": 179.75,
+      "size_north_m": 39.776,
+      "size_east_m": 83.414,
+      "height_m": 24.0,
+      "base_down_m": -0.0,
+      "top_down_m": -24.0,
+      "distance_from_origin_m": 393.5,
+      "bearing_from_origin": "北东",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-0-2",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 432.0,
+      "center_east_m": -199.75,
+      "size_north_m": 46.662,
+      "size_east_m": 62.812,
+      "height_m": 38.0,
+      "base_down_m": -0.0,
+      "top_down_m": -38.0,
+      "distance_from_origin_m": 475.9,
+      "bearing_from_origin": "北西",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-1-2",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 432.0,
+      "center_east_m": -73.25,
+      "size_north_m": 37.894,
+      "size_east_m": 64.473,
+      "height_m": 36.0,
+      "base_down_m": -0.0,
+      "top_down_m": -36.0,
+      "distance_from_origin_m": 438.2,
+      "bearing_from_origin": "北",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-2-2",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 432.0,
+      "center_east_m": 53.25,
+      "size_north_m": 49.345,
+      "size_east_m": 75.775,
+      "height_m": 36.0,
+      "base_down_m": -0.0,
+      "top_down_m": -36.0,
+      "distance_from_origin_m": 435.3,
+      "bearing_from_origin": "北",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    },
+    {
+      "object_id": "link-block-4-3-3-2",
+      "kind": "building",
+      "frame": "scene_ned",
+      "center_north_m": 432.0,
+      "center_east_m": 179.75,
+      "size_north_m": 49.012,
+      "size_east_m": 79.234,
+      "height_m": 52.0,
+      "base_down_m": -0.0,
+      "top_down_m": -52.0,
+      "distance_from_origin_m": 467.9,
+      "bearing_from_origin": "北东",
+      "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+      "physics_status": "imported_with_collision"
+    }
+  ],
+  "obstacle_cluster": {
+    "summary_id": "city-block-4-3",
+    "kind": "building_cluster",
+    "object_count": 12,
+    "center_north_m": 350.0,
+    "center_east_m": -10.0,
+    "extent_north_m": [
+      268.0,
+      432.0
+    ],
+    "extent_east_m": [
+      -199.75,
+      179.75
+    ],
+    "height_range_m": [
+      19.0,
+      52.0
+    ],
+    "distance_from_origin_m": 350.1,
+    "bearing_from_origin": "北",
+    "min_east_west_clearance_m": 48.4,
+    "min_clearance_between": [
+      "link-block-4-3-2-1",
+      "link-block-4-3-3-1"
+    ],
+    "layout": "4 列（东西）× 3 行（南北），列间距一致",
+    "source": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+  },
+  "declared_scene_entities": {
+    "note": "来自 scene.json 的声明。⚠️ 该文件目前**不含**上面 12 栋楼，因此它单独看不是完整的障碍物真值。",
+    "obstacles": [
+      {
+        "obstacle_id": "building-001",
+        "type": "box",
+        "position": {
+          "x_m": 15,
+          "y_m": 0,
+          "z_m": -5
+        },
+        "size_m": {
+          "x": 6,
+          "y": 6,
+          "z": 10
+        }
+      }
+    ],
+    "no_fly_zones": [
+      {
+        "zone_id": "nfz-001",
+        "shape": "cylinder",
+        "center": {
+          "x_m": 10,
+          "y_m": 10,
+          "z_m": 0
+        },
+        "radius_m": 5,
+        "min_alt_m": 0,
+        "max_alt_m": 20
+      }
+    ],
+    "mission_areas": [
+      {
+        "area_id": "recon-area-001",
+        "shape": "circle",
+        "center": {
+          "x_m": 30,
+          "y_m": 15,
+          "z_m": 0
+        },
+        "radius_m": 8
+      }
+    ],
+    "targets": [
+      {
+        "target_id": "target-001",
+        "type": "recon_target",
+        "position": {
+          "x_m": 30,
+          "y_m": 15,
+          "z_m": 0
+        },
+        "radius_m": 3,
+        "description": "static recon target"
+      }
+    ]
+  },
+  "infrastructure": {
+    "note": "起降坪与载具出生点，来自世界文件与 harness 配置。",
+    "landing_pads": [
+      {
+        "object_id": "landing-pad-UAV-01",
+        "kind": "landing_pad"
+      },
+      {
+        "object_id": "landing-pad-UAV-02",
+        "kind": "landing_pad"
+      },
+      {
+        "object_id": "landing-pad-UAV-03",
+        "kind": "landing_pad"
+      }
+    ],
+    "vehicle_spawns": [
+      {
+        "node_id": "UAV-01",
+        "spawn_ned": {
+          "x_m": 0,
+          "y_m": 0,
+          "z_m": 0,
+          "yaw_deg": 0
+        },
+        "gazebo_model_name": "x500_0"
+      },
+      {
+        "node_id": "UAV-02",
+        "spawn_ned": {
+          "x_m": 0,
+          "y_m": 8,
+          "z_m": 0,
+          "yaw_deg": 0
+        },
+        "gazebo_model_name": "x500_1"
+      },
+      {
+        "node_id": "UAV-03",
+        "spawn_ned": {
+          "x_m": 0,
+          "y_m": -8,
+          "z_m": 0,
+          "yaw_deg": 0
+        },
+        "gazebo_model_name": "x500_2"
+      }
+    ]
+  },
+  "semantic_labels": {
+    "note": "**本清单不提供任何人工语义标签。** 算法可以用上文的 bearing_from_origin 与距离自行描述（例如「东北方向 350 m 的楼群」），这些词由坐标直接推导。若需要「作业区甲」这类命名，须由负责方给出并标明来源与版本。",
+    "bearing_derivation": "bearing_from_origin 由坐标直接推导：仅当某分量绝对值 ≥ 另一分量 × 0.25 时才写入方位词，即**偏角小于约 14 度时只报主方向**。例如楼群中心 north=350.0 / east=-10.0（偏西 1.6 度）被判读为「北」，该判读掩盖了那 10 m 的东西偏移。**需要精确方位时请直接读 center_north_m / center_east_m，不要只依赖方位词。**",
+    "provided": []
+  }
+}
