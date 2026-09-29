@@ -426,6 +426,42 @@ try {
 **`takeoffAltitudeM` 必须显式传入**，不从 `context.constraints.min_altitude_m` 推断 ——
 那是"允许的最低高度"约束，不是任务要求的高度。
 
+#### 闭环验证脚本
+
+`_ops/run-converter-flight.py`（运维工具，不在仓库内）把整条链串起来：
+转换 → 契约校验 → 场景核对 → 执行。
+
+```bash
+# 默认：只转换与校验，不提交、不执行
+python _ops/run-converter-flight.py
+
+# 真飞（会让 UAV-01 起飞）
+python _ops/run-converter-flight.py --execute
+```
+
+**安全默认是刻意的**：这个脚本会让飞机起飞，所以"演练"必须是默认、"真飞"必须是
+显式选择。早先的版本把提交写成无条件执行，只用一个 `--dry-run` 去跳过提示语，
+结果本意只是校验的那次真的让飞机飞了出去 —— 已修正，并把这个教训写在脚本注释里。
+
+**2026-09-28 实测结果**（`simple_recon_v0_1`，UAV-01）：
+
+```
+[1] 转换器产出 3 步：takeoff(altitude_m=3) → goto(north=60,east=12,down=-20) → land
+[2] 场景核对 ✅
+[3] result=completed，三步全 pass，耗时 50 秒
+[4] 落在 N=59.2 E=12.0（目标 60/12，误差 0.8 m），已 disarm、高度 0
+```
+
+#### 已知的接口事实：算法样例的场景身份与本机不同
+
+算法侧的 `examples/flight_validation_only.json` 用 `scene_id=lab-campus`，
+而本机运行的是 `simple_recon_v0_1`。**因此那份样例不能直接在本机执行** ——
+提交会被 `scene_id_mismatch` 拒绝。这是校验按设计工作，不是缺陷。
+
+要在本机跑通需要一份与本机对齐的 context（见 `_ops/context-runtime-e2e.json`）。
+`tests/unit/test_converter_runtime_interface.py` 里有一条测试专门钉住这个事实：
+若算法样例的场景身份哪天变了，测试会失败以提醒更新本节。
+
 ---
 
 ## 11. 相关文档
