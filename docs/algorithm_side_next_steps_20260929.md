@@ -222,7 +222,7 @@ gcs_local_port / spawn_ned / runtime_dir
 ### 4.3 自测方法（不必等我们）
 
 ```bash
-# 转换器：proposal + context -> plan（会在拒绝时给出具体 task/action/waypoint）
+# 转换器：proposal + context -> plan（拒绝时给出具体 task/action/waypoint）
 node --input-type=module -e "
   import { proposalToPlan } from 'D:/2026UAVSwarm/frontend/swarm-console/simulation-3d/tools/proposal-to-plan.mjs';
   // ... 你的 proposal 与 context
