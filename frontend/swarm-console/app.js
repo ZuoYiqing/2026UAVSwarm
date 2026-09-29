@@ -1664,7 +1664,12 @@ function topbar() {
     : summary.total > 0 && summary.online === summary.total
       ? "HEALTHY"
       : summary.online > 0 ? "DEGRADED" : "OFFLINE";
-  return `<header class="topbar">
+  // 只返回 topbar 的**内容**，不返回 <header> 本身。
+  //
+  // <header class="topbar" id="slot-topbar"> 由 ensureShell() 建一次，且它必须是
+  // .shell 的直接子元素（CSS 靠自动落格把它放在第 1 行通栏）。
+  // 这里若再返回一层 <header>，就会出现 header 套 header 的冗余结构。
+  return `
     <div class="brand"><div class="mark"></div><div class="brand-title">2026UAVSwarm Console</div></div>
     <div class="top-pill profile-pill">Ground Profile</div>
     <div class="top-pill">Fleet Telemetry<strong class="${state.backendConnected ? "green" : "amber"}">${fleetState}</strong></div>
@@ -1677,14 +1682,15 @@ function topbar() {
       <button class="icon-btn" title="三维态势" onclick="setPage('twin')">3D</button><button class="icon-btn" title="状态说明" onclick="showStatusHelp()">?</button><button class="icon-btn" title="刷新 Runtime" onclick="probeRuntime({notifyUser:true})">R</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
       <div class="small top-time">${esc(now.toLocaleDateString("zh-CN"))}<br>UTC+8</div>
-    </div>
-  </header>`;
+    </div>`;
 }
 
 function sidebar() {
-  return `<aside class="sidebar"><nav class="nav">
+  // 同 topbar()：只返回导航内容。<aside class="sidebar" id="slot-sidebar">
+  // 由 ensureShell() 建一次，并作为 .shell 的直接子元素参与网格自动落格。
+  return `<nav class="nav">
     ${navItems.map(([id, label, icon]) => `<button class="${state.page === id ? "active" : ""}" onclick="setPage('${id}')"><span class="nav-icon">${icon}</span><span>${label}</span><span>›</span></button>`).join("")}
-  </nav></aside>`;
+  </nav>`;
 }
 
 function setPage(page) {
