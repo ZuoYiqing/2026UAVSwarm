@@ -281,8 +281,15 @@ export function proposalToPlan(proposal, context, options = {}) {
     steps,
   };
 
+  // 说明文字里的载具数量必须按实际计划算，不能写死。
+  //
+  // 这里原先是硬编码的"三机"，而算法侧交付的单机提案只有 1 台，
+  // 于是输出成"本计划只证明三机起飞"—— 对一份单机计划是错的。
+  // 这类文案错误会让人误判计划范围，所以按实际 step 里的 node_id 统计。
+  const vehicleIds = [...new Set(steps.map((s) => s.node_id))].sort();
   notes.push(
-    "本计划只证明三机起飞、按航点飞行、降落。它不证明巡检、避障、间距、能源或时序安全。",
+    `本计划只证明 ${vehicleIds.length} 台载具（${vehicleIds.join("、")}）起飞、按航点飞行、降落。` +
+      "它不证明巡检、避障、间距、能源或时序安全。",
   );
 
   return { plan, notes };
