@@ -242,8 +242,18 @@ viewer.clock.multiplier = 1;
 viewer.clock.shouldAnimate = false;
 
 let activeTileset;
-let activeSceneId = "city";
-let activeViewId = "city";
+// 默认场景 = recon（simple_recon_v0_1），而不是 city（青岚市）。
+//
+// 为什么改：Runtime 提供的数据**始终**是 simple_recon_v0_1 那一套
+// （场景身份由 scenarios/<id>/scene.json 决定）。默认选 city 时，
+// 每次对齐都因 scene_id 不匹配而失败，载具位置被丢弃、判为 stale，
+// 表现为"界面上看不到飞机" —— 而这是默认配置造成的，用户什么都没做错。
+//
+// 青岚市仍在场景列表里可选（它有独立的视觉价值），只是物理世界尚未导入，
+// 所以不该作为默认。详见 docs/OPEN_vehicle_capability_semantics_ownership.md
+// 与 docs/TODO_city_world_import.md。
+let activeSceneId = "recon";
+let activeViewId = "campus";
 let sceneLoadGeneration = 0;
 let followEnabled = false;
 let lastDemoUpdateSeconds = -1;

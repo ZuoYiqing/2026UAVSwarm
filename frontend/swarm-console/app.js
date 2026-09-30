@@ -546,16 +546,20 @@ function eventList() {
 }
 
 function vehicleTable() {
-  // 空状态也要保留 #vehicle-table-body 锚点。
+  // 空状态与表格**同时**存在，由 CSS/JS 控制显隐，而不是二选一渲染。
   //
-  // 否则会出现"永远建不起来"：首次渲染时数据还没到 → 走出空状态分支、没有锚点；
-  // 之后数据到了，局部更新找不到锚点就什么都不做，表格再也不会出现。
-  // 这是实测踩到的：fleet 已有 3 台，界面却一直停在"尚未提供已注册载具"。
-  return `<table class="table">
+  // 为什么不能二选一：首次渲染时数据往往还没到，若那时只渲染空状态、不建
+  // #vehicle-table-body 锚点，之后数据到达时局部更新找不到锚点就什么都不做，
+  // 表格永远不会出现（实测踩到：fleet 已有 3 台，界面停在"尚未提供载具"）。
+  //
+  // 但**只保留锚点还不够**：空状态 div 若由首屏决定是否渲染，数据到达后它不会被
+  // 移除 —— 于是出现"表格已有 3 行、下面还写着'尚未提供载具'"（实测截图确认）。
+  // 因此空状态固定渲染，显隐交给 updatePageInPlace()。
+  return `<table class="table" id="vehicle-table">
     <thead><tr><th>节点</th><th>状态</th><th>Identity</th><th>模式</th><th>高度</th><th>电量</th></tr></thead>
-    <tbody id="vehicle-table-body">${state.fleet.length ? vehicleTableRows() : ""}</tbody>
+    <tbody id="vehicle-table-body">${vehicleTableRows()}</tbody>
   </table>
-  ${state.fleet.length ? "" : `<div class="empty-state">Runtime 尚未提供已注册载具</div>`}`;
+  <div class="empty-state" id="vehicle-table-empty" ${state.fleet.length ? "hidden" : ""}>Runtime 尚未提供已注册载具</div>`;
 }
 
 /** 只生成表格行，供同页局部更新使用（不重建整个表格）。 */
@@ -1640,6 +1644,13 @@ function updatePageInPlace() {
 
   const table = document.getElementById("vehicle-table-body");
   if (table) table.innerHTML = vehicleTableRows();
+  // 空状态的显隐必须在这里同步。
+  //
+  // 它由首屏渲染决定是否可见，而首屏通常还没有数据 —— 若不在局部更新里纠正，
+  // 数据到达后表格已填好、空状态却仍留在下面（实测："表格有 3 行，
+  // 下面还写着 'Runtime 尚未提供已注册载具'"）。
+  const emptyNote = document.getElementById("vehicle-table-empty");
+  if (emptyNote) emptyNote.hidden = state.fleet.length > 0;
   const telemetry = document.getElementById("selected-telemetry");
   if (telemetry) telemetry.innerHTML = telemetrySummary();
   const summary = fleetSummary();
