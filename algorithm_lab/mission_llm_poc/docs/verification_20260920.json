@@ -1,0 +1,33 @@
+{
+  "recorded_date": "2026-09-20",
+  "base_commit": "6116912e6abdcd03f16a81d598472b0263810b24",
+  "scope": "Documentation, offline research, historical dependency inventory cleanup; no algorithm source changes",
+  "unit_tests": {
+    "command": ".venv/Scripts/python.exe -m unittest discover -s tests -v",
+    "total": 19,
+    "passed": 19,
+    "elapsed_s": 1.116
+  },
+  "scaffold": {
+    "command": ".venv/Scripts/python.exe -m uavswarm_llm_lab benchmark --output results/scaffold-recheck-20260920.json",
+    "total": 40,
+    "passed": 40,
+    "local_artifact": "results/scaffold-recheck-20260920.json",
+    "artifact_committed": false,
+    "sha256": "461e145f2cc9e3e9779167ad01aaaf294f63b03965c25e0744628b549124de08",
+    "note": "Local results directory is ignored; rerun with a new output filename. Scaffold checks do not measure model quality."
+  },
+  "dependencies_check": "pip check: No broken requirements found.",
+  "model_executed": false,
+  "model_weights_downloaded": false,
+  "model_quality_measured": false,
+  "inference_engine_offline_cold_start_verified": false,
+  "flight_execution_attempted": false,
+  "runtime_frontend_flight_source_changed": false,
+  "limitations": [
+    "No real model inference, throughput, power or VRAM benchmark",
+    "Paper and vendor results are external reports, not project reproductions",
+    "Twenty-two mission fixtures do not establish natural-language intent accuracy",
+    "No trajectory safety, obstacle avoidance, separation or flight execution validation"
+  ]
+}

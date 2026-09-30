@@ -2,8 +2,30 @@
 from __future__ import annotations
 
 import math
+import re
 
 from .contracts import schema_errors
+
+
+_UNPROVEN_CLAIMS = (
+    ("UNPROVEN_ROUTE_CLAIM", re.compile(
+        r"\b(?:direct\s+path\s+(?:is\s+)?(?:available|feasible|clear|safe)|"
+        r"path\s+(?:is\s+)?(?:clear|safe|feasible)|collision[- ]free)\b", re.I)),
+    ("UNPROVEN_CONSTRAINT_CLAIM", re.compile(
+        r"\b(?:all\s+constraints\s+(?:are\s+)?(?:met|satisfied)|"
+        r"constraints\s+(?:are\s+)?(?:met|satisfied))\b", re.I)),
+    ("UNPROVEN_ENERGY_CLAIM", re.compile(
+        r"\b(?:assume\s+sufficient|energy\s+(?:is\s+)?sufficient|"
+        r"sufficient\s+battery\s+for\s+(?:the\s+)?(?:mission|round[- ]trip))\b", re.I)),
+)
+
+
+def rationale_claim_errors(proposal: dict) -> list[str]:
+    """Detect known affirmative claims; this is a rejection filter, not a safety proof."""
+    explanations = [proposal["explanation"]] + [
+        assignment["explanation"] for assignment in proposal["assignments"]]
+    text = "\n".join(explanations + proposal["warnings"])
+    return [code for code, pattern in _UNPROVEN_CLAIMS if pattern.search(text)]
 
 
 def context_errors(context: dict, elapsed_ms: float = 0) -> list[str]:
@@ -133,4 +155,5 @@ def validate_proposal(context: dict, proposal: dict,
             errors.append("STATUS_REASON_MISMATCH")
     if status != "rejected" and len(assigned_nodes) < context["constraints"]["min_vehicles"]:
         errors.append("INSUFFICIENT_FLEET")
+    errors.extend(rationale_claim_errors(proposal))
     return sorted(set(errors))

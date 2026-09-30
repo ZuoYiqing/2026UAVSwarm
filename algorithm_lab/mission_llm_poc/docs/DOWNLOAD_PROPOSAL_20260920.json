@@ -1,0 +1,89 @@
+{
+  "manifest_version": "0.1",
+  "recorded_date": "2026-09-20",
+  "status": "PROPOSED_NOT_DOWNLOADED",
+  "purpose": "First offline text-only mission proposal experiment on the existing RTX 4050 Laptop GPU",
+  "download_requires_user_approval": true,
+  "model_executed": false,
+  "target_profile": {
+    "os": "Windows x64",
+    "gpu": "RTX 4050 Laptop GPU",
+    "vram_mib": 6141,
+    "observed_driver": "566.24",
+    "compatibility_status": "Pending actual binary and model smoke test; no driver update authorized"
+  },
+  "proposed_root_relative_to_module": "artifacts",
+  "payload_total_bytes": 3386449166,
+  "proposed_free_disk_budget_bytes": 10000000000,
+  "budget_note": "10 GB planning reserve includes compressed binaries, extraction and results; not a measured installed size.",
+  "preparation_network_allowed_only_after_approval": true,
+  "deployed_inference_requires_internet": false,
+  "external_model_fallback_allowed": false,
+  "artifacts": [
+    {
+      "role": "text_model",
+      "publisher": "unsloth",
+      "upstream_model": "Qwen/Qwen3.5-4B",
+      "repository": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "filename": "Qwen3.5-4B-Q4_K_M.gguf",
+      "size_bytes": 2740937888,
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
+      "proposed_local_relative_path": "artifacts/models/qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf",
+      "license": "Apache-2.0 per upstream model; retain upstream and quantizer notices",
+      "provenance": "Community quantization, not an official upstream quantized artifact",
+      "hash_source": "Public repository LFS metadata; not a local file verification"
+    },
+    {
+      "role": "inference_engine_archive",
+      "publisher": "ggml-org",
+      "release": "b10964",
+      "stable_release_reference": "v0.4.1",
+      "filename": "llama-b10964-bin-win-cuda-12.4-x64.zip",
+      "size_bytes": 254067651,
+      "sha256": "264f20d7ee3860aecca9ec12418357a9f3e80349a2b186f66c63859ded1a9593",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10964/llama-b10964-bin-win-cuda-12.4-x64.zip",
+      "proposed_local_relative_path": "artifacts/downloads/llama-b10964-bin-win-cuda-12.4-x64.zip",
+      "license": "llama.cpp MIT; retain bundled third-party notices",
+      "hash_source": "GitHub release asset digest; not a local file verification"
+    },
+    {
+      "role": "cuda_runtime_archive",
+      "publisher": "ggml-org release bundle",
+      "release": "b10964",
+      "filename": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "size_bytes": 391443627,
+      "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10964/cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "proposed_local_relative_path": "artifacts/downloads/cudart-llama-bin-win-cuda-12.4-x64.zip",
+      "license": "CUDA runtime components retain their own vendor notices and redistribution terms; not MIT solely because bundled",
+      "hash_source": "GitHub release asset digest; not a local file verification"
+    }
+  ],
+  "excluded_from_first_download": [
+    "mmproj-F16.gguf: 672423616 bytes, needed only for a separately approved image experiment",
+    "2B and 0.8B comparison weights: require their own pinned manifests",
+    "Training frameworks, additional frontend, Runtime modifications, flight-control integrations",
+    "System driver upgrades, global PATH changes and global package installation"
+  ],
+  "initial_experiment_settings": {
+    "context_tokens": 4096,
+    "max_output_tokens": 1024,
+    "batch_requests": 1,
+    "seed": 0,
+    "temperature": 0,
+    "automatic_output_repair": false,
+    "settings_status": "Proposed; verify token budget, template and structured-output support before benchmark"
+  },
+  "gates": [
+    "Save model, quantizer, engine and bundled dependency licenses and metadata before accepting the offline bundle.",
+    "Hash each downloaded file locally and compare with this manifest; fail on mismatch, never silently select a replacement.",
+    "Inspect archive paths before extraction; keep binaries and DLLs under artifacts rather than system directories.",
+    "Verify binary version, GPU loading, model template and schema behavior; no automatic driver upgrade or alternate cloud backend.",
+    "Start only a loopback inference service with explicit local paths and no external tools, telemetry or auto-download.",
+    "Verify offline cold start and unavailable-artifact failure in an isolated deployment test without interrupting other project services.",
+    "Run the existing 22 model tasks and separately add annotated natural-language tests; preserve raw failures.",
+    "Stop the experiment on resource conflict, OOM or unsafe integration assumptions; no actual vehicle execution."
+  ]
+}

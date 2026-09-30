@@ -1,0 +1,82 @@
+{
+  "recorded_date": "2026-09-28",
+  "base_commit": "c7d22c8515d5387d1adeefababf0c17d1c80b748",
+  "main_status_notice": "GitHub/main reported at 590164d; algorithm worktree intentionally not synchronized in this turn",
+  "scope": "Local model first-request evidence, contract hardening, D-drive preparation scripts",
+  "checks": {
+    "python_unit_tests": {
+      "total": 21,
+      "passed": 21,
+      "source_loading": "PYTHONPATH=src",
+      "elapsed_s": 8.746
+    },
+    "scaffold": {
+      "total": 40,
+      "passed": 40,
+      "model_executed": false,
+      "artifact": "results/scaffold-source-tree-20260928.json"
+    },
+    "downloader_tests": {
+      "total": 9,
+      "passed": 9,
+      "network_requests": 0,
+      "model_loads": 0
+    },
+    "pip_check": "No broken requirements found",
+    "diff_check": "passed"
+  },
+  "first_model_request": {
+    "run_date": "2026-09-22",
+    "context": "examples/three_uav_inspection.json",
+    "model": "qwen3.5-4b-q4-lab",
+    "schema_valid_under_then_current_schema": true,
+    "accepted": false,
+    "validator_errors": [
+      "STATUS_REASON_MISMATCH"
+    ],
+    "correct_task_node_action_waypoint_assignments": 3,
+    "total_assignments": 3,
+    "unsafe_or_unproved_explanation_patterns": [
+      "Direct path available",
+      "All constraints are met"
+    ],
+    "top_level_reason_returned": "ASSIGNED",
+    "top_level_reason_required": "MISSION_PROPOSED",
+    "latency_ms": 12196.197699995537,
+    "prompt_tokens": 1763,
+    "completion_tokens": 596,
+    "total_tokens": 2359,
+    "server_prompt_tokens_per_second": 1615.57,
+    "server_generation_tokens_per_second": 53.87,
+    "server_total_ms": 12135.72,
+    "resource_samples": 18,
+    "min_host_free_kib": 2894748,
+    "max_whole_gpu_used_mib": 2905,
+    "max_gpu_temperature_c": 58,
+    "execution_authorized": false,
+    "runtime_or_flight_called": false,
+    "original_artifact": "artifacts/runs/request-20260922T004440230Z/proposal.json"
+  },
+  "hardening_after_failure": {
+    "automatic_repair_added": false,
+    "schema_changes": [
+      "Top-level reason codes narrowed to mission-level codes",
+      "Status/reason and array-shape relationships encoded with JSON Schema conditionals",
+      "Unassigned task reason codes exclude assignment and mission-success codes"
+    ],
+    "prompt_changes": [
+      "Exact top-level status/reason mapping",
+      "ASSIGNED limited to assignment entries",
+      "No claims of route feasibility, clear paths, obstacle/no-fly clearance, separation, collision safety, energy, scheduling, or overall constraint satisfaction"
+    ],
+    "rerun_with_hardened_prompt": false,
+    "reason_not_rerun": "Current free host RAM was below the 5 GiB startup threshold during this continuation"
+  },
+  "limitations": [
+    "One rejected synthetic request is not a model benchmark",
+    "Schema conditional compatibility with the engine's constrained-decoding converter still requires a model-server rerun",
+    "No natural-language intent accuracy result",
+    "No isolated-network cold-start acceptance",
+    "No Runtime integration or vehicle execution"
+  ]
+}

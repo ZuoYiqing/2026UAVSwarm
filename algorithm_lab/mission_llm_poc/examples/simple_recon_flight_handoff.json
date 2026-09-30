@@ -1,0 +1,84 @@
+{
+  "mode": "objective_grounding_baseline",
+  "model_executed": false,
+  "execution_ready": false,
+  "input_hash": "cb4d811dac5d87b2741ddfb7fe527d60b1df7c700d4d55238ebfea4ca3a3082c",
+  "context": {
+    "schema_version": "0.1",
+    "mission_id": "simple-recon-flight-validation-001",
+    "snapshot_id": "synthetic-handoff-snapshot-20260929",
+    "source": "synthetic_benchmark",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "coordinate_frame": "scene_ned",
+    "objective": "对 verified-flight-route-001 做飞行验证：起飞、前往已验证航点、降落。",
+    "snapshot_age_ms": 0,
+    "snapshot_valid_for_ms": 120000,
+    "constraints": {
+      "min_battery_pct": 30, "max_sample_age_ms": 120000,
+      "min_vehicles": 1, "allow_partial": false,
+      "min_altitude_m": 3, "max_altitude_m": 30
+    },
+    "fleet": [{
+      "node_id": "UAV-01", "connected": true, "stale": false,
+      "battery_pct": 80, "capabilities": ["TAKEOFF", "GOTO", "LAND"],
+      "current_assignment": null,
+      "spatial": {
+        "frame": "scene_ned", "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "public_position_usable": true, "sample_age_ms": 0,
+        "position_m": {"north_m": 0, "east_m": 0, "down_m": 0}
+      }
+    }],
+    "waypoints": [{
+      "waypoint_id": "WP-VERIFIED-60-12-20",
+      "position_m": {"north_m": 60, "east_m": 12, "down_m": -20}
+    }],
+    "policy_denials": [],
+    "tasks": [{
+      "task_id": "TASK-1", "region_id": "verified-flight-route-001",
+      "required_actions": ["TAKEOFF", "GOTO", "LAND"],
+      "waypoint_ids": ["WP-VERIFIED-60-12-20"]
+    }]
+  },
+  "grounding": {
+    "authority": "objective", "intent_type": "flight_validation",
+    "bindings": [{
+      "task_id": "TASK-1", "region_id": "verified-flight-route-001",
+      "matched_text": "verified-flight-route-001",
+      "waypoint_ids": ["WP-VERIFIED-60-12-20"],
+      "source_reference": "docs/algorithm_side_next_steps_20260929.md#4.2"
+    }],
+    "limitations": [
+      "Labels and waypoint candidates were supplied; no unseen place names are inferred.",
+      "No geometry, payload, timing or real-time execution readiness is proven."
+    ]
+  },
+  "proposal": {
+    "schema_version": "0.1",
+    "mission_id": "simple-recon-flight-validation-001",
+    "snapshot_id": "synthetic-handoff-snapshot-20260929",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "coordinate_frame": "scene_ned",
+    "execution_authorized": false,
+    "status": "proposed",
+    "reason_code": "MISSION_PROPOSED",
+    "explanation": "Tasks derived from objective by exact supplied-label grounding; node allocation used the reference greedy baseline.",
+    "assignments": [{
+      "task_id": "TASK-1", "node_id": "UAV-01",
+      "actions": ["TAKEOFF", "GOTO", "LAND"],
+      "waypoint_ids": ["WP-VERIFIED-60-12-20"],
+      "reason_code": "ASSIGNED",
+      "explanation": "Eligible node; lowest assigned task count, then node_id."
+    }],
+    "unassigned_tasks": [],
+    "warnings": [
+      "PROPOSAL_ONLY: no execution authorization",
+      "GEOMETRY_NOT_VALIDATED: obstacles, no-fly zones and separation require a route planner",
+      "SCHEDULING_NOT_VALIDATED: shared-node tasks require Runtime scheduling",
+      "INTENT_GROUNDING_LIMITED: only supplied labels and waypoint candidates were used",
+      "SYNTHETIC_SNAPSHOT: fleet fields are test assumptions, not live telemetry"
+    ]
+  }
+}

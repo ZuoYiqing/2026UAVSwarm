@@ -51,17 +51,9 @@
     },
     "reason_code": {
       "enum": [
-        "ASSIGNED",
         "MISSION_PROPOSED",
         "PARTIAL_MISSION",
         "REQUEST_REJECTED",
-        "NODE_OFFLINE",
-        "TELEMETRY_STALE",
-        "BATTERY_LOW",
-        "BATTERY_UNKNOWN",
-        "NODE_BUSY",
-        "SPATIAL_UNAVAILABLE",
-        "CAPABILITY_MISSING",
         "POLICY_DENIED",
         "INSUFFICIENT_FLEET",
         "NO_ELIGIBLE_VEHICLE"
@@ -148,9 +140,6 @@
           },
           "reason_code": {
             "enum": [
-              "ASSIGNED",
-              "MISSION_PROPOSED",
-              "PARTIAL_MISSION",
               "REQUEST_REJECTED",
               "NODE_OFFLINE",
               "TELEMETRY_STALE",
@@ -183,5 +172,37 @@
       "maxItems": 100
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "proposed"}}},
+      "then": {
+        "properties": {
+          "reason_code": {"const": "MISSION_PROPOSED"},
+          "assignments": {"minItems": 1},
+          "unassigned_tasks": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "degraded"}}},
+      "then": {
+        "properties": {
+          "reason_code": {"const": "PARTIAL_MISSION"},
+          "assignments": {"minItems": 1},
+          "unassigned_tasks": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "rejected"}}},
+      "then": {
+        "properties": {
+          "reason_code": {"enum": ["REQUEST_REJECTED", "POLICY_DENIED", "INSUFFICIENT_FLEET", "NO_ELIGIBLE_VEHICLE"]},
+          "assignments": {"maxItems": 0},
+          "unassigned_tasks": {"minItems": 1}
+        }
+      }
+    }
+  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

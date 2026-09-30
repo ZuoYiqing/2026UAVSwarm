@@ -1,9 +1,38 @@
 # Mission LLM Lab v0.1
 
-独立的任务提案实验模块。当前完成 Step 1–2；尚未下载或运行大模型。
+独立的任务提案实验模块。已完成Step 1–2及Step 3的D盘下载、校验和首次模型加载。
+2026-09-22：[本地准备与资源实测](docs/LOCAL_MODEL_PREPARATION_20260922.md)。
+4B Q4模型已加载并完成一次真实任务提案；原始JSON有效且三项分配正确，
+但因顶层原因码错误被校验器拒绝。详见[首次提案与加固记录](docs/FIRST_MODEL_REQUEST_20260928.md)。
 
-验证结果：19/19 单元测试、40/40 框架案例、5/5 规则基线演示通过。
-证据见 docs/verification.json 与 docs/scaffold_validation.json。
+截至首次本地模型请求的验证：21/21单元测试、40/40框架案例、9/9离线下载器测试通过；
+真实模型1次请求完成但0次被接受。历史证据见docs/verification.json，
+当前证据见[verification_20260928.json](docs/verification_20260928.json)。
+与 Runtime `524cdf8` 的接口约定见[执行接口交接](docs/RUNTIME_EXECUTION_HANDOFF_20260928.md)。
+原三机巡检样例仍是研究提案，包含尚不可执行的观察与返航动作；
+另有[仅飞行验证样例](examples/flight_validation_only.json)供转换器验证，不能报告为巡检完成。
+2026-09-29 新增[目标语义绑定与集成交接](docs/INTENT_GROUNDING_HANDOFF_20260929.md)：
+新输入不带 `tasks[]`，由目标与带来源的场景可供性派生任务；
+[simple_recon_v0_1 输入](examples/simple_recon_flight_intent.json)和
+[转换器可读输出](examples/simple_recon_flight_handoff.json)均为合成飞行验证证据。
+本地 4B Q4 模型已真实运行一次受限目标绑定（通过）和一次加固后三机提案（原文含未经证明的
+路径/能源结论，离线回放已拒绝）。本轮记录见
+[verification_20260929.json](docs/verification_20260929.json)；29/29 单元测试通过。
+2026-09-30 新增[物理场景引用绑定与第二轮交接](docs/ROUND2_SCENE_BINDING_HANDOFF_20260930.md)：
+`bind-scene` 读取主线导出的楼群/建筑可供性，将自然语言方位绑定到真实实体 ID，
+但不把建筑中心当成飞行航点。最高建筑并列时要求澄清；巡检/观察需求因感知执行能力未确认
+而阻止生成可执行提案。见[本轮验证记录](docs/verification_20260930.json)；34/34 单元测试通过。
+
+2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
+[参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
+早期报告和verification.json是当时的历史记录，不表示当前Git提交状态。
+首轮待批准的[下载清单](docs/DOWNLOAD_PROPOSAL_20260920.json)已固定文件版本、大小和发布方哈希，
+三个主要制品合计约3.39GB；现已获批准、下载并在本地校验。
+原清单保持历史提案状态，实际进度见[准备记录](docs/local_model_preparation_20260922.json)。
+
+部署要求：所有任务推理完全离线，禁止闭源云模型调用、云端回退和自动联网下载。
+制品准备阶段与断网部署阶段分开验收。独立准备脚本显式下载批准制品，
+推理启动不自动联网取件；尚未完成隔离网络的真实引擎冷启动验收。
 
 输入结构化任务、自然语言目标和集群快照，输出受 JSON Schema 及语义校验约束的
 Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解自然语言。
@@ -16,6 +45,8 @@ Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解�
 ```powershell
 Set-Location 'D:\2026UAVSwarm-worktrees\algorithm-lab-local-llm-poc\algorithm_lab\mission_llm_poc'
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/three_uav_inspection.json
+.\.venv\Scripts\python.exe -m uavswarm_llm_lab ground examples/simple_recon_flight_intent.json
+.\.venv\Scripts\python.exe -m uavswarm_llm_lab bind-scene 'D:\2026UAVSwarm\docs\fixtures\simple_recon_v0_1_scene_affordances.json' '飞到北边那片楼群的东侧'
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/uav02_offline.json
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/policy_denied.json
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -39,20 +70,26 @@ python -m venv .venv
 运行时依赖为 jsonschema 及其锁定的间接依赖；测试使用 Python unittest。
 依赖文件锁定版本但未锁定下载制品哈希；模型部署阶段再记录完整制品清单。
 
+本地实验脚本会显式从本模块的 `src` 加载当前源码，并把主动配置的临时目录和缓存放在
+D盘 `artifacts` 下，因此修改实验代码后无需为了试跑反复构建安装包。
+直接执行Python测试时，先把 `PYTHONPATH` 设为本模块的 `src`；不要使用系统临时目录构建。
+
 ## 模块与契约
 
 - src/uavswarm_llm_lab/schemas：输入、输出 JSON Schema，拒绝额外字段。
 - contracts.py：严格 JSON、schema 校验、内容哈希。
 - semantic_validator.py：任务完整性、载具资格、Policy DENY、快照时效检查。
 - mission_planner.py：规则基线与可选模型推理流程。
-- local_model_client.py：显式指定的 loopback 文本推理服务，无工具调用。
+- local_model_client.py：可选的本机推理适配器，只调用 loopback 文本推理服务，无工具调用。
 - benchmark.py：框架验证和真实模型实验分开统计。
 - examples：5 个合成场景，绝不是当前无人机遥测。
 - tests：单元验证，无网络/飞控/模型权重依赖。
 - docs：代码审计、硬件核查及 Algorithm Delivery Report。
 
-输入必须提供权威 task/action/waypoint 清单。第一版只让模型提出分配并解释，
-尚未实现从自然语言自由生成任务图、覆盖路径或坐标。模型不得发明新航点。
+原有 `demo` / `infer` 路径仍以结构化 task/action/waypoint 清单为权威输入。
+新增 `ground` 路径从明确标签的自然语言目标派生 `tasks[]`，不生成新坐标；
+`ground-model` 允许本地模型提出语义绑定候选，但真实模型结果仍待复跑。
+两条路径的能力指标分别记录，不能把规则绑定结果当作模型理解能力。
 同一节点可承担多个任务；输出不是并发飞行时间表。
 规则基线按 task_id 排序，选择已分任务最少的合格节点，以 node_id 打破平局；
 这是参考方法，不能证明分配最优或穷尽所有可行解。
@@ -64,7 +101,13 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 
 ## 真实模型入口（Step 3 之后使用）
 
-先确定模型版本、量化、权重路径、许可证和推理框架，再另行批准下载。
+这里的client只是程序之间传递输入/输出的适配器，不是新的前端控制台，
+也不是模型本身；不要求安装Ollama。当前实现使用本机HTTP，未来也可实现
+同进程Python/C++或硬件厂商SDK后端，仍返回同样的实验提案；这些后端尚未实现。
+无人平台上是伴随计算机加载本地权重，不是把聊天页面或大模型装进飞控。
+现有前端不变；如何集成由Integration Owner决定。
+
+首轮模型、量化和便携引擎已固定并获批；新增制品仍须先确认。
 已有经过确认的本机模型服务时，可显式运行：
 
 ```powershell
@@ -72,13 +115,17 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab benchmark --local-model --base-url http://127.0.0.1:18080/v1 --model APPROVED_MODEL_ID --output results/model-run-001.json
 ```
 
-上述地址仅为待配置示例，当前未启动服务。客户端只支持 HTTP literal loopback；
+本机已在该地址完成一次加载及任务请求，当前服务已停止；重新启动仍要求至少5GiB可用RAM。
+客户端只支持 HTTP literal loopback；
 不使用环境代理、不跟随重定向、不重试、不发送 tools。
 默认请求约束 JSON；如服务不支持会明确失败。--unconstrained 仅用于显式对比。
 后续需按实际推理框架验证 schema 子集兼容性、模型身份和推理设置。
+loopback限制只约束本适配器，不能证明其后面的服务不会联网。
+正式部署还需预置全部权重/分词器/视觉处理器、限制引擎出站网络、
+关闭遥测及自动更新，并在隔离网络环境完成冷启动测试。
 
 记录原始文本、输入/提示词/输出哈希、服务返回模型名、token usage 和端到端耗时。
-尚未采集首 token 延迟、峰值显存、权重 revision 或 GPU 吞吐；未知值保持 null。
+单请求已采集总耗时、服务端吞吐及资源点样；首token、可靠峰值和p50/p95仍未知。
 seed 和 temperature=0 不保证不同硬件/推理实现逐字一致。
 当前不做自动修复；原始成功率和未来修复后成功率应分别统计。
 

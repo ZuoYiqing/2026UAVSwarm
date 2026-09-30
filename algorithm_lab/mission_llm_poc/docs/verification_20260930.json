@@ -1,0 +1,44 @@
+{
+  "recorded_date": "2026-09-30",
+  "scope": "Physical scene reference binding and explicit perception unavailability",
+  "source_affordances": "D:/2026UAVSwarm/docs/fixtures/simple_recon_v0_1_scene_affordances.json",
+  "source_affordances_canonical_hash": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+  "source_status": "exported_from_physics_pending_review",
+  "checks": {
+    "algorithm_unit_tests": {"passed": 34, "total": 34},
+    "runtime_converter_contract_tests": {"passed": 15, "total": 15},
+    "existing_flight_handoff_latest_converter": {
+      "accepted": true,
+      "step_count": 3,
+      "actions": ["takeoff", "goto", "land"],
+      "goto_scene_ned": {"north_m": 60, "east_m": 12, "down_m": -20}
+    },
+    "north_cluster_east_side": {
+      "status": "grounded_requires_planning",
+      "target_id": "city-block-4-3",
+      "center_north_m": 350,
+      "center_east_m": -10,
+      "proposal": null
+    },
+    "highest_building": {
+      "status": "clarification_required",
+      "reason_code": "AMBIGUOUS_HIGHEST_BUILDING",
+      "candidate_ids": ["link-block-4-3-2-1", "link-block-4-3-3-2"]
+    },
+    "reconnaissance_intent": {
+      "semantic_intent_parsed": true,
+      "required_actions_include": ["OBSERVE", "RETURN_HOME"],
+      "reason_code": "PERCEPTION_EXECUTION_UNAVAILABLE",
+      "proposal": null,
+      "accepted": false
+    }
+  },
+  "runtime_execution_called": false,
+  "model_loaded": false,
+  "limitations": [
+    "No planner-approved flight waypoints near buildings are supplied",
+    "Affordance export is pending provider review and is not a complete physical map",
+    "No camera capability or OBSERVE endpoint is confirmed",
+    "Binding to object geometry does not prove route or flight safety"
+  ]
+}
