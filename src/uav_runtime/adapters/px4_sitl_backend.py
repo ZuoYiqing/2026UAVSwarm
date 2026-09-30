@@ -625,6 +625,143 @@ class Px4SitlBackend:
         result["result"] = "pass"
         return self._finish_smoke_result(result)
 
+    def execute_hold_position_action(
+        self,
+        *,
+        tolerance_m: float = 2.0,
+        hold_s: float = 3.0,
+        timeout_s: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """让载具保持当前位置悬停（HOLD），并验证它真的没动。
+
+        与 ``goto`` 共用同一套模式机制（``AUTO + LOITER``），但**不需要坐标**：
+        HOLD 的语义就是"待在现在这里"。因此也不需要标定平移量 —— 没有坐标换算。
+
+        ⚠️ 判据是位置而不是模式
+        ----------------------
+        与 ``goto`` 一样，这里只接受**位置证据**。模式切换成功只说明飞控接受了
+        指令；风、估计器漂移、控制器问题都可能让它在 LOITER 下缓慢移动。
+        只报模式会让"动作报 pass 而飞机在飘"通过。
+        """
+        rejected = self._ensure_sitl_action_allowed("hold_position")
+        if rejected is not None:
+            return rejected
+        rejected = self._ensure_persistent_session_ready("hold_position")
+        if rejected is not None:
+            return rejected
+
+        result = self._base_action_result("hold_position")
+        result["completion_mode"] = "loiter_position_hold"
+
+        effective_timeout_s = (
+            float(timeout_s)
+            if timeout_s is not None
+            else float(self.config.observe_timeout_ms) / 1000.0
+        )
+        try:
+            outcome = self.session.hold_position(
+                tolerance_m=float(tolerance_m),
+                hold_s=float(hold_s),
+                timeout_s=effective_timeout_s,
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["failure_reason"] = f"px4_hold_position_exception:{type(exc).__name__}"
+            result["completion_state"] = "failed"
+            return self._finish_smoke_result(result)
+
+        result["mode"] = outcome.get("mode")
+        result["mode_confirmed"] = bool((outcome.get("mode") or {}).get("confirmed"))
+        result["held"] = bool(outcome.get("held"))
+        result["hold_reason"] = outcome.get("reason")
+        result["max_drift_m"] = outcome.get("max_drift_m")
+        result["hold_samples"] = outcome.get("samples")
+        result["held_s"] = outcome.get("held_s")
+        result["completion_evidence"] = {
+            "held": outcome.get("held"),
+            "reason": outcome.get("reason"),
+            "max_drift_m": outcome.get("max_drift_m"),
+            "samples": outcome.get("samples"),
+        }
+        result["completion_state"] = str(outcome.get("reason") or "unknown")
+
+        if outcome.get("failure_reason"):
+            result["failure_reason"] = str(outcome["failure_reason"])
+            return self._finish_smoke_result(result)
+
+        result["result"] = "pass"
+        return self._finish_smoke_result(result)
+
+    def execute_return_home_action(
+        self,
+        *,
+        timeout_s: float | None = None,
+        min_progress_m: float = 5.0,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """让载具自主返航（RETURN_HOME / ``AUTO + RTL``），并验证它真的在收敛。
+
+        ⚠️ 与那次事故的区别
+        -------------------
+        2026-09-28 的事故形状是：收尾阶段把"任意非 OFFBOARD 模式"当作安全悬停，
+        于是 **AUTO_RTL 被当成安全状态接受** —— 飞机开始自主返航，而动作报 pass。
+
+        这里做的是**完全相反**的事：RTL 是被**显式请求**的动作，而且**只有看到
+        到 home 的距离确实缩小**才算成功。模式切换本身不算成功。
+
+        RTL 仍然不在 ``mavlink_backend_session.PINNED_MODES`` 里 —— 那个集合的
+        语义是"确认安全、可作为回退目标"，RTL 是自主机动，不应被当作静止状态接受。
+        """
+        rejected = self._ensure_sitl_action_allowed("return_home")
+        if rejected is not None:
+            return rejected
+        rejected = self._ensure_persistent_session_ready("return_home")
+        if rejected is not None:
+            return rejected
+
+        result = self._base_action_result("return_home")
+        result["completion_mode"] = "auto_rtl_convergence"
+
+        effective_timeout_s = (
+            float(timeout_s)
+            if timeout_s is not None
+            else float(self.config.observe_timeout_ms) / 1000.0
+        )
+        try:
+            outcome = self.session.return_home(
+                timeout_s=effective_timeout_s,
+                min_progress_m=float(min_progress_m),
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["failure_reason"] = f"px4_return_home_exception:{type(exc).__name__}"
+            result["completion_state"] = "failed"
+            return self._finish_smoke_result(result)
+
+        result["mode"] = outcome.get("mode")
+        result["mode_confirmed"] = bool((outcome.get("mode") or {}).get("confirmed"))
+        result["returning"] = bool(outcome.get("returning"))
+        result["return_reason"] = outcome.get("reason")
+        result["initial_distance_m"] = outcome.get("initial_distance_m")
+        result["final_distance_m"] = outcome.get("final_distance_m")
+        result["distance_reduction_m"] = outcome.get("distance_reduction_m")
+        result["completion_evidence"] = {
+            "returning": outcome.get("returning"),
+            "reason": outcome.get("reason"),
+            "initial_distance_m": outcome.get("initial_distance_m"),
+            "final_distance_m": outcome.get("final_distance_m"),
+            "distance_reduction_m": outcome.get("distance_reduction_m"),
+        }
+        result["completion_state"] = str(outcome.get("reason") or "unknown")
+
+        if outcome.get("failure_reason"):
+            result["failure_reason"] = str(outcome["failure_reason"])
+            return self._finish_smoke_result(result)
+
+        result["result"] = "pass"
+        return self._finish_smoke_result(result)
+
     @staticmethod
     def _ack_accepted(ack: dict[str, Any]) -> bool:
         return not bool(ack.get("timeout")) and int(

@@ -59,6 +59,32 @@ class Px4RuntimeActionAdapter:
                 observe_timeout_ms=arguments.get("observe_timeout_ms"),
                 cancel_event=arguments.get("_cancel_event"),
             )
+        elif action in ("hold_position", "hold"):
+            # HOLD 不需要坐标，也就不需要标定平移量 —— 它的语义是"待在现在这里"。
+            raw = self.backend.execute_hold_position_action(
+                tolerance_m=float(arguments.get("tolerance_m", 2.0)),
+                hold_s=float(arguments.get("hold_s", 3.0)),
+                timeout_s=(
+                    float(arguments["timeout_s"]) if arguments.get("timeout_s") is not None
+                    else (
+                        float(arguments["observe_timeout_ms"]) / 1000.0
+                        if arguments.get("observe_timeout_ms") is not None else None
+                    )
+                ),
+                cancel_event=arguments.get("_cancel_event"),
+            )
+        elif action == "return_home":
+            raw = self.backend.execute_return_home_action(
+                timeout_s=(
+                    float(arguments["timeout_s"]) if arguments.get("timeout_s") is not None
+                    else (
+                        float(arguments["observe_timeout_ms"]) / 1000.0
+                        if arguments.get("observe_timeout_ms") is not None else None
+                    )
+                ),
+                min_progress_m=float(arguments.get("min_progress_m", 5.0)),
+                cancel_event=arguments.get("_cancel_event"),
+            )
         else:
             raw = {"action": action, "result": "fail", "failure_reason": "unsupported_px4_runtime_action"}
         passed = raw.get("result") == "pass"

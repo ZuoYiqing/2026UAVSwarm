@@ -27,10 +27,12 @@ from uav_runtime.agent.planner import (
 from uav_runtime.http.schemas import (
     BackendRequest,
     GotoRequest,
+    HoldPositionRequest,
     LandRequest,
     PlanExecuteRequest,
     PlanMissionRequest,
     RequestValidationError,
+    ReturnHomeRequest,
     SmokeTakeoffRequest,
     TakeoffRequest,
 )
@@ -515,6 +517,24 @@ def _execute_flight_action(
                 "observe_timeout_ms": req.observe_timeout_ms,
                 "_cancel_event": cancel_event,
             }
+        elif action in ("hold_position", "hold"):
+            assert isinstance(req, HoldPositionRequest)
+            # HOLD 不需要标定：它的语义是"待在现在这里"，没有坐标换算，
+            # 也就没有"用未标定的坐标飞错位置"这个风险。
+            action_req.params = {
+                "tolerance_m": req.tolerance_m,
+                "hold_s": req.hold_s,
+                "timeout_s": req.timeout_s,
+                "_cancel_event": cancel_event,
+            }
+        elif action == "return_home":
+            assert isinstance(req, ReturnHomeRequest)
+            # 同理不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
+            action_req.params = {
+                "timeout_s": req.timeout_s,
+                "min_progress_m": req.min_progress_m,
+                "_cancel_event": cancel_event,
+            }
         else:
             action_req.params = {
                 "command_timeout_ms": req.command_timeout_ms,
@@ -602,6 +622,31 @@ def goto(payload: dict[str, Any]) -> dict[str, Any]:
     本机 vehicle_local_ned。
     """
     return _execute_flight_action(GotoRequest.from_json(payload), action="goto")
+
+
+def hold_position(payload: dict[str, Any]) -> dict[str, Any]:
+    """保持当前位置悬停（HOLD），并验证它真的没动。
+
+    不需要标定：HOLD 的语义是"待在现在这里"，没有坐标换算。
+    判据是**位置稳定**而不是模式切换成功 —— 飞控接受 LOITER 不等于飞机停住了。
+    """
+    return _execute_flight_action(
+        HoldPositionRequest.from_json(payload), action="hold_position"
+    )
+
+
+def return_home(payload: dict[str, Any]) -> dict[str, Any]:
+    """自主返航（RETURN_HOME / AUTO+RTL），并验证它真的在朝 home 收敛。
+
+    不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
+
+    ⚠️ 判据是**到 home 的距离确实缩小**，不是"模式变成了 RTL"。
+    本项目出过一次事故：收尾阶段把 AUTO_RTL 当成安全悬停接受，飞机自主返航
+    而动作报 pass。这个端点的实现刻意与之相反。
+    """
+    return _execute_flight_action(
+        ReturnHomeRequest.from_json(payload), action="return_home"
+    )
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
@@ -978,6 +1023,12 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/actions/goto":
         result = goto(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/actions/hold-position":
+        result = hold_position(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/actions/return-home":
+        result = return_home(payload)
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/plans/execute":
         return 200, plans_execute(payload)

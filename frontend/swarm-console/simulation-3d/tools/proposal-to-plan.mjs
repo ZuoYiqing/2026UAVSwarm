@@ -35,11 +35,25 @@ export const EXPANDABLE_ACTIONS = Object.freeze({
   TAKEOFF: "takeoff",
   GOTO: "goto",
   LAND: "land",
+  // HOLD / RETURN_HOME 于 2026-09-30 在 Runtime 侧实现（分别对应
+  // /api/actions/hold-position 与 /api/actions/return-home）。
+  //
+  // ⚠️ 它们**能执行**，但本转换器**仍不展开** —— 两者是不同的判断：
+  //   * 展开 HOLD 需要知道"保持在哪、保持多久"，那是任务语义，不是提案展开
+  //   * 展开 RETURN_HOME 的时机涉及"何时判定任务做完了"，同样超出展开职责
+  // 也就是说这不再是"端点没实现"的问题，而是"转换器还没有展开规则"。
+  // 因此它们单独归入 CONVERTER_NOT_EXPANDABLE，措辞与"未实现"区分开，
+  // 免得调用方以为端点还不存在。
 });
+
+/** 已实现端点、但本转换器暂不展开的动作。 */
+export const CONVERTER_NOT_EXPANDABLE = Object.freeze([
+  "HOLD", "HOLD_POSITION", "RETURN_HOME",
+]);
 
 /** 已知但本转换器不展开的动作。列出来是为了给出"未实现"而不是"拼写错误"。 */
 export const KNOWN_NOT_EXPANDABLE = Object.freeze([
-  "OBSERVE", "HOLD", "HOLD_POSITION", "HOVER", "RETURN_HOME",
+  "OBSERVE", "HOVER",
   "CAMERA_CAPTURE", "GIMBAL_SET_ANGLE", "LIGHT_SET_STATE", "SPEAKER_PLAY_MESSAGE",
   "HEALTH_QUERY", "REPORT_STATUS", "SENSOR_READ", "LAND_SAFE",
   "REDUCE_SPEED", "MAINTAIN_HEADING",
@@ -160,7 +174,11 @@ export function proposalToPlan(proposal, context, options = {}) {
           action: name,
           reason_code: UNSUPPORTED_PAYLOAD_ACTIONS.includes(name)
             ? "action_not_supported"
-            : "action_endpoint_not_implemented",
+            : CONVERTER_NOT_EXPANDABLE.includes(name)
+              // 端点已存在，只是本转换器还没有展开规则。措辞必须与"未实现"
+              // 区分开：否则调用方会以为端点还不存在，去等一个已经有的东西。
+              ? "action_no_expansion_rule"
+              : "action_endpoint_not_implemented",
         });
       }
     }

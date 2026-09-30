@@ -1285,6 +1285,267 @@ class MavlinkBackendSession:
             "cancelled": cancelled,
         }
 
+    # --- hold_position（HOLD）与 return_home（RETURN_HOME）-----------------
+    #
+    # 这两个动作直接作用于飞行中的载具，因此判据必须是**位置行为**，
+    # 不能是"命令发出去了"或"模式变了"。本项目已经因此出过事故：
+    # 收尾阶段曾把"任意非 OFFBOARD 模式"当成安全悬停，于是接受了 AUTO_RTL ——
+    # 飞机开始自主返航，而动作报 pass。
+    #
+    # 因此：
+    #   * HOLD 要求位置在容差内**持续** hold_s 秒（模式对但飞机在飘 = 失败）
+    #   * RETURN_HOME 要求到 home 的距离**确实缩小**（只切模式 = 失败）
+    # 两者都只采信模式切换**之后**的新样本，避免把切换前的旧位置当证据。
+
+    def hold_position(
+        self,
+        *,
+        tolerance_m: float = 2.0,
+        hold_s: float = 3.0,
+        timeout_s: float = 20.0,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """让载具保持当前位置悬停，并**验证它真的没动**。
+
+        实现上是切到 ``AUTO + LOITER``（PX4 的定点悬停），然后连续采样确认位置
+        稳定。为什么不能只确认模式：模式切换成功只说明飞控接受了指令，不说明
+        飞机停住了 —— 风、估计器漂移、控制器问题都可能让它在 LOITER 下缓慢移动。
+
+        参考点与"持续"判据
+        ------------------
+        参考点 = **模式生效后的第一个新位置样本**，即切换那一刻载具所在处。
+        随后要求它在容差内**连续**保持 ``hold_s`` 秒，期间任何一次出容差都重新计时。
+
+        这里**刻意不设**"先等一会儿稳定"的阶段。最初写过 ``settle_s``：切换后先
+        丢弃一段时间的样本再确立参考点。那是错的 —— 它等于把切换瞬间的位移
+        **当作正常并接受**：实测中飞机从 30 m 漂到 60 m，而参考点被定在了 60 m，
+        于是 ``max_drift_m`` 报 0.0、动作判成功。而那次漂移是真实发生的。
+
+        "持续 hold_s 秒在容差内"这条判据本身就处理了过渡：若切换后载具还在动，
+        它就进不了容差，计时不会开始。因此不需要、也不应该丢弃样本。
+
+        Returns:
+            含 ``held``、``reason``、``samples``、``max_drift_m``、``mode``、
+            ``failure_reason`` 的证据字典。
+
+        Raises:
+            RuntimeError: 连接未建立。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        tolerance = max(float(tolerance_m), 0.0)
+        hold_s = max(float(hold_s), 0.0)
+
+        self.start_gcs_heartbeat()
+
+        mode_result = self.set_mode(
+            main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+            sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+        )
+        mode_evidence = {
+            "confirmed": bool(mode_result.get("confirmed")),
+            "observed_main_mode": mode_result.get("observed_main_mode"),
+            "observed_sub_mode": mode_result.get("observed_sub_mode"),
+            "observed_main_mode_name": mode_result.get("observed_main_mode_name"),
+        }
+        if not mode_evidence["confirmed"]:
+            # 连悬停模式都没进，谈"保持"没有意义。不得谎报成功。
+            return {
+                "held": False,
+                "reason": "mode_not_confirmed",
+                "samples": 0,
+                "max_drift_m": None,
+                "reference": None,
+                "mode": mode_evidence,
+                "failure_reason": "hold_mode_not_confirmed",
+            }
+
+        # 只采信模式切换**之后**的样本：切换前的旧位置不能作为新模式生效的证据。
+        start_sequence = self.local_position_cursor()
+        deadline = time.monotonic() + max(float(timeout_s), 0.1)
+
+        reference: tuple[float, float, float] | None = None
+        max_drift: float | None = None
+        inside_since: float | None = None
+        samples = 0
+
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                return {
+                    "held": False, "reason": "cancelled", "samples": samples,
+                    "max_drift_m": max_drift, "reference": reference,
+                    "mode": mode_evidence, "failure_reason": "cancelled",
+                }
+            with self._rx_condition:
+                fresh = [row for row in self._local_positions if row[0] > start_sequence]
+            if fresh:
+                _, x, y, z, received_monotonic, _ = fresh[-1]
+                samples = len(fresh)
+                if reference is None:
+                    # 切换后第一个样本 = 切换那一刻的位置。**不跳过任何样本**：
+                    # 跳过就等于接受那段位移（见文档字符串里的实测教训）。
+                    reference = (float(x), float(y), float(z))
+                    inside_since = received_monotonic
+                    max_drift = 0.0
+                else:
+                    drift = math.sqrt(
+                        (float(x) - reference[0]) ** 2
+                        + (float(y) - reference[1]) ** 2
+                        + (float(z) - reference[2]) ** 2
+                    )
+                    max_drift = drift if max_drift is None else max(max_drift, drift)
+                    if drift <= tolerance:
+                        if inside_since is None:
+                            inside_since = received_monotonic
+                        elif received_monotonic - inside_since >= hold_s:
+                            return {
+                                "held": True, "reason": "stable_within_tolerance",
+                                "samples": samples, "max_drift_m": max_drift,
+                                "reference": reference, "held_s": received_monotonic - inside_since,
+                                "mode": mode_evidence, "failure_reason": None,
+                            }
+                    else:
+                        # 出容差就重新计时：要求的是"连续"在容差内，
+                        # 不是"累计够久"。
+                        inside_since = None
+            time.sleep(0.02)
+
+        return {
+            "held": False,
+            "reason": "hold_timeout",
+            "samples": samples,
+            "max_drift_m": max_drift,
+            "reference": reference,
+            "mode": mode_evidence,
+            "failure_reason": "hold_timeout",
+        }
+
+    def return_home(
+        self,
+        *,
+        timeout_s: float = 60.0,
+        min_progress_m: float = 5.0,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """让载具自主返航（``AUTO + RTL``），并**验证它真的在朝 home 收敛**。
+
+        ⚠️ 判据为什么是位置而不是模式
+        -----------------------------
+        本方法最容易写错的地方就是"``set_mode`` 成功 → 报成功"。飞控接受 RTL
+        不等于飞机在返航：可能被拒绝执行、被其它模式抢占、或 home 点未定义。
+        那次事故正是这个形状 —— 接受了一个"正在返航"的模式并报 pass。
+
+        因此这里要求到 home 的**三维距离确实缩小 min_progress_m** 才判成功。
+        用"最大距离 − 最终距离"而不是"逐样本单调下降"：RTL 会先爬升到安全高度
+        再平飞，三维距离在早期可能不降反升，要求单调会把正常返航误判成失败。
+
+        ⚠️ RTL 与 PINNED_MODES
+        ----------------------
+        RTL **不在** ``PINNED_MODES`` 里，而且不应被加进去。那个集合的语义是
+        "确认安全、可作为回退目标"，而 RTL 是自主机动。本方法是对 RTL 的
+        **显式请求**，与"当成安全回退接受"是两件不同的事。
+
+        Returns:
+            含 ``returning``、``reason``、``initial_distance_m``、
+            ``final_distance_m``、``distance_reduction_m``、``mode``、
+            ``failure_reason`` 的证据字典。
+
+        Raises:
+            RuntimeError: 连接未建立。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        self.start_gcs_heartbeat()
+
+        mode_result = self.set_mode(
+            main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+            sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+        )
+        mode_evidence = {
+            "confirmed": bool(mode_result.get("confirmed")),
+            "observed_main_mode": mode_result.get("observed_main_mode"),
+            "observed_sub_mode": mode_result.get("observed_sub_mode"),
+            "observed_main_mode_name": mode_result.get("observed_main_mode_name"),
+        }
+        if not mode_evidence["confirmed"]:
+            return {
+                "returning": False,
+                "reason": "mode_not_confirmed",
+                "initial_distance_m": None,
+                "final_distance_m": None,
+                "distance_reduction_m": None,
+                "samples": 0,
+                "mode": mode_evidence,
+                "failure_reason": "return_home_mode_not_confirmed",
+            }
+
+        # home 在 PX4 里是 EKF 原点，也就是本机 local NED 的原点。
+        # goto() 用的也是这套坐标（见其文档字符串），因此这里直接用 (0, 0, z)。
+        # 高度分量用首个样本的 z：RTL 的目标不是回到 z=0（那会撞地），
+        # 而是回到 home 上方并降落，所以水平收敛才是判据，高度只作参考。
+        start_sequence = self.local_position_cursor()
+        deadline = time.monotonic() + max(float(timeout_s), 0.1)
+
+        first_distance: float | None = None
+        max_distance: float | None = None
+        last_distance: float | None = None
+        last_down: float | None = None
+        samples = 0
+
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                return {
+                    "returning": False, "reason": "cancelled", "samples": samples,
+                    "initial_distance_m": first_distance, "final_distance_m": last_distance,
+                    "distance_reduction_m": None, "mode": mode_evidence,
+                    "failure_reason": "cancelled",
+                }
+            with self._rx_condition:
+                fresh = [row for row in self._local_positions if row[0] > start_sequence]
+            if fresh:
+                _, x, y, z, _, _ = fresh[-1]
+                samples = len(fresh)
+                distance = math.sqrt(float(x) ** 2 + float(y) ** 2)
+                last_down = float(z)
+                if first_distance is None:
+                    first_distance = distance
+                    max_distance = distance
+                max_distance = max(max_distance or distance, distance)
+                last_distance = distance
+                # 用"最远时刻 − 当前"衡量进展：RTL 可能先爬升再平飞，
+                # 用逐样本单调下降会把正常返航误判为失败。
+                if (max_distance - distance) >= max(float(min_progress_m), 0.0):
+                    return {
+                        "returning": True, "reason": "converging_on_home",
+                        "samples": samples,
+                        "initial_distance_m": first_distance,
+                        "max_distance_m": max_distance,
+                        "final_distance_m": distance,
+                        "distance_reduction_m": max_distance - distance,
+                        "last_down_m": last_down,
+                        "mode": mode_evidence,
+                        "failure_reason": None,
+                    }
+            time.sleep(0.05)
+
+        return {
+            "returning": False,
+            "reason": "no_convergence",
+            "samples": samples,
+            "initial_distance_m": first_distance,
+            "max_distance_m": max_distance,
+            "final_distance_m": last_distance,
+            "distance_reduction_m": (
+                None if (max_distance is None or last_distance is None)
+                else max_distance - last_distance
+            ),
+            "last_down_m": last_down,
+            "mode": mode_evidence,
+            "failure_reason": "return_home_not_converging",
+        }
+
     def observe_arrival(
         self,
         *,

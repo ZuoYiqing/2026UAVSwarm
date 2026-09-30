@@ -45,6 +45,15 @@ IMPLEMENTED_ACTIONS: dict[str, str] = {
     "smoke_takeoff": "/actions/smoke-takeoff",
     "land": "/actions/land",
     "goto": "/actions/goto",
+    # HOLD 与 RETURN_HOME 于 2026-09-30 实现。算法侧的巡检计划
+    # （TAKEOFF → GOTO → OBSERVE → RETURN_HOME → LAND）此前有 3 个动作无法执行，
+    # 现在只剩 OBSERVE 一个 —— 那一个需要感知载荷接口定义，属跨部门。
+    #
+    # 别名 "hold" 保留：算法侧的提案 schema 用的是大写 HOLD，而注册表里叫
+    # hold_position。两者指同一件事，都接受，避免调用方因命名差异被拒。
+    "hold_position": "/actions/hold-position",
+    "hold": "/actions/hold-position",
+    "return_home": "/actions/return-home",
 }
 
 #: Actions that are declared somewhere but deliberately have no endpoint yet,
@@ -59,8 +68,7 @@ IMPLEMENTED_ACTIONS: dict[str, str] = {
 #: payload action.  Those omissions produced "unknown_action_type" — a message
 #: that reads as "you made a typo" for actions that are in fact declared.
 _REGISTRY_FLIGHT_NOT_IMPLEMENTED = frozenset({
-    "hover", "hold", "hold_position", "return_home", "land_safe",
-    "reduce_speed", "maintain_heading",
+    "hover", "land_safe", "reduce_speed", "maintain_heading",
 })
 
 _REGISTRY_PAYLOAD_NOT_IMPLEMENTED = frozenset({
@@ -213,6 +221,20 @@ class RealActionExecutor:
                 body["arrival_tolerance_m"] = float(params["arrival_tolerance_m"])
             if "hold_s" in params:
                 body["hold_s"] = float(params["hold_s"])
+        elif action_type in ("hold_position", "hold"):
+            # HOLD 的位置就是"当前位置"，不需要坐标参数；给的是判据参数。
+            if "tolerance_m" in params:
+                body["tolerance_m"] = float(params["tolerance_m"])
+            if "hold_s" in params:
+                body["hold_s"] = float(params["hold_s"])
+            if "timeout_s" in params:
+                body["timeout_s"] = float(params["timeout_s"])
+        elif action_type == "return_home":
+            # RETURN_HOME 的目标是 home，不需要坐标参数。
+            if "timeout_s" in params:
+                body["timeout_s"] = float(params["timeout_s"])
+            if "min_progress_m" in params:
+                body["min_progress_m"] = float(params["min_progress_m"])
         # `land` takes only node_id.
         return body
 
@@ -259,6 +281,21 @@ class RealActionExecutor:
                 evidence["restored"] = restored.get("restored")
                 evidence["still_in_offboard"] = restored.get("still_in_offboard")
                 evidence["observed_sub_mode"] = restored.get("observed_sub_mode")
+        elif action_type in ("hold_position", "hold"):
+            # 关键证据是"位置真的没动"，不是"模式切成功了"。
+            # 只报模式的话，飞控接受指令而飞机在飘的情况会被读成成功。
+            evidence["held"] = payload.get("held")
+            evidence["hold_reason"] = payload.get("reason")
+            evidence["max_drift_m"] = payload.get("max_drift_m")
+            evidence["hold_samples"] = payload.get("samples")
+        elif action_type == "return_home":
+            # 同理：关键证据是"到 home 的距离确实缩小了"。
+            # 这正是那次事故的形状 —— 模式变成 RTL 就报成功，而飞机未必在返航。
+            evidence["returning"] = payload.get("returning")
+            evidence["return_reason"] = payload.get("reason")
+            evidence["initial_distance_m"] = payload.get("initial_distance_m")
+            evidence["final_distance_m"] = payload.get("final_distance_m")
+            evidence["distance_reduction_m"] = payload.get("distance_reduction_m")
         return evidence
 
     # -- execution ---------------------------------------------------------
