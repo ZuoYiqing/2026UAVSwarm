@@ -15,10 +15,20 @@ from uuid import uuid4
 
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
-from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
+from uav_runtime.agent.executor import RealActionExecutor
+from uav_runtime.agent.lifecycle import PlanApproval, PlanExecutionController, PlanStatus
+from uav_runtime.agent.planner import (
+    MissionIntent,
+    MissionPlan,
+    MissionPlanStep,
+    PLAN_READY,
+    TemplateAgentPlanner,
+)
 from uav_runtime.http.schemas import (
     BackendRequest,
+    GotoRequest,
     LandRequest,
+    PlanExecuteRequest,
     PlanMissionRequest,
     RequestValidationError,
     SmokeTakeoffRequest,
@@ -455,6 +465,56 @@ def _execute_flight_action(
                 "completion_mode": "operational_stable_altitude",
                 "_cancel_event": cancel_event,
             }
+        elif action == "goto":
+            assert isinstance(req, GotoRequest)
+            # 取本节点的坐标标定：scene_ned -> 本机 vehicle_local_ned 需要它的平移量。
+            calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(
+                handle.config.node_id
+            )
+            translation = (calibration or {}).get("translation_scene_ned_m")
+            if calibration_status != "calibrated" or not isinstance(translation, dict):
+                # **拒绝执行，而不是"尽力而为"地飞。** 没有可信平移量时把 scene 坐标
+                # 当本机坐标发出去，飞机会飞到偏移量之外的错误位置（UAV-02/03 偏 8 米）。
+                # 这里走与策略拒绝相同的返回形状，让上层能明确区分：
+                # 不是策略拦的，而是坐标换算依据缺失。
+                out = {
+                    **identity,
+                    "action": action,
+                    "result": "fail",
+                    "accepted": False,
+                    "execution_admitted": False,
+                    "status": "rejected",
+                    "lifecycle_status": "policy_rejected",
+                    "failure_reason": "coordinate_calibration_unavailable",
+                    "code": "coordinate_calibration_unavailable",
+                    "calibration_status": calibration_status,
+                    "policy_decision": policy_event,
+                    "ack_evidence": [],
+                    "completion_evidence": None,
+                }
+                RUNTIME_STATE_STORE.transition_action(
+                    action_id, "policy_rejected", **out
+                )
+                VEHICLE_REGISTRY.release_action(handle.config.node_id, action_id)
+                reject_event = _action_audit_event(
+                    "action_result", out, cfg, handle.config.node_id
+                )
+                rt.audit.append(reject_event)
+                RUNTIME_STATE_STORE.record_event(reject_event)
+                return out
+            action_req.params = {
+                # 目标是 scene_ned；换算由后端的 execute_goto_action 完成，
+                # 这里把平移量原样带过去，避免两处各算一遍产生分歧。
+                "scene_north_m": req.north_m,
+                "scene_east_m": req.east_m,
+                "scene_down_m": req.down_m,
+                "translation_scene_ned_m": translation,
+                "altitude_tolerance_m": req.arrival_tolerance_m,
+                "hold_s": req.hold_s,
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "_cancel_event": cancel_event,
+            }
         else:
             action_req.params = {
                 "command_timeout_ms": req.command_timeout_ms,
@@ -534,6 +594,16 @@ def land(payload: dict[str, Any]) -> dict[str, Any]:
     return _execute_flight_action(LandRequest.from_json(payload), action="land")
 
 
+def goto(payload: dict[str, Any]) -> dict[str, Any]:
+    """飞到共享 scene_ned 坐标系下的指定点（OFFBOARD 位置控制）。
+
+    坐标换算与标定校验在 _execute_flight_action 内完成：本端点收到的目标是
+    scene_ned，必须减掉标定平移量才是 SET_POSITION_TARGET_LOCAL_NED 需要的
+    本机 vehicle_local_ned。
+    """
+    return _execute_flight_action(GotoRequest.from_json(payload), action="goto")
+
+
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
     """Dry-run / plan-only bridge to TemplateAgentPlanner.
 
@@ -559,6 +629,183 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
         "status": plan.get("status"), "result": result.get("result"),
     })
     return result
+
+
+def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit a Mission Plan IR for real execution.
+
+    This is the endpoint the algorithm side produces against.  Runtime's job
+    here is deliberately narrow: validate the plan shape, record the operator's
+    approval, then sequence the steps and report exactly what happened.
+
+    It does **not** invent planning strategy and does not weaken any safety
+    check: every step is executed by calling the ordinary action endpoint, so
+    the Policy Gate still evaluates it with live context immediately before
+    MAVLink.  A step whose action has no endpoint is refused rather than
+    skipped, because a step that "succeeds" without doing anything produces a
+    completed-looking plan in which nothing happened.
+
+    Failure policy is abort-on-first-failure (operator decision, 2026-09-28):
+    the first failed step stops the plan, later steps are left unexecuted, and
+    the response names the failing step and the ones that never ran.
+    """
+    req = PlanExecuteRequest.from_json(payload)
+    payload_plan = req.plan
+
+    # --- 场景身份核对：在任何一步起飞之前 -------------------------------
+    #
+    # 坐标只在某个场景里有意义。一份为 A 地图生成的计划若在 B 地图上执行，
+    # 就会飞到由错误基准推导出的位置；而这类错误不会在动作层报错 ——
+    # 飞机会老老实实飞到那个（错误的）坐标，动作还报 pass。
+    #
+    # 因此这里在**进入执行器之前**核对一次，并在任何 step 下发前拒绝整份计划。
+    # 对照基准取 VEHICLE_REGISTRY.scene_id —— 那是 Runtime 实际加载的场景
+    # （由 scenes/<id>/scene.json 决定），不是调用方声明的。
+    scene_check = _check_plan_scene_identity(payload_plan)
+    if scene_check is not None:
+        RUNTIME_STATE_STORE.record_event({
+            "type": "agent_plan_rejected_scene_identity",
+            "timestamp": _utc_now(),
+            "plan_id": payload_plan.get("plan_id"),
+            "failure_reason": scene_check["failure_reason"],
+            "detail": scene_check["detail"],
+        })
+        return {
+            "result": "blocked",
+            "failure_reason": scene_check["failure_reason"],
+            "detail": scene_check["detail"],
+            "plan": payload_plan,
+            "execution_mode": "real",
+            "step_outcomes": [],
+        }
+
+    steps = [
+        MissionPlanStep(
+            step_id=str(raw["step_id"]),
+            action_type=str(raw["action_type"]),
+            node_id=str(raw.get("node_id", "") or ""),
+            params=dict(raw.get("params") or {}),
+            status=str(raw.get("status") or PLAN_READY),
+        )
+        for raw in payload_plan["steps"]
+    ]
+    plan = MissionPlan(
+        plan_id=str(payload_plan["plan_id"]),
+        intent_id=str(payload_plan.get("intent_id") or ""),
+        mission_type=str(payload_plan.get("mission_type") or ""),
+        steps=steps,
+        status=PlanStatus.DRAFT,
+        explanation=str(payload_plan.get("explanation") or ""),
+        created_at=str(payload_plan.get("created_at") or _utc_now()),
+    )
+
+    controller = PlanExecutionController(
+        # 用与动作链路同一个审计文件。注意这里**不能**用 rt：RuntimeOrchestrator
+        # 是按次为单个动作构造的（见 _policy_checked_sitl_action），不是模块级对象。
+        audit=AuditLog(AUDIT_PATH),
+        action_executor=RealActionExecutor(api_base=_self_api_base()),
+    )
+    loaded = controller.load_plan(plan)
+    approval = PlanApproval.create(
+        plan_id=plan.plan_id,
+        operator_id=req.operator_id,
+        decision=req.decision,  # type: ignore[arg-type]
+        reason="http_plan_execute",
+    )
+    approved = controller.approve_plan(loaded, approval)
+
+    if req.decision != "approve":
+        # 显式拒绝也是合法请求：批准被记录，但不执行任何动作。
+        RUNTIME_STATE_STORE.record_event({
+            "type": "agent_plan_execution_declined", "timestamp": _utc_now(),
+            "plan_id": plan.plan_id, "operator_id": req.operator_id,
+        })
+        return {
+            "result": "declined",
+            "failure_reason": "operator_rejected",
+            "plan": approved.to_dict(),
+            "execution_mode": "real",
+            "step_outcomes": [],
+        }
+
+    result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    RUNTIME_STATE_STORE.record_event({
+        "type": "agent_plan_execution_result", "timestamp": _utc_now(),
+        "plan_id": plan.plan_id,
+        "mission_type": plan.mission_type,
+        "operator_id": req.operator_id,
+        "result": result.get("result"),
+        "failure_reason": result.get("failure_reason"),
+        "aborted_at_step": result.get("aborted_at_step"),
+        "step_count": len(plan.steps),
+    })
+    RUNTIME_STATE_STORE.record_plan_result(result)
+    return result
+
+
+def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
+    """核对计划声明的场景身份与 Runtime 的活动场景。
+
+    Returns:
+        ``None`` 表示一致、可以执行；否则返回含 ``failure_reason`` 与 ``detail``
+        的字典，调用方据此拒绝整份计划。
+
+    为什么必须在这里挡下：坐标只在某个场景里有意义。一份为 A 地图生成的计划
+    若在 B 地图上执行，飞机会飞到由错误基准推导出的位置，**而且动作层不会报错** ——
+    它会老老实实飞到那个错误坐标并报 pass。这类"看起来成功"的错误正是本项目
+    反复想避免的。
+
+    对照基准是 ``VEHICLE_REGISTRY.scene_id``：那是 Runtime 实际加载的场景
+    （由 ``scenarios/<id>/scene.json`` 决定），不是调用方声明的。
+    """
+    active_scene = str(getattr(VEHICLE_REGISTRY, "scene_id", "") or "")
+    if not active_scene:
+        # Runtime 自己都不知道在用哪张地图 —— 无法核对就不能执行。
+        return {
+            "failure_reason": "scene_identity_unavailable",
+            "detail": {"reason": "runtime_active_scene_id_missing"},
+        }
+
+    if str(plan.get("scene_id")) != active_scene:
+        return {
+            "failure_reason": "scene_id_mismatch",
+            "detail": {
+                "plan_scene_id": plan.get("scene_id"),
+                "active_scene_id": active_scene,
+            },
+        }
+
+    # map_version 以当前节点的标定为准（它是坐标换算实际依据的那份地图版本）。
+    # 没有可用标定时不做判断 —— 那属于 coordinate_calibration_unavailable，
+    # 应由 goto 自己在执行时报告，不在这里冒充场景不匹配。
+    node_ids = {str(step.get("node_id") or "") for step in plan.get("steps", [])}
+    node_ids.discard("")
+    for node_id in sorted(node_ids):
+        calibration, status = RUNTIME_STATE_STORE.coordinate_calibration(node_id)
+        if status != "calibrated" or not isinstance(calibration, dict):
+            continue
+        calibrated_map = str(calibration.get("map_version") or "")
+        if calibrated_map and str(plan.get("map_version")) != calibrated_map:
+            return {
+                "failure_reason": "map_version_mismatch",
+                "detail": {
+                    "plan_map_version": plan.get("map_version"),
+                    "active_map_version": calibrated_map,
+                    "node_id": node_id,
+                },
+            }
+        break
+
+    return None
+
+
+def _self_api_base() -> str:
+    """Runtime 自己的 HTTP 基地址（执行器用它调用本进程的动作端点）。
+
+    走本机回环，不对外开放。之所以这样绕一圈而不是直接调后端，是为了让每一步
+    都经过与外部调用完全相同的路径 —— 包括 Policy Gate、动作租约、审计。
+    """
+    return f"http://127.0.0.1:{os.environ.get('UAV_RUNTIME_HTTP_PORT', '8765')}/api"
 
 
 def telemetry_latest(query: str = "") -> dict[str, Any]:
@@ -729,6 +976,11 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
     if method == "POST" and normalized == "/api/actions/land":
         result = land(payload)
         return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/actions/goto":
+        result = goto(payload)
+        return int(result.pop("_http_status", 200)), result
+    if method == "POST" and normalized == "/api/plans/execute":
+        return 200, plans_execute(payload)
     if method == "POST" and normalized == "/api/simulation/evidence":
         return 200, publish_simulation_evidence(payload)
     if method == "POST" and normalized == "/api/coordinates/calibration":

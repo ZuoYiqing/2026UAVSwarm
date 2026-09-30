@@ -40,14 +40,18 @@
         <p id="city-statistics" class="scene-statistics">正在构建城市</p>
         <label for="scene-select">场景数据</label>
         <select id="scene-select">
+          <!-- 默认显式选中 recon（simple_recon_v0_1）：Runtime 提供的数据始终是这一套
+               场景，选它载具才能对齐成功。city（青岚市）的物理世界尚未导入，仅作视觉
+               参考，因此不做默认。这里显式写 selected —— <select> 在没有 selected
+               时默认选第一个选项，若不显式标注，日后调整选项顺序会悄悄改掉默认值。 -->
           <option value="city">青岚市 · 城市与山林</option>
           <option value="campus">无人系统测试园区 · Local</option>
-          <option value="recon">simple_recon · 后端任务坐标</option>
+          <option value="recon" selected>simple_recon · 后端任务坐标</option>
           <option value="1.1">3D Tiles 1.1 · Metadata</option>
           <option value="1.0">3D Tiles 1.0 · Discrete LOD</option>
         </select>
 
-        <p id="map-datum" class="scene-statistics">青岚市 · 仅展示 · 未导入 Gazebo</p>
+        <p id="map-datum" class="scene-statistics">simple_recon_v0_1 · 局部参考面 · 未地理配准</p>
         <div id="scene-alignment" class="alignment-status" role="status">场景未对齐 · 等待公共坐标证据</div>
 
         <div id="city-tools">
@@ -133,6 +137,48 @@
           </button>
           <button id="follow-button" type="button" title="跟随当前载具">
             <i data-lucide="crosshair"></i> 跟随
+          </button>
+        </div>
+
+        <label for="takeoff-altitude">起飞高度 / m</label>
+        <div class="button-row">
+          <input
+            id="takeoff-altitude"
+            type="number"
+            min="1"
+            max="120"
+            step="1"
+            value="3"
+            title="目标起飞高度（米）"
+          />
+          <button
+            id="action-takeoff"
+            type="button"
+            title="让当前载具起飞到目标高度（经 Runtime 与 Policy Gate）"
+          >
+            <i data-lucide="arrow-up"></i> 起飞
+          </button>
+          <button
+            id="action-land"
+            type="button"
+            title="让当前载具降落（经 Runtime 与 Policy Gate）"
+          >
+            <i data-lucide="arrow-down"></i> 降落
+          </button>
+        </div>
+        <div id="action-result" class="alignment-status" role="status" hidden></div>
+
+        <label class="switch-row">
+          <span>飞到这里 · 点地图取点</span>
+          <input id="goto-armed" type="checkbox" />
+        </label>
+        <div id="goto-target" class="alignment-status" role="status" hidden></div>
+        <div class="action-row" id="goto-actions">
+          <button id="goto-confirm" type="button" title="把当前载具派往标注的目标点（经 Runtime 与 Policy Gate）">
+            <i data-lucide="navigation"></i> 确认前往
+          </button>
+          <button id="goto-cancel" type="button" title="取消目标点">
+            <i data-lucide="x"></i> 取消
           </button>
         </div>
 

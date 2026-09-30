@@ -458,6 +458,67 @@ gz topic -l | grep simple_recon_v0_1
 
 检查 `PX4_GZ_MODEL_NAME`、instance 和对应 PX4 stderr。model 不齐时 health 必须失败。
 
+### `--gui` 模式下 Gazebo 界面卡顿 / 窗口无响应（**WSL 环境实测**）
+
+**症状**：带 `--gui` 启动后界面几乎不动，无人机与地面可见但拖不动视角。
+`gz model --list` 仍能在 1 秒内返回，PX4 三台也照常运行。
+
+**判定**：这是**渲染瓶颈，不是仿真故障**。仿真与飞控完全正常，不要因此重启或改配置。
+
+**诊断**（2026-09-28 实测结论）：
+
+```bash
+ps -eo pid,pcpu,pmem,comm --sort=-pcpu | head -6
+```
+
+实测输出中 `gz sim -g`（GUI 守护进程）单独占到约 **95% 单核 CPU**，
+而 `gz sim -s` 约 50%、每个 px4 约 20%。
+
+**根因**：WSL 通过 Mesa 的 D3D12 后端渲染，而它选用的是**集成显卡**：
+
+```bash
+glxinfo -B | grep -i renderer        # 实测: D3D12 (Intel(R) UHD Graphics)
+nvidia-smi --query-gpu=utilization.gpu --format=csv   # 实测: 0 %（独显完全闲置）
+```
+
+即使机器上有独立显卡也用不上：WSL 里只有 `libnvidia-ml`（监控）与
+`libnvidia-encode`（编码），**没有用于 OpenGL 的 NVIDIA GL 库**。
+主要开销在 OpenGL→D3D12 的**翻译**上，属于 CPU 侧，**换显卡不能解决**。
+
+**处置**：
+
+1. **验证与开发用 `--headless`**（`ops.sh start` 内部即用此模式），不依赖 GUI。
+   物理世界里有什么，用 `gz model --list` 与 `gz model -m <name> -p` 核对即可。
+2. 世界文件里已关闭 `<grid>` 与 `<shadows>` 以降低负担
+   （见 `scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf` 的注释，
+   需要演示效果时改回）。
+3. 把 Gazebo 窗口**最小化**即可停止渲染，PX4 不受影响。
+
+### `stop` 之后 Gazebo 窗口仍留在屏幕上（**孤儿窗口，不是残留进程**）
+
+**症状**：`ops.sh stop` 报告"仿真未运行 / 无残留进程 / 端口已释放"，
+但屏幕上那个 "Gazebo Sim" 窗口还在，看起来像卡死。
+
+**原因**：WSL 侧进程确实已经退出，但 **Windows 侧仍留有一个由 `msrdc.exe`
+持有的窗口**（WSLg 的图形代理）。WSL 侧的检查看不到它，所以 `stop` 会如实
+报告"没有残留进程"——两边说的都对，只是描述的不是同一件事。
+
+**确认**（Windows PowerShell）：
+
+```powershell
+Get-Process | Where-Object { $_.MainWindowTitle -match 'Gazebo' } |
+  Select-Object Id, ProcessName, MainWindowTitle
+```
+
+**处置**：
+
+```bash
+bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh cleanup
+```
+
+只关闭窗口标题匹配 Gazebo 的进程。**不要按进程名 `msrdc` 批量杀** ——
+其它 Linux GUI 程序共用它，误杀会连带关掉它们的窗口。
+
 ### heartbeat stale
 
 确认 endpoint 没有被其他 receiver 占用，并检查 PX4 MAVLink 输出端口。连续 10 秒证据不足时不要缩短判据伪造 PASS。

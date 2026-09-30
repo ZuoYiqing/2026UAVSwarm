@@ -30,6 +30,100 @@ MAV_RESULT_NAMES = {
 }
 
 
+# --- PX4 自定义飞行模式 ---------------------------------------------------
+#
+# MAVLink 的公共枚举里没有 PX4 的主模式号 —— 它们是 PX4 自己的约定，定义在
+# PX4-Autopilot 的 src/modules/commander/px4_custom_mode.h。要切模式必须自己
+# 带这些常量，不能指望 pymavlink 提供（实测 getattr 取不到）。
+#
+# 值必须与 PX4 源码逐字一致。源码里是自动递增的枚举，**不是** 1/2/3/6/7 这样
+# 跳着的 —— ACRO=5 就夹在 AUTO(4) 和 OFFBOARD(6) 之间。所以每次 PX4 升级后
+# 都要重新核对。tests/unit/test_px4_custom_mode_constants.py 会直接从
+# PX4 头文件解析真实值来校验本表，不一致就会失败。
+#
+# 用法：MAV_CMD_DO_SET_MODE，param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED(1)，
+#       param2 = 主模式号，param3 = 子模式号（无子模式时 0）。
+PX4_CUSTOM_MAIN_MODE_MANUAL = 1
+PX4_CUSTOM_MAIN_MODE_ALTCTL = 2
+PX4_CUSTOM_MAIN_MODE_POSCTL = 3
+PX4_CUSTOM_MAIN_MODE_AUTO = 4
+PX4_CUSTOM_MAIN_MODE_ACRO = 5
+PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6
+PX4_CUSTOM_MAIN_MODE_STABILIZED = 7
+PX4_CUSTOM_MAIN_MODE_RATTITUDE_LEGACY = 8
+PX4_CUSTOM_MAIN_MODE_SIMPLE = 9
+PX4_CUSTOM_MAIN_MODE_TERMINATION = 10
+PX4_CUSTOM_MAIN_MODE_ALTITUDE_CRUISE = 11
+
+#: 主模式 -> 名称，便于证据与日志可读
+PX4_MAIN_MODE_NAMES = {
+    PX4_CUSTOM_MAIN_MODE_MANUAL: "MANUAL",
+    PX4_CUSTOM_MAIN_MODE_ALTCTL: "ALTCTL",
+    PX4_CUSTOM_MAIN_MODE_POSCTL: "POSCTL",
+    PX4_CUSTOM_MAIN_MODE_AUTO: "AUTO",
+    PX4_CUSTOM_MAIN_MODE_ACRO: "ACRO",
+    PX4_CUSTOM_MAIN_MODE_OFFBOARD: "OFFBOARD",
+    PX4_CUSTOM_MAIN_MODE_STABILIZED: "STABILIZED",
+    PX4_CUSTOM_MAIN_MODE_RATTITUDE_LEGACY: "RATTITUDE_LEGACY",
+    PX4_CUSTOM_MAIN_MODE_SIMPLE: "SIMPLE",
+    PX4_CUSTOM_MAIN_MODE_TERMINATION: "TERMINATION",
+    PX4_CUSTOM_MAIN_MODE_ALTITUDE_CRUISE: "ALTITUDE_CRUISE",
+}
+
+
+# --- PX4 AUTO 子模式 ------------------------------------------------------
+#
+# 同样是 PX4 自己的约定，MAVLink 公共枚举里没有。
+# 源码：px4_custom_mode.h 的 enum PX4_CUSTOM_SUB_MODE_AUTO。
+#
+# **为什么必须区分主模式与子模式**：AUTO(4) 主模式下的子模式行为差异极大 ——
+# MISSION 会飞航线、RTL 会爬升后自主返航并降落。它们都是 main_mode=4，
+# 只看主模式会把"RTL 正在飞"误判成"稳定悬停"。实测踩过这个坑。
+PX4_CUSTOM_SUB_MODE_AUTO_READY = 1
+PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF = 2
+PX4_CUSTOM_SUB_MODE_AUTO_LOITER = 3
+PX4_CUSTOM_SUB_MODE_AUTO_MISSION = 4
+PX4_CUSTOM_SUB_MODE_AUTO_RTL = 5
+PX4_CUSTOM_SUB_MODE_AUTO_LAND = 6
+PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET = 8
+
+PX4_AUTO_SUB_MODE_NAMES = {
+    PX4_CUSTOM_SUB_MODE_AUTO_READY: "AUTO_READY",
+    PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF: "AUTO_TAKEOFF",
+    PX4_CUSTOM_SUB_MODE_AUTO_LOITER: "AUTO_LOITER",
+    PX4_CUSTOM_SUB_MODE_AUTO_MISSION: "AUTO_MISSION",
+    PX4_CUSTOM_SUB_MODE_AUTO_RTL: "AUTO_RTL",
+    PX4_CUSTOM_SUB_MODE_AUTO_LAND: "AUTO_LAND",
+    PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET: "AUTO_FOLLOW_TARGET",
+}
+
+
+# --- SET_POSITION_TARGET_LOCAL_NED 的 type_mask ---------------------------
+#
+# type_mask 的语义是"**忽略哪些字段**"（1 = 忽略，0 = 使用）。这个语义极易搞反，
+# 一旦搞反不会报错，只会表现为"命令被接受但载具不动"。
+#
+# 位置控制（goto）要的是纯位置指令：位置字段生效，其余全部忽略。
+#
+#   X_IGNORE|Y_IGNORE|Z_IGNORE      = 1|2|4       = 7      ← 0，位置生效
+#   VX_IGNORE|VY_IGNORE|VZ_IGNORE   = 8|16|32     = 56     ← 1，忽略速度
+#   AX_IGNORE|AY_IGNORE|AZ_IGNORE   = 64|128|256  = 448    ← 1，忽略加速度
+#   YAW_IGNORE|YAW_RATE_IGNORE      = 1024|2048   = 3072   ← 1，忽略偏航
+#   ---------------------------------------------------------
+#   合计                                  56+448+3072 = 3576
+#
+# **速度位必须是 1。** 若遗漏（掩码变成 3520），语义就从"使用位置"变成
+# "使用速度"，而速度字段填的是 0,0,0 —— PX4 会理解为"以 0 速度飞行"即原地
+# 悬停。实测症状：setpoint 流 10Hz 正常发出、PX4 接受 OFFBOARD、载具位置
+# 一动不动、误差恒定不变、直到超时。
+#
+# 该值由单元测试逐位校验（见 tests/unit/test_mavlink_set_mode.py）。
+POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION = 3576
+
+#: MAV_FRAME_LOCAL_NED：绝对位置，原点为载具自己的 EKF 原点
+MAV_FRAME_LOCAL_NED = 1
+
+
 def mav_result_name(result: int | None) -> str:
     if result is None:
         return "MAV_RESULT_TIMEOUT"
@@ -68,6 +162,13 @@ def _source_ids(message: Any) -> tuple[int | None, int | None]:
     )
 
 
+PINNED_MODES: frozenset[tuple[int, int]] = frozenset({
+    (PX4_CUSTOM_MAIN_MODE_POSCTL, 0),
+    (PX4_CUSTOM_MAIN_MODE_ALTCTL, 0),
+    (PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER),
+})
+
+
 @dataclass(slots=True)
 class MavlinkBackendSession:
     """One connection, one RX owner, and one dispatcher for one node."""
@@ -94,7 +195,10 @@ class MavlinkBackendSession:
         default_factory=lambda: threading.Condition(threading.RLock())
     )
     _rx_sequence: int = 0
-    _local_positions: list[tuple[int, float, float, str]] = field(default_factory=list)
+    #: LOCAL_POSITION_NED 样本：(sequence, x_north, y_east, z_down, received_monotonic, received_timestamp)。
+    #: 早期的实现只存了 z（起飞高度观测只需要垂直分量），但 goto 的位置到达判据
+    #: 需要完整三维坐标，因此改为全量保留。
+    _local_positions: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     _armed_states: list[tuple[int, bool, float, str]] = field(default_factory=list)
     _landed_states: list[tuple[int, int, float, str]] = field(default_factory=list)
     _subscribers: dict[int, Callable[[Any], None]] = field(default_factory=dict)
@@ -102,6 +206,12 @@ class MavlinkBackendSession:
     _ack_generations: dict[int, int] = field(default_factory=dict)
     _active_ack_waiters: dict[int, int] = field(default_factory=dict)
     _ack_mailbox: dict[int, tuple[int, int]] = field(default_factory=dict)
+    #: 最后一次收到的 HEARTBEAT 里的模式信息：(sequence, base_mode, custom_mode)。
+    #: 只保留最新一条 —— 心跳可达 500Hz，堆队列会无界增长。模式确认只需要"当前值"。
+    _last_heartbeat_mode: tuple[int, int, int] | None = None
+    #: 会话起点，用于生成 SET_POSITION_TARGET 的 time_boot_ms。
+    #: PX4 不强依赖该值，但按规范应单调递增。
+    _session_started_monotonic: float = field(default_factory=time.monotonic)
     last_receive_error: str | None = None
     last_send_error: str | None = None
     identity_error: dict[str, Any] | None = None
@@ -295,6 +405,13 @@ class MavlinkBackendSession:
                 self._armed_states.append((sequence, bool(base_mode & armed_flag), received_monotonic, received_timestamp))
                 if len(self._armed_states) > 1024:
                     del self._armed_states[:-512]
+                # 记录当前模式，供 set_mode() 确认切换是否真正生效。
+                # ACK 只表示"命令被接受"，不代表模式已经变了 —— 必须回头看心跳。
+                self._last_heartbeat_mode = (
+                    sequence,
+                    base_mode,
+                    int(getattr(message, "custom_mode", 0) or 0),
+                )
             elif kind == "EXTENDED_SYS_STATE":
                 self._landed_states.append(
                     (sequence, int(getattr(message, "landed_state", 0) or 0), received_monotonic, received_timestamp)
@@ -303,7 +420,14 @@ class MavlinkBackendSession:
                     del self._landed_states[:-512]
             elif kind == "LOCAL_POSITION_NED":
                 self._local_positions.append(
-                    (sequence, float(getattr(message, "z", 0.0)), received_monotonic, received_timestamp)
+                    (
+                        sequence,
+                        float(getattr(message, "x", 0.0)),
+                        float(getattr(message, "y", 0.0)),
+                        float(getattr(message, "z", 0.0)),
+                        received_monotonic,
+                        received_timestamp,
+                    )
                 )
                 if len(self._local_positions) > 1024:
                     del self._local_positions[:-512]
@@ -488,6 +612,203 @@ class MavlinkBackendSession:
         ack["message_name"] = "EXTENDED_SYS_STATE"
         return ack
 
+    def set_mode(
+        self,
+        *,
+        main_mode: int,
+        sub_mode: int = 0,
+        timeout_s: float = 3.0,
+        confirm_timeout_s: float = 3.0,
+    ) -> dict[str, Any]:
+        """切换 PX4 主飞行模式，并**确认它真的生效**。
+
+        为什么不能只看 ACK：``MAV_CMD_DO_SET_MODE`` 的 ACK 只表示 PX4 接受了这条
+        命令，不表示模式已经切换。PX4 可能因为当前状态（例如 OFFBOARD 缺少
+        setpoint 流、或未解锁）而拒绝实际切换。因此这里在 ACK 之后再回看
+        HEARTBEAT 里的 ``custom_mode``，只有观测到目标模式才算成功。
+
+        Returns:
+            含 ``ack``、``confirmed``、``observed_main_mode`` 的字典。
+
+        Raises:
+            RuntimeError: 连接未建立。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        command = self._mavlink_const("MAV_CMD_DO_SET_MODE", 176)
+        custom_enabled = self._mavlink_const("MAV_MODE_FLAG_CUSTOM_MODE_ENABLED", 1)
+
+        with self.command_lock:
+            self.start_receive_loop()
+            generation = self._begin_ack_wait(command)
+            self.send_command_long(
+                command,
+                [float(custom_enabled), float(main_mode), float(sub_mode), 0.0, 0.0, 0.0, 0.0],
+            )
+            ack = self.wait_command_ack(command, timeout_s=timeout_s, generation=generation)
+
+        ack["command_name"] = "MAV_CMD_DO_SET_MODE"
+        ack["requested_main_mode"] = int(main_mode)
+        ack["requested_main_mode_name"] = PX4_MAIN_MODE_NAMES.get(int(main_mode), f"MAIN_{int(main_mode)}")
+        ack["requested_sub_mode"] = int(sub_mode)
+
+        # AUTO 主模式必须连子模式一起确认：LOITER(3) 与 RTL(5) 的 main_mode 都是
+        # AUTO(4)，只比主模式会把"正在返航"当成"稳定悬停"。
+        match_sub = int(main_mode) == PX4_CUSTOM_MAIN_MODE_AUTO
+        confirmed, observed_main, observed_sub = self.wait_mode(
+            main_mode=main_mode,
+            sub_mode=sub_mode,
+            match_sub_mode=match_sub,
+            timeout_s=confirm_timeout_s,
+        )
+        observed_name = (
+            None if observed_main is None
+            else PX4_MAIN_MODE_NAMES.get(int(observed_main), f"MAIN_{int(observed_main)}")
+        )
+        if observed_main == PX4_CUSTOM_MAIN_MODE_AUTO and observed_sub is not None:
+            observed_name = PX4_AUTO_SUB_MODE_NAMES.get(int(observed_sub), f"AUTO_SUB_{int(observed_sub)}")
+        return {
+            "ack": ack,
+            "confirmed": bool(confirmed),
+            "observed_main_mode": observed_main,
+            "observed_sub_mode": observed_sub,
+            "observed_main_mode_name": observed_name,
+        }
+
+    @staticmethod
+    def px4_main_mode_from_custom_mode(custom_mode: int | None) -> int | None:
+        """从 PX4 HEARTBEAT 的 custom_mode 里取出主模式号。
+
+        位布局来自 PX4 源码 ``src/modules/commander/px4_custom_mode.h``::
+
+            union px4_custom_mode {
+                struct {
+                    uint16_t reserved;      // bit 0-15
+                    uint8_t  main_mode;     // bit 16-23
+                    uint8_t  sub_mode;      // bit 24-31
+                };
+                uint32_t data;
+            };
+
+        所以主模式是 ``(data >> 16) & 0xFF``。
+        """
+        if custom_mode is None:
+            return None
+        return (int(custom_mode) >> 16) & 0xFF
+
+    @staticmethod
+    def px4_sub_mode_from_custom_mode(custom_mode: int | None) -> int | None:
+        """从 custom_mode 里取出子模式号（bit 24-31）。
+
+        AUTO 主模式下必须看这个值：MISSION(4) 与 RTL(5) 的主模式都是 AUTO，
+        只看主模式无法区分"在飞航线"和"稳定悬停"。
+        """
+        if custom_mode is None:
+            return None
+        return (int(custom_mode) >> 24) & 0xFF
+
+    def wait_mode(
+        self,
+        *,
+        main_mode: int,
+        sub_mode: int = 0,
+        match_sub_mode: bool = False,
+        timeout_s: float,
+    ) -> tuple[bool, int | None, int | None]:
+        """等待 HEARTBEAT 报告的目标模式。
+
+        Returns:
+            ``(是否确认, 观测到的主模式, 观测到的子模式)``
+
+        ``match_sub_mode=True`` 时要求主模式与子模式都相符。对 AUTO 主模式必须
+        这样做 —— AUTO 下的子模式决定实际行为（LOITER 悬停 vs RTL 返航），
+        只比主模式会把 RTL 误判成安全悬停。
+        """
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        observed_main: int | None = None
+        observed_sub: int | None = None
+        while time.monotonic() < deadline:
+            with self._rx_condition:
+                latest = self._last_heartbeat_mode
+            if latest is not None:
+                observed_main = self.px4_main_mode_from_custom_mode(latest[2])
+                observed_sub = self.px4_sub_mode_from_custom_mode(latest[2])
+                if observed_main == int(main_mode):
+                    if not match_sub_mode or observed_sub == int(sub_mode):
+                        return True, observed_main, observed_sub
+            time.sleep(0.02)
+        return False, observed_main, observed_sub
+
+    def current_mode(self) -> dict[str, Any]:
+        """返回最近一次 HEARTBEAT 观测到的模式（可能是 None，表示还没收到）。"""
+        with self._rx_condition:
+            latest = self._last_heartbeat_mode
+        if latest is None:
+            return {"sequence": None, "base_mode": None, "custom_mode": None,
+                    "main_mode": None, "sub_mode": None}
+        sequence, base_mode, custom_mode = latest
+        main = self.px4_main_mode_from_custom_mode(custom_mode)
+        sub = self.px4_sub_mode_from_custom_mode(custom_mode)
+        name = None if main is None else PX4_MAIN_MODE_NAMES.get(main, f"MAIN_{main}")
+        if main == PX4_CUSTOM_MAIN_MODE_AUTO and sub is not None:
+            name = PX4_AUTO_SUB_MODE_NAMES.get(sub, f"AUTO_SUB_{sub}")
+        return {
+            "sequence": sequence,
+            "base_mode": base_mode,
+            "custom_mode": custom_mode,
+            "main_mode": main,
+            "sub_mode": sub,
+            "main_mode_name": name,
+        }
+
+    def send_position_target(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        time_boot_ms: int | None = None,
+    ) -> None:
+        """发送一条本地位置 setpoint（``vehicle_local_ned``，原点为本机 EKF 原点）。
+
+        ⚠️ 坐标语义：这里的 north/east/down 是**本机 local NED**，不是共享
+        ``scene_ned``。调用方必须先做反向平移转换::
+
+            vehicle_local_ned = scene_ned - translation_scene_ned_m
+
+        该平移量由仿真标定测得，经 ``/api/coordinates/calibration`` 发布，
+        Runtime 在 ``spatial.translation_scene_ned_m`` 中暴露。少这一步会把
+        场景坐标当成本机坐标发出去，飞机将飞向完全错误的位置。
+
+        可单次调用；但 OFFBOARD 模式要求持续流，单次发送不足以维持 ——
+        真正的位置控制见 ``stream_position_target``。
+        """
+        with self.tx_lock:
+            connection = self.connection
+            if connection is None or not self.connected:
+                raise RuntimeError("connection_required")
+            if time_boot_ms is None:
+                time_boot_ms = int((time.monotonic() - self._session_started_monotonic) * 1000) & 0xFFFFFFFF
+            connection.mav.set_position_target_local_ned_send(
+                int(time_boot_ms),
+                self.target_system,
+                self.target_component,
+                MAV_FRAME_LOCAL_NED,
+                POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION,
+                float(north_m),
+                float(east_m),
+                float(down_m),
+                0.0,  # vx —— 被 type_mask 忽略
+                0.0,  # vy —— 被 type_mask 忽略
+                0.0,  # vz —— 被 type_mask 忽略
+                0.0,  # afx
+                0.0,  # afy
+                0.0,  # afz
+                0.0,  # yaw
+                0.0,  # yaw_rate
+            )
+
     def arm(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_COMPONENT_ARM_DISARM", 400)
         ack = self._send_and_wait_ack(command, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], timeout_s=timeout_s)
@@ -513,6 +834,204 @@ class MavlinkBackendSession:
         ack["local_position_cursor"] = observation_cursor
         ack["observation_cursor"] = observation_cursor
         return ack
+
+    def goto(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        tolerance_m: float = 1.0,
+        hold_s: float = 1.0,
+        timeout_s: float = 60.0,
+        rate_hz: float = 10.0,
+        # 收尾目标模式：AUTO + LOITER（自主定点悬停）。
+        #
+        # 为什么不用 POSCTL：停流后 PX4 自己也会退出 OFFBOARD，两条模式切换
+        # 路径互相竞争，POSCTL 的切换经常拿不到确认（实测两次都如此）。
+        # AUTO_LOITER 是既明确又稳定的悬停状态，且与 takeoff 收尾后载具所停的
+        # 模式一致，因此作为默认值更可靠。
+        #
+        # 注意必须带子模式：AUTO 主模式下子模式决定行为，LOITER(3) 是悬停，
+        # 而 RTL(5) 是自主返航。只给 main_mode=4 而 sub_mode=0 会让 PX4 落到
+        # 未定义子模式（实测会变成 RTL 行为）。
+        restore_mode: int = PX4_CUSTOM_MAIN_MODE_AUTO,
+        restore_sub_mode: int = PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+        cancel_event: threading.Event | None = None,
+        preset_setpoints: int = 10,
+        preset_interval_s: float = 0.05,
+    ) -> dict[str, Any]:
+        """飞到本机 local NED 的指定位置并稳定悬停，然后切回 restore_mode。
+
+        ⚠️ 坐标语义：north/east/down 是**本机 vehicle_local_ned**。调用方若拿到的是
+        共享 scene_ned 目标，必须先做反向平移::
+
+            vehicle_local_ned = scene_ned - translation_scene_ned_m
+
+        该平移量取自 Runtime 的 ``/api/vehicle-snapshot`` → ``spatial.translation_scene_ned_m``。
+
+        安全性设计（OFFBOARD 的两个已知陷阱）
+        ------------------------------------
+        1. **setpoint 断流会让 PX4 退出 OFFBOARD。** PX4 在 OFFBOARD 下若约 0.5 秒
+           收不到 setpoint 就会退出该模式（通常转 POSCTL/高度保持悬停，但行为
+           取决于参数）。因此：
+             * 流式循环本身就是 try 体，任何异常都会走 finally；
+             * finally 里**必定**尝试切回 restore_mode，绝不把载具留在 OFFBOARD；
+             * 流循环加锁，避免与命令通道并发写同一 socket。
+
+        2. **必须先有 setpoint 再切 OFFBOARD。** PX4 要求进入 OFFBOARD 前已经收到
+           过位置设定点，否则会拒绝切入。这里先以当前位置预发若干条（保持不动），
+           再切模式并继续流式发送。
+
+        Returns:
+            含 ``mode_result``、``arrival``、``stream``、``restored`` 的证据字典。
+        """
+        if self.connection is None:
+            raise RuntimeError("connection_required")
+
+        target = (float(north_m), float(east_m), float(down_m))
+        rate_hz = max(float(rate_hz), 1.0)
+        period = 1.0 / rate_hz
+        tolerance = max(float(tolerance_m), 0.0)
+
+        # 起飞/悬停阶段维持 GCS 心跳：与现有 takeoff/land 路径一致。
+        # 这也是本方法最后不主动停它的原因（见下方 finally 的说明）。
+        self.start_gcs_heartbeat()
+
+        stop_stream = threading.Event()
+        stream_stats = {"setpoints": 0, "last_error": None, "errors": 0}
+        mode_result: dict[str, Any] | None = None
+        arrival: dict[str, Any] | None = None
+        restored: dict[str, Any] | None = None
+        cancelled = False
+        # 先给初值：虽然目前所有分支都会赋值，但显式初始化可避免后续改动
+        # 引入 UnboundLocalError（这类错误只在特定分支才暴露，很难查）。
+        failure_reason: str | None = "not_attempted"
+
+        def stream_loop() -> None:
+            """10Hz 位置 setpoint 流。持有 tx_lock 整段，避免与命令通道交错。"""
+            while not stop_stream.is_set():
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                try:
+                    # 传入显式 time_boot_ms=None 让 send_position_target 自行计算
+                    self.send_position_target(
+                        north_m=target[0], east_m=target[1], down_m=target[2]
+                    )
+                    stream_stats["setpoints"] += 1
+                except Exception as exc:  # noqa: BLE001 - 流线程不能因单次失败退出
+                    stream_stats["errors"] += 1
+                    stream_stats["last_error"] = f"{type(exc).__name__}: {exc}"
+                    return
+                stop_stream.wait(period)
+
+        try:
+            # --- 1) 预置 setpoint（用当前位置），让 PX4 接受 OFFBOARD ---
+            current = self.latest_local_position()
+            if current is None:
+                raise RuntimeError("local_position_required_before_goto")
+            for _ in range(max(int(preset_setpoints), 1)):
+                self.send_position_target(
+                    north_m=current[0], east_m=current[1], down_m=current[2]
+                )
+                time.sleep(max(float(preset_interval_s), 0.0))
+
+            # --- 2) 启动流，再切 OFFBOARD ---
+            arrival_start_sequence = self.local_position_cursor()
+            stream_thread = threading.Thread(
+                target=stream_loop, name="mavlink-position-stream", daemon=True
+            )
+            stream_thread.start()
+            time.sleep(0.05)  # 让流先跑起来，避免切模式后出现空档
+
+            mode_result = self.set_mode(
+                main_mode=PX4_CUSTOM_MAIN_MODE_OFFBOARD, timeout_s=3.0, confirm_timeout_s=3.0
+            )
+            if mode_result["confirmed"]:
+                # --- 3) 等待到达 ---
+                arrival = self.observe_arrival(
+                    north_m=target[0], east_m=target[1], down_m=target[2],
+                    tolerance_m=tolerance, hold_s=hold_s, timeout_s=timeout_s,
+                    after_sequence=arrival_start_sequence, cancel_event=cancel_event,
+                )
+                cancelled = arrival.get("reason") == "cancelled"
+                failure_reason = None if arrival.get("observed") else str(arrival.get("reason"))
+            else:
+                failure_reason = "offboard_not_confirmed"
+        except Exception as exc:  # noqa: BLE001 - 任何异常都要走统一收敛
+            failure_reason = f"goto_exception:{type(exc).__name__}:{exc}"
+        finally:
+            # --- 4) 无论成功、超时还是异常，都必须收敛 ---
+            # 顺序很重要：先停流，再切模式。反过来的话，切模式期间流仍在发
+            # OFFBOARD setpoint，会把载具又拉回位置控制。
+            stop_stream.set()
+            try:
+                restore_result = self.set_mode(
+                    main_mode=restore_mode,
+                    sub_mode=restore_sub_mode,
+                    timeout_s=3.0,
+                    confirm_timeout_s=3.0,
+                )
+                observed_main = restore_result.get("observed_main_mode")
+                observed_sub = restore_result.get("observed_sub_mode")
+                confirmed = bool(restore_result["confirmed"])
+
+                # ⚠️ 这里**刻意不做**"任意非 OFFBOARD 就算安全"的宽松判定。
+                #
+                # 曾经这样做过，结果是错的：AUTO(4) 主模式下，LOITER(3) 是悬停，
+                # 但 **RTL(5) 是自主返航**（会爬升、飞回原点、降落）。两者
+                # main_mode 都是 4，只看主模式会把"正在返航"判成"稳定悬停"。
+                # 实测踩过：goto 报 pass，随后载具自行爬升到 8.5 米飞回原点。
+                #
+                # 因此只接受两种情况：
+                #   a) 目标模式被精确确认（含 AUTO 的子模式匹配）；
+                #   b) 观测到的是**白名单内的自主悬停模式**且子模式正确。
+                safe_fallback = (
+                    not confirmed
+                    and (observed_main, observed_sub) in PINNED_MODES
+                )
+                if safe_fallback:
+                    confirmed = True
+
+                restored = {
+                    "restored": confirmed,
+                    "main_mode": restore_mode,
+                    "main_mode_name": PX4_MAIN_MODE_NAMES.get(restore_mode, str(restore_mode)),
+                    "sub_mode": restore_sub_mode,
+                    "observed_main_mode": observed_main,
+                    "observed_sub_mode": observed_sub,
+                    "observed_main_mode_name": restore_result.get("observed_main_mode_name"),
+                    # 仍停在 OFFBOARD 是最危险的结果，必须显式标出
+                    "still_in_offboard": observed_main == PX4_CUSTOM_MAIN_MODE_OFFBOARD,
+                    "accepted_fallback": bool(safe_fallback),
+                    "attempted": True,
+                }
+            except Exception as exc:  # noqa: BLE001
+                restored = {
+                    "restored": False,
+                    "main_mode": restore_mode,
+                    "attempted": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+        # 返回值在 finally 之后构造 —— 否则 dict 会在 finally 执行前就被求值，
+        # restored 永远是 None，调用方就拿不到"是否已切回安全模式"这个关键信息。
+        return {
+            "mode_result": mode_result,
+            "arrival": arrival,
+            "stream": dict(stream_stats),
+            "restored": restored,
+            "cancelled": cancelled,
+            "failure_reason": failure_reason,
+        }
+
+    def latest_local_position(self) -> tuple[float, float, float] | None:
+        """最近一次 LOCAL_POSITION_NED 的 (north, east, down)；还没收到则 None。"""
+        with self._rx_condition:
+            if not self._local_positions:
+                return None
+            _, x, y, z, _received, _timestamp = self._local_positions[-1]
+        return (float(x), float(y), float(z))
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_LAND", 21)
@@ -551,7 +1070,11 @@ class MavlinkBackendSession:
             while time.monotonic() < deadline:
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                fresh = [(seq, z) for seq, z, _received, _timestamp in self._local_positions if seq > seen_sequence]
+                fresh = [
+                    (sequence, z)
+                    for sequence, _x, _y, z, _received, _timestamp in self._local_positions
+                    if sequence > seen_sequence
+                ]
                 for sequence, z in fresh:
                     seen_sequence = max(seen_sequence, sequence)
                     samples.append(z)
@@ -609,7 +1132,7 @@ class MavlinkBackendSession:
                     cancelled = True
                     break
                 fresh = [row for row in self._local_positions if row[0] > seen_sequence]
-                for sequence, z, received_at, received_timestamp in fresh:
+                for sequence, _x, _y, z, received_at, received_timestamp in fresh:
                     seen_sequence = max(seen_sequence, sequence)
                     altitude = ned_down_z_to_altitude_m(z)
                     samples.append(altitude)
@@ -760,6 +1283,78 @@ class MavlinkBackendSession:
             "freshness_window_ms": freshness_window_ms,
             "completion_reached": complete,
             "cancelled": cancelled,
+        }
+
+    def observe_arrival(
+        self,
+        *,
+        north_m: float,
+        east_m: float,
+        down_m: float,
+        tolerance_m: float,
+        hold_s: float,
+        timeout_s: float,
+        after_sequence: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """等待载具**持续**处在目标点容差内，返回到达证据。
+
+        为什么要求"持续"而不是"某一刻在容差内"：载具在接近目标时会过冲并来回
+        摆动，单次采样落在容差内不代表已经稳定悬停在目标点。要求连续 hold_s
+        秒说明控制器已经收敛。
+
+        只用**新增**的样本（sequence 大于起点），避免把飞向目标途中的旧位置
+        误当成到达。
+        """
+        start_sequence = self.local_position_cursor() if after_sequence is None else int(after_sequence)
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        hold_s = max(float(hold_s), 0.0)
+        tolerance = max(float(tolerance_m), 0.0)
+        inside_since: float | None = None
+        last_error: float | None = None
+        samples = 0
+
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                return {
+                    "observed": False, "reason": "cancelled", "samples": samples,
+                    "last_error_m": last_error, "start_sequence": start_sequence,
+                }
+            with self._rx_condition:
+                fresh = [row for row in self._local_positions if row[0] > start_sequence]
+            if fresh:
+                _, x, y, z, received_monotonic, _ = fresh[-1]
+                samples = len(fresh)
+                # 三维欧氏距离。三个分量都要算 —— 只比高度会把"高度对了但水平
+                # 还差很远"误判为到达。
+                error = math.sqrt(
+                    (float(x) - float(north_m)) ** 2
+                    + (float(y) - float(east_m)) ** 2
+                    + (float(z) - float(down_m)) ** 2
+                )
+                last_error = error
+                if error <= tolerance:
+                    if inside_since is None:
+                        inside_since = received_monotonic
+                    elif received_monotonic - inside_since >= hold_s:
+                        return {
+                            "observed": True, "reason": "stable_within_tolerance",
+                            "samples": samples, "last_error_m": error,
+                            "hold_s": received_monotonic - inside_since,
+                            "start_sequence": start_sequence,
+                        }
+                else:
+                    inside_since = None
+            if not self.connected and self.last_receive_error:
+                return {
+                    "observed": False, "reason": "receive_loop_failed", "samples": samples,
+                    "last_error_m": last_error, "start_sequence": start_sequence,
+                }
+            time.sleep(0.02)
+
+        return {
+            "observed": False, "reason": "arrival_timeout", "samples": samples,
+            "last_error_m": last_error, "start_sequence": start_sequence,
         }
 
     def local_position_cursor(self) -> int:

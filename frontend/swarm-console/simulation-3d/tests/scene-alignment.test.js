@@ -86,6 +86,64 @@ test("postMessage accepts only the actual parent and approved matching origin", 
   assert.equal(handler(message),true); assert.equal(calls.length,1);
 });
 
+// --- 选择同步（主控制台节点列表 <-> 三维视图）-----------------------------
+
+test("select-vehicle message reaches onSelectVehicle with the node id", () => {
+  const parent = {}, self = {}, seen = [];
+  const handler = createParentMessageHandler({
+    parentWindow:parent, selfWindow:self,
+    allowedOrigins:new Set(["http://localhost:5178"]), expectedOrigin:"http://localhost:5178",
+    onSnapshot:()=>{}, onMode:()=>{}, onError:e=>{throw e;},
+    onSelectVehicle:nodeId=>seen.push(nodeId),
+  });
+  const message = {source:parent, origin:"http://localhost:5178",
+                   data:{type:"uav-swarm/select-vehicle", payload:{nodeId:"UAV-02"}}};
+
+  assert.equal(handler(message), true);
+  assert.deepEqual(seen, ["UAV-02"]);
+});
+
+test("select-vehicle accepts an explicit null as 'no selection'", () => {
+  const parent = {}, self = {}, seen = [];
+  const handler = createParentMessageHandler({
+    parentWindow:parent, selfWindow:self,
+    allowedOrigins:new Set(["http://localhost:5178"]), expectedOrigin:"http://localhost:5178",
+    onSnapshot:()=>{}, onMode:()=>{}, onError:e=>{throw e;},
+    onSelectVehicle:nodeId=>seen.push(nodeId),
+  });
+  assert.equal(handler({source:parent, origin:"http://localhost:5178",
+                        data:{type:"uav-swarm/select-vehicle", payload:{}}}), true);
+  assert.deepEqual(seen, [null], "缺 nodeId 时传 null，而不是 undefined 或空串");
+});
+
+test("select-vehicle without a handler is reported as unhandled, not silently accepted", () => {
+  // 没有 onSelectVehicle 时返回 false（未处理），这样调用方能发现接线缺失；
+  // 若返回 true，会表现为"消息发出去了但选择没同步"，很难排查。
+  const parent = {}, self = {};
+  const handler = createParentMessageHandler({
+    parentWindow:parent, selfWindow:self,
+    allowedOrigins:new Set(["http://localhost:5178"]), expectedOrigin:"http://localhost:5178",
+    onSnapshot:()=>{}, onMode:()=>{}, onError:e=>{throw e;},
+  });
+  assert.equal(handler({source:parent, origin:"http://localhost:5178",
+                        data:{type:"uav-swarm/select-vehicle", payload:{nodeId:"UAV-01"}}}), false);
+});
+
+test("select-vehicle still enforces source and origin checks", () => {
+  const parent = {}, self = {}, seen = [];
+  const handler = createParentMessageHandler({
+    parentWindow:parent, selfWindow:self,
+    allowedOrigins:new Set(["http://localhost:5178"]), expectedOrigin:"http://localhost:5178",
+    onSnapshot:()=>{}, onMode:()=>{}, onError:e=>{throw e;},
+    onSelectVehicle:nodeId=>seen.push(nodeId),
+  });
+  const base = {origin:"http://localhost:5178",
+                data:{type:"uav-swarm/select-vehicle", payload:{nodeId:"UAV-03"}}};
+  assert.equal(handler({...base, source:{}}), false, "非父窗口来源必须拒绝");
+  assert.equal(handler({...base, origin:"https://unknown.invalid"}), false, "未知来源必须拒绝");
+  assert.deepEqual(seen, [], "被拒绝的消息不得触发选择");
+});
+
 test("stopped poller's in-flight response cannot replace a parent feed or re-enable LIVE", async () => {
   let resolve, applied=0;
   const poller = new RuntimeVehicleSnapshotPoller({ fetchSnapshot:()=>new Promise(r=>{resolve=r;}), onSnapshot:()=>{applied++;}, onError:()=>{} });

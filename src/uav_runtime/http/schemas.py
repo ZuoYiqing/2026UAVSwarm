@@ -246,6 +246,162 @@ class LandRequest(BackendRequest):
 
 
 @dataclass(slots=True)
+class GotoRequest(BackendRequest):
+    """飞到共享 scene_ned 坐标系下的指定点。
+
+    坐标语义：``north_m`` / ``east_m`` / ``down_m`` 是 **scene_ned**（共享场景坐标系，
+    z 向下为正），不是载具本机坐标。Runtime 用标定测得的平移量换算成本机的
+    vehicle_local_ned 再下发：``local = scene - translation_scene_ned_m``。
+
+    **标定无效时动作会被拒绝，不会"尽力而为"地飞。** 缺少平移量却把 scene 坐标
+    当本机坐标发出，飞机会飞到一个偏移量之外的错误位置（UAV-02/03 偏 8 米）。
+    """
+
+    north_m: float = 0.0
+    east_m: float = 0.0
+    down_m: float = -3.0
+    arrival_tolerance_m: float = 1.0
+    hold_s: float = 1.0
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "GotoRequest":
+        base = BackendRequest.from_json(payload)
+
+        def finite_in_range(field: str, default: float, low: float, high: float) -> float:
+            raw = payload.get(field, default)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise RequestValidationError(
+                    "invalid_parameter", field, f"{field} 必须是数字", value=raw
+                )
+            value = float(raw)
+            if not math.isfinite(value) or value < low or value > high:
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    field,
+                    f"{field} 必须在 [{low}, {high}] 内且为有限值",
+                    value=raw,
+                )
+            return value
+
+        return cls(
+            **asdict(base),
+            north_m=finite_in_range("north_m", 0.0, -5000.0, 5000.0),
+            east_m=finite_in_range("east_m", 0.0, -5000.0, 5000.0),
+            # z 向下为正：-500 到 500 对应 ±500 米高度范围
+            down_m=finite_in_range("down_m", -3.0, -500.0, 500.0),
+            arrival_tolerance_m=finite_in_range("arrival_tolerance_m", 1.0, 0.05, 50.0),
+            hold_s=finite_in_range("hold_s", 1.0, 0.0, 30.0),
+        )
+
+
+@dataclass(slots=True)
+class PlanExecuteRequest:
+    """Submit a Mission Plan IR for real execution on Runtime.
+
+    This is the contract the algorithm side produces against: it hands over a
+    structured plan, Runtime sequences it and applies the Policy Gate before
+    every action.
+
+    **Scene identity is required.**  ``plan.scene_id`` and ``plan.map_version``
+    must be present and non-empty.  Runtime refuses a plan it cannot check
+    against its own active scene, because coordinates only mean something
+    relative to a scene: a plan built for one map executed against another
+    would fly to positions derived from the wrong reference.
+
+    **Approval is explicit and mandatory.**  It would be convenient to
+    auto-approve a submitted plan, but real execution moves aircraft, so the
+    caller must state the operator identity and an approve decision.  A
+    ``reject`` decision is accepted as a valid request that executes nothing.
+    """
+
+    plan: dict[str, Any]
+    operator_id: str
+    decision: str = "approve"
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "PlanExecuteRequest":
+        plan = payload.get("plan")
+        if not isinstance(plan, dict):
+            raise RequestValidationError(
+                "invalid_parameter", "plan", "plan 必须是对象", value=plan
+            )
+        plan_id = plan.get("plan_id")
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise RequestValidationError(
+                "invalid_parameter", "plan.plan_id", "plan.plan_id 必须是非空字符串",
+                value=plan_id,
+            )
+        # 场景身份：必填。缺失的计划无法与 Runtime 的活动场景核对，
+        # 而"无法核对"正是最该拒绝的情况 —— 不能因为字段缺少就跳过校验。
+        for field in ("scene_id", "map_version"):
+            value = plan.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.{field}",
+                    f"plan.{field} 必须是非空字符串（执行前要与 Runtime 的活动场景核对）",
+                    value=value,
+                )
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise RequestValidationError(
+                "invalid_parameter", "plan.steps", "plan.steps 必须是非空数组",
+                value=steps,
+            )
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise RequestValidationError(
+                    "invalid_parameter", f"plan.steps[{index}]", "步骤必须是对象", value=step
+                )
+            if not isinstance(step.get("step_id"), str) or not step["step_id"].strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].step_id",
+                    "每个步骤都需要非空 step_id",
+                    value=step.get("step_id"),
+                )
+            if not isinstance(step.get("action_type"), str) or not step["action_type"].strip():
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].action_type",
+                    "每个步骤都需要非空 action_type",
+                    value=step.get("action_type"),
+                )
+            params = step.get("params", {})
+            if not isinstance(params, dict):
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].params",
+                    "params 必须是对象",
+                    value=params,
+                )
+            node_id = step.get("node_id", "")
+            if not isinstance(node_id, str):
+                raise RequestValidationError(
+                    "invalid_parameter",
+                    f"plan.steps[{index}].node_id",
+                    "node_id 必须是字符串（可以为空，但执行时会被拒绝）",
+                    value=node_id,
+                )
+
+        operator_id = payload.get("operator_id")
+        if not isinstance(operator_id, str) or not operator_id.strip():
+            # Runtime 拒绝匿名执行：真实执行需要可追溯的操作者身份。
+            raise RequestValidationError(
+                "invalid_parameter", "operator_id", "operator_id 必须是非空字符串",
+                value=operator_id,
+            )
+
+        decision = str(payload.get("decision", "approve") or "approve")
+        if decision not in ("approve", "reject"):
+            raise RequestValidationError(
+                "invalid_parameter", "decision", "decision 只能是 approve 或 reject",
+                value=decision,
+            )
+        return cls(plan=dict(plan), operator_id=operator_id.strip(), decision=decision)
+
+
+@dataclass(slots=True)
 class PlanMissionRequest:
     mission_type: str
     source: str = "ground_station"

@@ -575,6 +575,18 @@ class RuntimeStateStore:
             return calibration, "stale"
         return calibration, str(calibration.get("status") or "unavailable")
 
+    def coordinate_calibration(self, node_id: str) -> tuple[dict[str, Any] | None, str]:
+        """公开只读访问器：返回本节点的坐标标定与状态。
+
+        供 HTTP 层做 scene_ned -> vehicle_local_ned 的反向转换。
+        之所以单独开一个方法而不直接读内部字典：即使 StateStore 内部改用别处
+        存储或增加缓存，调用方也不需要跟着改。
+
+        ⚠️ 调用方必须检查 status == "calibrated" 再使用标定内容 —— 状态可能是
+        "unavailable"（从未发布）或 "stale"（过期），此时 translation 不可信。
+        """
+        return self._coordinate_calibration(node_id)
+
     def simulation_status(self) -> dict[str, Any]:
         telemetry = self.telemetry_latest()
         rows = self.vehicle_registry.vehicle_rows() if self.vehicle_registry is not None else telemetry.get("nodes", [])
@@ -731,6 +743,15 @@ class RuntimeStateStore:
                     "scene_origin": calibration.get("scene_origin") if calibration else None,
                     "altitude_reference": calibration.get("altitude_reference") if calibration else None,
                     "origin_continuity": calibration.get("origin_continuity") if calibration else None,
+                    "axis_alignment": calibration.get("axis_alignment") if calibration else None,
+                    # 本机 local<->scene 的平移量。发布它是为了让上层能做反向转换：
+                    #   scene_ned = translation_scene_ned_m + vehicle_local_ned   （见下方 scene_pose 计算）
+                    #   vehicle_local_ned = scene_ned - translation_scene_ned_m
+                    # goto 必须做这个转换 —— SET_POSITION_TARGET_LOCAL_NED 收的是
+                    # 每台飞机自己的 vehicle_local_ned，而操作者/前端给的目标通常是
+                    # 共享 scene_ned。少这一步会把目标点按场景坐标直接发给载具，
+                    # 飞到一个完全错误的位置。
+                    "translation_scene_ned_m": calibration.get("translation_scene_ned_m") if calibration else None,
                     "source_timestamp": node.get("last_seen"),
                     "sample_timestamp": node.get("last_seen"),
                     "calibration_source_timestamp": calibration.get("source_timestamp") if calibration else None,

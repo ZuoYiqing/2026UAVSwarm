@@ -10,10 +10,18 @@
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
     <atmosphere type="adiabatic"/>
     <scene>
-      <grid>true</grid>
+      <!-- grid 关闭、shadows 关闭：降低 GUI 渲染负担。
+           本项目在 WSL 里用 Mesa 的 D3D12 后端渲染，而它选用了 Intel 集显
+           （OpenGL renderer 报 "D3D12 (Intel(R) UHD Graphics)"），
+           gz sim -g 单进程曾占到约 95% 单核 CPU。
+           关掉这两项是减负手段之一（效果需实测确认，不能假定它解决了问题）。
+
+           需要演示效果时改回：<grid>true</grid>、<shadows>true</shadows>，
+           并相应把下面 light 的 <cast_shadows> 打开。 -->
+      <grid>false</grid>
       <ambient>0.4 0.4 0.4 1</ambient>
       <background>0.65 0.72 0.78 1</background>
-      <shadows>true</shadows>
+      <shadows>false</shadows>
     </scene>
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model>
@@ -24,7 +32,8 @@
     </spherical_coordinates>
 
     <light name="sun" type="directional">
-      <cast_shadows>true</cast_shadows>
+      <!-- 与 <shadows> 保持一致：关阴影时这里也关，避免只改一处造成困惑。 -->
+      <cast_shadows>false</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
@@ -33,12 +42,17 @@
 
     <model name="ground_plane">
       <static>true</static>
+      <!-- 地面 2000×2000（覆盖 ±1000 m）。
+           原先只有 100×100，即仅覆盖 ±50 m —— 而 350 m 外的城市街区
+           （city-block-4-3，中心 y=350，最远点 y≈473）落在地面之外，
+           楼群悬在虚空里：视觉上朝北看不到地面，物理上那片区域下方也没有地面。
+           取 ±1000 m 有充足余量。 -->
       <link name="link">
         <collision name="collision">
-          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <geometry><plane><normal>0 0 1</normal><size>2000 2000</size></plane></geometry>
         </collision>
         <visual name="visual">
-          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <geometry><plane><normal>0 0 1</normal><size>2000 2000</size></plane></geometry>
           <material><ambient>0.25 0.35 0.25 1</ambient><diffuse>0.35 0.45 0.35 1</diffuse></material>
         </visual>
       </link>
@@ -114,5 +128,142 @@
         </visual>
       </link>
     </model>
-  </world>
+  
+    <!-- BEGIN GENERATED city-world: city-block-4-3 (改 city-layout.js 后重跑生成器) -->
+    <!--
+      由 frontend/swarm-console/simulation-3d/src/city-layout.js 生成，请勿手改。
+      街区: block-4-3  中心 ENU(-10, 350)  尺寸 506×246 m
+      建筑: 12 栋  高度 19~52 m
+      生成日期: 2026-09-29
+    
+      坐标：ENU 米，与前端 CITY.layout 完全一致（x=东, y=北, z=上）。
+      每栋楼带 <collision>，飞机撞上会被真实阻挡，不会穿模。
+    -->
+    <model name="city-block-4-3">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link-block-4-3-0-0">
+        <pose>-199.750 268.000 10.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>67.620 48.915 20.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>67.620 48.915 20.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-0-1">
+        <pose>-199.750 350.000 9.500 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>79.971 40.734 19.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>79.971 40.734 19.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-0-2">
+        <pose>-199.750 432.000 19.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>62.812 46.662 38.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>62.812 46.662 38.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-1-0">
+        <pose>-73.250 268.000 11.500 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>70.151 50.736 23.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>70.151 50.736 23.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-1-1">
+        <pose>-73.250 350.000 20.500 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>60.923 41.103 41.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>60.923 41.103 41.000</size></box></geometry>
+          <material><ambient>0.60 0.45 0.38 1</ambient><diffuse>0.60 0.45 0.38 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-1-2">
+        <pose>-73.250 432.000 18.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>64.473 37.894 36.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>64.473 37.894 36.000</size></box></geometry>
+          <material><ambient>0.60 0.45 0.38 1</ambient><diffuse>0.60 0.45 0.38 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-2-0">
+        <pose>53.250 268.000 16.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>80.361 38.620 32.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>80.361 38.620 32.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-2-1">
+        <pose>53.250 350.000 26.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>72.854 50.366 52.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>72.854 50.366 52.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-2-2">
+        <pose>53.250 432.000 18.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>75.775 49.345 36.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>75.775 49.345 36.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-3-0">
+        <pose>179.750 268.000 11.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>68.417 41.528 22.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>68.417 41.528 22.000</size></box></geometry>
+          <material><ambient>0.78 0.79 0.81 1</ambient><diffuse>0.78 0.79 0.81 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-3-1">
+        <pose>179.750 350.000 12.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>83.414 39.776 24.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>83.414 39.776 24.000</size></box></geometry>
+          <material><ambient>0.60 0.45 0.38 1</ambient><diffuse>0.60 0.45 0.38 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="link-block-4-3-3-2">
+        <pose>179.750 432.000 26.000 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>79.234 49.012 52.000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>79.234 49.012 52.000</size></box></geometry>
+          <material><ambient>0.60 0.45 0.38 1</ambient><diffuse>0.60 0.45 0.38 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- END GENERATED city-world: city-block-4-3 -->
+
+</world>
 </sdf>

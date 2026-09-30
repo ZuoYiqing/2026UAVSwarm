@@ -458,10 +458,13 @@ function badge(text, color = "cyan") {
   return `<span class="badge ${color}">${esc(text)}</span>`;
 }
 
-function metric(title, value, detail, color = "cyan") {
+function metric(title, value, detail, color = "cyan", metricKey = "") {
+  // metricKey 用于同页局部更新时的定点定位（见 updatePageInPlace）。
+  // 没有它的指标只能在整块重建时更新，而整块重建会连带重建三维视图的 iframe。
+  const keyAttr = metricKey ? ` data-metric="${esc(metricKey)}"` : "";
   return `<section class="metric">
     <label>${esc(title)}</label>
-    <b class="${color}">${esc(value)}</b>
+    <b class="${color}"${keyAttr}>${esc(value)}</b>
     <div class="delta ${color}">${esc(detail)}</div>
   </section>`;
 }
@@ -543,12 +546,25 @@ function eventList() {
 }
 
 function vehicleTable() {
-  if (!state.fleet.length) {
-    return `<div class="empty-state">Runtime 尚未提供已注册载具</div>`;
-  }
-  return `<table class="table">
+  // 空状态与表格**同时**存在，由 CSS/JS 控制显隐，而不是二选一渲染。
+  //
+  // 为什么不能二选一：首次渲染时数据往往还没到，若那时只渲染空状态、不建
+  // #vehicle-table-body 锚点，之后数据到达时局部更新找不到锚点就什么都不做，
+  // 表格永远不会出现（实测踩到：fleet 已有 3 台，界面停在"尚未提供载具"）。
+  //
+  // 但**只保留锚点还不够**：空状态 div 若由首屏决定是否渲染，数据到达后它不会被
+  // 移除 —— 于是出现"表格已有 3 行、下面还写着'尚未提供载具'"（实测截图确认）。
+  // 因此空状态固定渲染，显隐交给 updatePageInPlace()。
+  return `<table class="table" id="vehicle-table">
     <thead><tr><th>节点</th><th>状态</th><th>Identity</th><th>模式</th><th>高度</th><th>电量</th></tr></thead>
-    <tbody>${state.fleet.map((vehicle) => `
+    <tbody id="vehicle-table-body">${vehicleTableRows()}</tbody>
+  </table>
+  <div class="empty-state" id="vehicle-table-empty" ${state.fleet.length ? "hidden" : ""}>Runtime 尚未提供已注册载具</div>`;
+}
+
+/** 只生成表格行，供同页局部更新使用（不重建整个表格）。 */
+function vehicleTableRows() {
+  return state.fleet.map((vehicle) => `
       <tr class="selectable-row ${vehicle.id === state.selectedUav ? "selected" : ""}" data-vehicle-id="${esc(vehicle.id)}">
         <td><b>${esc(vehicle.displayName)}</b></td>
         <td>${badge(vehicle.connected ? "在线" : vehicle.stale ? "过期" : "离线", vehicle.connected ? "green" : vehicle.stale ? "amber" : "red")}</td>
@@ -557,8 +573,7 @@ function vehicleTable() {
         <td>${esc(formatNumber(vehicle.altitudeM, 1, " m"))}</td>
         <td>${esc(formatNumber(vehicle.batteryPercent, 0, "%"))}</td>
       </tr>
-    `).join("")}</tbody>
-  </table>`;
+    `).join("");
 }
 
 function fleetPreview() {
@@ -621,6 +636,25 @@ async function postVehicleSnapshot() {
   }
 }
 
+/**
+ * 把"当前选中载具"推给三维视图。
+ *
+ * 两侧本来是各自独立的：主控制台有它的节点列表选中项，三维视图有它自己的
+ * 选中项。用户在任一侧切换，另一侧不会跟随——表现为"右边选了 UAV-02，
+ * 左边还停在前一台"。
+ *
+ * 用与快照同一条 postMessage 通道，不引入新的通信机制。
+ */
+function syncSelectionToSimulation(nodeId) {
+  const frame = document.getElementById("simulation-frame");
+  const origin = simulationOrigin();
+  if (!frame?.contentWindow || !origin) return;
+  frame.contentWindow.postMessage(
+    { type: "uav-swarm/select-vehicle", payload: { nodeId: nodeId || null } },
+    origin,
+  );
+}
+
 function simulationAlignmentStatus() {
   const spatial = state.vehicleSnapshot?.vehicles?.find((vehicle) => vehicle.spatial)?.spatial || {};
   const runtimeScene = state.vehicleSnapshot?.scene_id || spatial.scene_id || null;
@@ -638,11 +672,31 @@ function simulationAlignmentStatus() {
     : { label: `未对齐：Runtime ${runtimeScene}/${runtimeMap}，Simulation ${simulationScene}/${simulationMap}`, color: "red" };
 }
 
-function selectVehicle(nodeId) {
+/**
+ * 选中载具（主控制台内的唯一入口）。
+ *
+ * @param {string} nodeId
+ * @param {object} [options]
+ * @param {boolean} [options.fromSimulation=false]
+ *   为 true 表示这次选中是三维视图推过来的，**不再回推**，否则两侧会互相触发
+ *   形成环路。用显式参数而不是"当前是否在处理消息"之类的全局标志：后者容易
+ *   因为消息时序（推送在途时刚好有一次本地操作）而失效。
+ */
+function selectVehicle(nodeId, { fromSimulation = false } = {}) {
   if (!state.fleet.some((vehicle) => vehicle.id === nodeId)) return;
+  if (state.selectedUav === nodeId) return;
   state.selectedUav = nodeId;
   updateSelectedTelemetry();
-  render();
+  // 这里**不再调用 render()**。
+  //
+  // render() 会整树替换 app.innerHTML，而三维视图是其中的 <iframe>，于是每次
+  // 选中载具都会销毁并重建 iframe —— 表现为"点一下右边的无人机，左边地图整个
+  // 重新加载"。updateSelectedTelemetry() 已经做了需要的局部更新，
+  // render() 在这里既是多余的，也是那次重载的直接原因。
+  //
+  // iframe 在 render() 中的保活由 render() 自己处理（见该函数），
+  // 所以即便别处触发整树重建，三维视图也不会被重新加载。
+  if (!fromSimulation) syncSelectionToSimulation(nodeId);
 }
 
 function overviewPage() {
@@ -706,9 +760,9 @@ function twinPage() {
       ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "h-fill twin-panel")}
       <div class="grid" style="grid-template-rows:auto 1fr">
         <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
-          ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan")}
-          ${metric("已武装", summary.armed, "Telemetry", "green")}
-          ${metric("离线 / 过期", state.linkIssues ?? "--", "Fleet", "amber")}
+          ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan", "online")}
+          ${metric("已武装", summary.armed, "Telemetry", "green", "armed")}
+          ${metric("离线 / 过期", state.linkIssues ?? "--", "Fleet", "amber", "issues")}
         </div>
         ${panel("节点列表", vehicleTable(), "scroll")}
       </div>
@@ -826,7 +880,9 @@ function telemetryCard(title, value, color) {
 }
 
 function telemetrySummary() {
-  return `<div class="cols-4">
+  // id 供同页局部更新使用：主控制台每 2 秒刷新遥测，若为此重建整页，
+  // 三维视图的 iframe 会跟着重建并重新加载。
+  return `<div class="cols-4" id="selected-telemetry">
     ${telemetryCard("max_altitude_m", formatNumber(state.maxAltitude), "#36c7f4")}
     ${telemetryCard("last_z", formatNumber(state.lastZ), "#42d883")}
     ${telemetryCard("threshold_reached", state.thresholdReached === null ? "--" : String(state.thresholdReached), "#f5b84c")}
@@ -1459,13 +1515,154 @@ function settingsContent() {
   </div>`;
 }
 
+/**
+ * 重新渲染界面。
+ *
+ * ⚠️ 这里**不能**对 #app 做整树 innerHTML 替换。
+ *
+ * 三维视图是页面里的一个 <iframe>。整树替换会销毁并重建这个 iframe，
+ * 后果是 Cesium 场景重新加载、选中状态丢失、相机复位——用户看到的是
+ * "点一下载具列表，左边地图就刷新一次"。而 renderRuntimeUpdate() 在非 twin
+ * 页面每 2 秒就会走到这里，所以那个看似只影响点击的问题实际上一直在发生。
+ *
+ * 关于"把 iframe 摘下来再放回去"的保活写法（曾被尝试）：
+ * 用 Playwright 实测过四种移动方式——appendChild / replaceChildren /
+ * remove+append 回同一父元素 / remove 后再移到别的父元素——**全部触发重新加载**；
+ * 连"移动 iframe 的祖先容器"也一样重载。所以任何"搬动"的思路都不成立。
+ * 实测有效的唯一做法是：**根本不碰 iframe 所在的子树**，分块更新其余区域。
+ *
+ * 因此结构是：外壳只建一次，各区域各有独立容器，render() 只更新容器内部。
+ * 三维视图所在的 #simulation-frame-wrap 不在任何一次更新范围内。
+ */
 function render() {
-  app.innerHTML = `<div class="shell">
-    ${topbar()}
-    ${sidebar()}
-    <main class="content">${route()}</main>
-    ${toastStack()}
+  ensureShell();
+  renderRegions();
+}
+
+/** 只建立一次外壳与各区域容器。 */
+function ensureShell() {
+  // ⚠️ 这里刻意用可选链读 dataset。
+  //
+  // 控制台的单元测试不挂载真实 DOM：它们用一个极简对象替换 #app
+  // （见 tests/action-ui.test.js：`const app = { innerHTML: "", addEventListener() {} }`），
+  // 该对象没有 dataset 属性。直接写 `.dataset.shellMounted` 会抛 TypeError，
+  // 一次性打挂 12 个既有测试 —— 这是实测踩到的，并用 stash 对比基线确认过。
+  const host = document.getElementById("app");
+  if (!host) return;
+  if (host.dataset?.shellMounted === "1") return;
+
+  // ⚠️ 外壳结构必须与 CSS 的网格定义严格对应，否则整页布局会错位。
+  //
+  // `.shell` 是 CSS Grid（styles.css:46）：
+  //     grid-template-columns: 252px minmax(0, 1fr);
+  //     grid-template-rows: 64px 1fr;
+  // 且**只有 `.topbar` 有显式定位**（grid-column: 1 / -1），
+  // `.sidebar` 与 `.content` 都靠**自动落格**：第 1 个位置被 topbar 占掉整行后，
+  // sidebar 落 [第2行第1列]、content 落 [第2行第2列]。
+  //
+  // 因此直接子元素的**数量与顺序**都不能变。曾经把 sidebar 和 content 各包一层
+  // 无类名的 #slot-* 容器，结果自动落格全乱：sidebar 被拉成横跨整行的 64px 条，
+  // content 被挤成 224px 窄列，整页无法使用（实测截图确认）。
+  //
+  // 现在的做法：**语义元素仍是网格项**（保持原版顺序与数量），slot 作为它们内部的
+  // 容器。末尾那个 .toast-stack 是 position:fixed，不参与网格流，保持它在最后。
+  host.innerHTML = `<div class="shell">
+    <header class="topbar" id="slot-topbar"></header>
+    <aside class="sidebar" id="slot-sidebar"></aside>
+    <main class="content"><div id="slot-content"></div></main>
+    <div id="slot-toast"></div>
   </div>`;
+  if (host.dataset) host.dataset.shellMounted = "1";
+  state.renderedPage = null;
+}
+
+/**
+ * 更新各区域内容。
+ *
+ * 关键约束：**只要当前页是 twin，#slot-content 就不能整体替换** ——
+ * 三维视图的 iframe 在它内部，整块替换等于销毁重建。
+ *
+ * 但同一页面内的状态更新（选中载具、遥测刷新、动作结果）又必须反映到界面上。
+ * 因此按"结构是否变化"分流：
+ *   - 页面切换（结构变）→ 重建 #slot-content，iframe 随之重建（可接受：确实换页了）
+ *   - 同页更新（结构不变）→ 只更新各区域的局部节点，不碰 iframe
+ *
+ * twin 页的局部更新范围是"节点列表 / 遥测 / 指标"这些面板，
+ * 三维面板自身不需要重绘（它的内容由 iframe 自己管，父页面只推快照）。
+ */
+function renderRegions() {
+  const topbarSlot = document.getElementById("slot-topbar");
+  const sidebarSlot = document.getElementById("slot-sidebar");
+  const contentSlot = document.getElementById("slot-content");
+  const toastSlot = document.getElementById("slot-toast");
+
+  if (topbarSlot) topbarSlot.innerHTML = topbar();
+  if (sidebarSlot) sidebarSlot.innerHTML = sidebar();
+
+  const pageChanged = state.renderedPage !== state.page;
+
+  // ⚠️ 这里**不能**因为"表格是空的"就重建 #slot-content。
+  //
+  // 曾经这样"自愈"过，结果是灾难性的：重建 #slot-content 会连三维视图的 iframe
+  // 一起销毁重建，而该条件在数据到位后持续成立（空表 + 有 fleet），于是每次
+  // render 都重载一次地图。实测表现为 readyCount 不断增长。
+  //
+  // 空表的问题改由 updatePageInPlace() 原地填充解决 —— 它可以只更新 <tbody>，
+  // 完全不触碰 iframe。
+  if (contentSlot && (pageChanged || !contentSlot.firstElementChild)) {
+    contentSlot.innerHTML = route();
+    state.renderedPage = state.page;
+    // 首屏之后立刻做一次局部刷新：切页时数据可能还没到，首屏会渲染成空状态。
+    updatePageInPlace();
+  } else if (contentSlot) {
+    updatePageInPlace();
+  }
+
+  if (toastSlot) toastSlot.innerHTML = toastStack();
+}
+
+/**
+ * 同页局部更新：只替换会被状态影响的面板内容，不动三维视图所在容器。
+ *
+ * 目前只覆盖 twin 页——那是唯一含 iframe 的页面，也是 render() 被频繁调用的场景。
+ * 其它页面仍走整体重建（它们没有 iframe，重建无副作用）。
+ */
+function updatePageInPlace() {
+  if (state.page !== "twin") {
+    const contentSlot = document.getElementById("slot-content");
+    if (contentSlot) contentSlot.innerHTML = route();
+    return;
+  }
+  const frameWrap = document.querySelector(".simulation-frame-wrap");
+  if (!frameWrap) {
+    // 结构不符合预期（例如首次从别的页面切过来）→ 退化为整体重建
+    const contentSlot = document.getElementById("slot-content");
+    if (contentSlot) contentSlot.innerHTML = route();
+    state.renderedPage = state.page;
+    return;
+  }
+
+  const table = document.getElementById("vehicle-table-body");
+  if (table) table.innerHTML = vehicleTableRows();
+  // 空状态的显隐必须在这里同步。
+  //
+  // 它由首屏渲染决定是否可见，而首屏通常还没有数据 —— 若不在局部更新里纠正，
+  // 数据到达后表格已填好、空状态却仍留在下面（实测："表格有 3 行，
+  // 下面还写着 'Runtime 尚未提供已注册载具'"）。
+  const emptyNote = document.getElementById("vehicle-table-empty");
+  if (emptyNote) emptyNote.hidden = state.fleet.length > 0;
+  const telemetry = document.getElementById("selected-telemetry");
+  if (telemetry) telemetry.innerHTML = telemetrySummary();
+  const summary = fleetSummary();
+  document.querySelectorAll("[data-metric='online']").forEach((node) => {
+    node.textContent = `${summary.online}/${summary.total}`;
+  });
+  document.querySelectorAll("[data-metric='armed']").forEach((node) => {
+    node.textContent = String(summary.armed);
+  });
+  document.querySelectorAll("[data-metric='issues']").forEach((node) => {
+    node.textContent = String(state.linkIssues ?? "--");
+  });
 }
 
 function topbar() {
@@ -1478,7 +1675,12 @@ function topbar() {
     : summary.total > 0 && summary.online === summary.total
       ? "HEALTHY"
       : summary.online > 0 ? "DEGRADED" : "OFFLINE";
-  return `<header class="topbar">
+  // 只返回 topbar 的**内容**，不返回 <header> 本身。
+  //
+  // <header class="topbar" id="slot-topbar"> 由 ensureShell() 建一次，且它必须是
+  // .shell 的直接子元素（CSS 靠自动落格把它放在第 1 行通栏）。
+  // 这里若再返回一层 <header>，就会出现 header 套 header 的冗余结构。
+  return `
     <div class="brand"><div class="mark"></div><div class="brand-title">2026UAVSwarm Console</div></div>
     <div class="top-pill profile-pill">Ground Profile</div>
     <div class="top-pill">Fleet Telemetry<strong class="${state.backendConnected ? "green" : "amber"}">${fleetState}</strong></div>
@@ -1491,14 +1693,15 @@ function topbar() {
       <button class="icon-btn" title="三维态势" onclick="setPage('twin')">3D</button><button class="icon-btn" title="状态说明" onclick="showStatusHelp()">?</button><button class="icon-btn" title="刷新 Runtime" onclick="probeRuntime({notifyUser:true})">R</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
       <div class="small top-time">${esc(now.toLocaleDateString("zh-CN"))}<br>UTC+8</div>
-    </div>
-  </header>`;
+    </div>`;
 }
 
 function sidebar() {
-  return `<aside class="sidebar"><nav class="nav">
+  // 同 topbar()：只返回导航内容。<aside class="sidebar" id="slot-sidebar">
+  // 由 ensureShell() 建一次，并作为 .shell 的直接子元素参与网格自动落格。
+  return `<nav class="nav">
     ${navItems.map(([id, label, icon]) => `<button class="${state.page === id ? "active" : ""}" onclick="setPage('${id}')"><span class="nav-icon">${icon}</span><span>${label}</span><span>›</span></button>`).join("")}
-  </nav></aside>`;
+  </nav>`;
 }
 
 function setPage(page) {
@@ -1537,6 +1740,15 @@ app.addEventListener("click", (event) => {
 function renderRuntimeUpdate() {
   if (state.page === "twin") {
     postVehicleSnapshot();
+    // 还要做一次**原地**更新。
+    //
+    // 原先这里只有 postVehicleSnapshot() 就 return 了，于是 twin 页的 DOM 从首次
+    // 渲染后就再没更新过。后果之一是：切页时数据尚未到达，节点列表渲染成空状态，
+    // 之后即便 fleet 已有数据，表格也永远空着（实测：fleet 3 台、表格 0 行）。
+    //
+    // 之所以不改成调 render()：render() 在 twin 页会重建 #slot-content，把三维视图的
+    // iframe 一起销毁重建。updatePageInPlace() 只更新 <tbody> 与遥测面板，不碰 iframe。
+    updatePageInPlace();
     return;
   }
   if (document.activeElement?.matches("input, textarea, select")) return;
@@ -1547,6 +1759,17 @@ window.addEventListener("message", (event) => {
   const frame = document.getElementById("simulation-frame");
   if (!frame?.contentWindow || event.source !== frame.contentWindow) return;
   if (event.origin !== simulationOrigin()) return;
+
+  // 三维视图内改选了载具（点选实体或下拉框）→ 跟随更新主控制台的选中项。
+  // 用 fromSimulation:true 避免回推形成环路。
+  if (event.data?.type === "uav-swarm/selection-changed") {
+    const nodeId = event.data.payload?.nodeId;
+    if (typeof nodeId === "string" && nodeId) {
+      selectVehicle(nodeId, { fromSimulation: true });
+    }
+    return;
+  }
+
   if (event.data?.type !== "uav-swarm/simulation-ready") return;
   if (!window.SwarmConsoleModel.validateSimulationReadyMessage(event.data)) {
     state.simulationReady = false;

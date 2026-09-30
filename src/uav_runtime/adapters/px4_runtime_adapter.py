@@ -47,6 +47,18 @@ class Px4RuntimeActionAdapter:
                 observe_timeout_ms=arguments.get("observe_timeout_ms"),
                 cancel_event=arguments.get("_cancel_event"),
             )
+        elif action == "goto":
+            raw = self.backend.execute_goto_action(
+                scene_north_m=float(arguments.get("scene_north_m", 0.0)),
+                scene_east_m=float(arguments.get("scene_east_m", 0.0)),
+                scene_down_m=float(arguments.get("scene_down_m", -3.0)),
+                translation_scene_ned_m=dict(arguments.get("translation_scene_ned_m") or {}),
+                altitude_tolerance_m=float(arguments.get("altitude_tolerance_m", 1.0)),
+                hold_s=float(arguments.get("hold_s", 1.0)),
+                command_timeout_ms=arguments.get("command_timeout_ms"),
+                observe_timeout_ms=arguments.get("observe_timeout_ms"),
+                cancel_event=arguments.get("_cancel_event"),
+            )
         else:
             raw = {"action": action, "result": "fail", "failure_reason": "unsupported_px4_runtime_action"}
         passed = raw.get("result") == "pass"
