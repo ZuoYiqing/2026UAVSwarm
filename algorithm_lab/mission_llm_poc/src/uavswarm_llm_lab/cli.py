@@ -9,6 +9,7 @@ from .benchmark import run_model_benchmark, run_scaffold
 from .contracts import ContractError, canonical_json, digest, parse_json
 from .local_model_client import LocalModelClient, ModelError
 from .intent_grounder import derive_proposal, ground_with_client
+from .scene_binding import bind_scene_reference
 from .mission_planner import evaluate_raw, plan_with_client, reference_proposal
 
 
@@ -21,6 +22,9 @@ def main(argv=None) -> int:
     ground.add_argument("context", type=Path)
     ground_model = sub.add_parser("ground-model", help="Candidate objective bindings from a local text model")
     ground_model.add_argument("context", type=Path)
+    bind_scene = sub.add_parser("bind-scene", help="Bind an objective to physical scene entities; no waypoints")
+    bind_scene.add_argument("affordances", type=Path)
+    bind_scene.add_argument("objective")
     check = sub.add_parser("validate", help="Validate supplied raw model text")
     check.add_argument("context", type=Path)
     check.add_argument("response", type=Path)
@@ -37,7 +41,7 @@ def main(argv=None) -> int:
     for command in (bench, infer):
         command.add_argument("--unconstrained", action="store_true",
                              help="Explicit raw-output comparison; never auto-fallback")
-    for command in (demo, ground, ground_model, check, bench, infer):
+    for command in (demo, ground, ground_model, bind_scene, check, bench, infer):
         command.add_argument("--output", type=Path, help="New JSON result file; refuses overwrite")
     args = parser.parse_args(argv)
     try:
@@ -54,13 +58,17 @@ def main(argv=None) -> int:
             derived = derive_proposal(context)
             result = {"mode": "objective_grounding_baseline", "model_executed": False,
                       "input_hash": digest(context), **derived,
-                      "accepted": True}
+                      "accepted": derived.get("accepted", derived["proposal"] is not None)}
         elif args.command == "ground-model":
             if not args.base_url or not args.model:
                 raise ContractError("Explicit --base-url and --model are required")
             client = LocalModelClient(args.base_url, args.model, args.timeout_s)
             result = ground_with_client(context, client, seed=args.seed,
                                         max_tokens=args.max_tokens)
+        elif args.command == "bind-scene":
+            affordances = parse_json(args.affordances.read_text(encoding="utf-8-sig"))
+            result = {"mode": "scene_reference_binding", "model_executed": False,
+                      **bind_scene_reference(args.objective, affordances)}
         elif args.command == "validate":
             result = evaluate_raw(context, args.response.read_text(encoding="utf-8-sig"))
         elif args.command == "benchmark" and not args.local_model:

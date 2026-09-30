@@ -18,6 +18,10 @@
 本地 4B Q4 模型已真实运行一次受限目标绑定（通过）和一次加固后三机提案（原文含未经证明的
 路径/能源结论，离线回放已拒绝）。本轮记录见
 [verification_20260929.json](docs/verification_20260929.json)；29/29 单元测试通过。
+2026-09-30 新增[物理场景引用绑定与第二轮交接](docs/ROUND2_SCENE_BINDING_HANDOFF_20260930.md)：
+`bind-scene` 读取主线导出的楼群/建筑可供性，将自然语言方位绑定到真实实体 ID，
+但不把建筑中心当成飞行航点。最高建筑并列时要求澄清；巡检/观察需求因感知执行能力未确认
+而阻止生成可执行提案。见[本轮验证记录](docs/verification_20260930.json)；34/34 单元测试通过。
 
 2026-09-20 更新：[离线分层模型研究与下一步实验](docs/OFFLINE_LAYERED_MODEL_RESEARCH_20260920.md)、
 [参考资料核实记录](docs/REFERENCE_INTAKE_20260920.md)。已同步合并后的主线6116912；
@@ -42,6 +46,7 @@ Mission Proposal。现有 demo 使用明确标注的规则基线；它不理解�
 Set-Location 'D:\2026UAVSwarm-worktrees\algorithm-lab-local-llm-poc\algorithm_lab\mission_llm_poc'
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/three_uav_inspection.json
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab ground examples/simple_recon_flight_intent.json
+.\.venv\Scripts\python.exe -m uavswarm_llm_lab bind-scene 'D:\2026UAVSwarm\docs\fixtures\simple_recon_v0_1_scene_affordances.json' '飞到北边那片楼群的东侧'
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/uav02_offline.json
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab demo examples/policy_denied.json
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

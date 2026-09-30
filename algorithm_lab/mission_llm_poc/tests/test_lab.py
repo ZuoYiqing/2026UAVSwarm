@@ -51,6 +51,10 @@ class LabTest(unittest.TestCase):
         request = json.loads(path.read_text(encoding="utf-8"))
         request["tasks"] = []
         self.assertIn("EXTERNAL_TASKS_FORBIDDEN", request_errors(request)[0])
+        conflict = derive_proposal(request)
+        self.assertEqual(conflict["reason_code"], "EXTERNAL_TASKS_FORBIDDEN")
+        self.assertEqual(conflict["clarification_request"]["audience"], "originating_operator")
+        self.assertIsNone(conflict["proposal"])
         del request["tasks"]
         request["objective"] = "对未知区域做飞行验证：起飞、前往航点、降落"
         with self.assertRaisesRegex(ContractError, "REGION_REFERENCE_UNRESOLVED"):
@@ -78,6 +82,11 @@ class LabTest(unittest.TestCase):
         self.assertEqual(report["intent_type"], "reconnaissance")
         self.assertIn("OBSERVE", derived["tasks"][0]["required_actions"])
         self.assertIn("RETURN_HOME", derived["tasks"][0]["required_actions"])
+        blocked = derive_proposal(request)
+        self.assertEqual(blocked["grounding"]["intent_type"], "reconnaissance")
+        self.assertEqual(blocked["reason_code"], "PERCEPTION_EXECUTION_UNAVAILABLE")
+        self.assertIsNone(blocked["proposal"])
+        self.assertFalse(blocked["accepted"])
 
     def test_local_model_grounding_keeps_raw_evidence_and_rejects_invented_ids(self):
         path = Path(__file__).resolve().parents[1] / "examples" / "simple_recon_flight_intent.json"

@@ -150,7 +150,24 @@ def _compile_context(request: dict, matches: list[tuple], intent_type: str) -> t
 
 
 def derive_proposal(request: dict) -> dict:
+    if isinstance(request, dict) and "tasks" in request:
+        return {"context": None, "grounding": None, "proposal": None,
+                "execution_ready": False, "accepted": False,
+                "reason_code": "EXTERNAL_TASKS_FORBIDDEN",
+                "clarification_request": {
+                    "audience": "originating_operator",
+                    "mission_id": request.get("mission_id"),
+                    "conflicting_fields": ["objective", "tasks"],
+                    "question": "请确认原始任务目标并重新提交；任务清单将由目标派生。",
+                    "resolution": "resubmit_objective_without_tasks",
+                }}
     context, grounding = derive_context(request)
+    if grounding["intent_type"] == "reconnaissance":
+        return {"context": context, "grounding": grounding, "proposal": None,
+                "execution_ready": False, "accepted": False,
+                "reason_code": "PERCEPTION_EXECUTION_UNAVAILABLE",
+                "blocking_requirements": ["OBSERVE_ENDPOINT_NOT_IMPLEMENTED",
+                                          "CAMERA_CAPABILITY_UNCONFIRMED"]}
     proposal = reference_proposal(context)
     proposal["explanation"] = ("Tasks derived from objective by exact supplied-label grounding; "
                                "node allocation used the reference greedy baseline.")
@@ -239,7 +256,6 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
         expiry = context_errors(context, elapsed_ms)
         if expiry:
             raise ContractError("; ".join(expiry))
-        proposal = reference_proposal(context)
     except ContractError as exc:
         return {**base, "errors": [str(exc)]}
     exact = all(any(phrase.casefold() == label.casefold()
@@ -250,6 +266,15 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
     if not exact:
         return {**base, "errors": ["SEMANTIC_BINDING_REVIEW_REQUIRED"],
                 "grounding": grounding, "context": context}
+    if candidate["intent_type"] == "reconnaissance":
+        return {**base, "errors": [], "reason_code": "PERCEPTION_EXECUTION_UNAVAILABLE",
+                "blocking_requirements": ["OBSERVE_ENDPOINT_NOT_IMPLEMENTED",
+                                          "CAMERA_CAPABILITY_UNCONFIRMED"],
+                "grounding": grounding, "context": context}
+    try:
+        proposal = reference_proposal(context)
+    except ContractError as exc:
+        return {**base, "errors": [str(exc)]}
     proposal["explanation"] = ("Local model proposed objective-to-region bindings; "
                                "reference greedy baseline allocated nodes.")
     proposal["warnings"].append("MODEL_GROUNDING_CANDIDATE: semantic meaning requires review")
