@@ -87,12 +87,26 @@ Runtime 已刻意区分两种**执行端点**结果：
   gcs_local_port / spawn_ned / runtime_dir`
 - **不含**续航、电池容量、最大速度、速度包线、传感器、相机、视场、分辨率、载荷
 - 当前仓库的三机配置**没有声明相机或成像指标**。实际加载的 PX4/Gazebo 模型及 SDF 可能位于外部 `PX4-Autopilot` 安装目录；仅凭本仓库配置，不能断言其传感器清单或真实成像能力。
-- 外部 PX4 模型静态核查（本机 WSL `/home/zyq/PX4-Autopilot`，提交 `171f0f38cf`，2026-09-29）：当前选择的 `gz_x500` 所用 `x500/model.sdf` 引用 `model://x500_base`；`x500_base/model.sdf` 声明了 `air_pressure` / `magnetometer` / `imu` / `navsat`，未声明相机传感器。这是该版本 SDF 的检查结果，尚非运行时图像输出验收。
+- 外部 PX4 模型静态核查（本机 WSL `/home/zyq/PX4-Autopilot`，提交 `171f0f38cf`，2026-09-29）：当前选择的 `gz_x500` 所用 `x500/model.sdf` 引用 `model://x500_base`；`x500_base/model.sdf` 声明了 `air_pressure` / `magnetometer` / `imu` / `navsat`，未声明相机传感器。
+- **运行时核查（2026-10-03，修正上一条的依据）**：对运行中的世界查询话题，`x500_0` 上实际存在的传感器为
+  `air_pressure_sensor` / `imu_sensor` / `magnetometer_sensor` / `navsat_sensor` /
+  `air_speed`（`airspeed_link`）/ `optical_flow`（`flow_link`）/
+  `lidar` 与 `lidar_2d_v2`（2D 测距，非成像）/
+  **`camera_imu`（位于 `camera_link`，但它是 IMU，不是相机）**。
+  **没有任何 `image` 话题。**
+  > ⚠️ **依据必须取运行时话题，不能只读 SDF 文件**：静态检查 `x500_base/model.sdf` 时
+  > 看不到 `camera_link`，而运行中的世界确实出现了它（上面挂的是 IMU）。
+  > 上一条静态结论（"未声明相机传感器"）方向正确，但**单凭读文件不足以支撑它**。
+  > 正确表述是：**当前配置装配了可选传感器的挂载位置，但没有装配成像传感器**。
 - 同一 PX4 checkout 另有 `x500_mono_cam`（引用 `model://mono_cam`）、`x500_depth`（引用 `model://OakD-Lite`）、`x500_gimbal`（引用 `model://gimbal`）及若干 LiDAR 等传感器变体。它们是**可评估的仿真选型**；切换后还须验证启动兼容性、传感器输出、标定和算法接入，才能声明某项感知任务可用。
-  因此当前 `gz_x500` **未声明相机**，不能推断整个 PX4 仿真体系物理上不支持成像；但变体存在也不能证明当前三机已具备成像能力，更不能证明真机能力。
+  因此当前 `gz_x500` **未装配成像传感器**，不能推断整个 PX4 仿真体系物理上不支持成像；但变体存在也不能证明当前三机已具备成像能力，更不能证明真机能力。
 - `docs/hardware_capability_mapping_template.md` 提供字段说明与示例占位行，关键机型和模块信息仍为 `TBD`，不是已填写并验收的硬件清点
 
-> **重要**：当前只能说"**仓库配置没有相机能力声明**"。是否在本次仿真中装载相机，需要核对实际 SDF、启动配置与图像输出；无论结果如何，都不能据此推断真机能力。
+> **重要**：当前只能说"**当前配置没有装配成像传感器**"（依据为运行时话题，见上）。
+> 是否在本次仿真中装载相机，取决于仿真侧的模型选型；**无论结果如何，都不能据此推断真机能力**。
+>
+> **相关工作**：`OBSERVE` 动作的实现正被这一项阻塞，接口需求见
+> `docs/OBSERVE_interface_requirements_draft.md`。
 
 ---
 
