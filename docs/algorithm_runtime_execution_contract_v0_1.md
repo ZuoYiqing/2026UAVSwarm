@@ -159,6 +159,28 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
 > "确认安全、可作为回退目标"，RTL 是自主机动。本端点是对 RTL 的**显式请求**，
 > 与"把它当成安全回退接受"是两件不同的事。
 
+#### 3.1.1 真飞验证结果（2026-10-03，SITL）
+
+`HOLD` 与 `RETURN_HOME` 已在仿真中真飞验证。UAV-01：起飞 → `goto` 到
+`N=60 E=12 高度=20 m`（误差 0.50 m）→ `HOLD` → `RETURN_HOME`。
+
+```
+[HOLD]  tolerance_m=2.0  hold_s=4.0
+        result=pass  held=true  reason=stable_within_tolerance
+        max_drift_m=0.035   samples=41   mode=AUTO_LOITER
+
+[RETURN_HOME]  timeout_s=90  min_progress_m=5.0
+        result=pass  returning=true  reason=converging_on_home
+        initial_distance_m=60.75  final_distance_m=55.50  reduction=5.26
+        mode=AUTO_RTL confirmed=true
+        高度 20.0 → 29.7 m（PX4 RTL 先爬升到安全返航高度，属预期行为）
+```
+
+**一次反向验证**：在此之前，一次误触发的 `return_home`（飞机在地面、距 home 0.05 m）
+被**如实判为失败**（`return_home_not_converging`）——尽管模式成功切成了 `AUTO_RTL`
+且策略 `allow`。若判据写成"模式变成 RTL 即成功"，那次会误报通过。这正是本端点
+刻意采用位置判据的原因。
+
 ### 3.2 已声明、但**无法执行**的动作
 
 Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实端点（3.1：`takeoff`
