@@ -1,7 +1,7 @@
 # OBSERVE 接口需求（草案，待各方确认）
 
 **提出方**：Integration Owner（Runtime / 前端 / 仿真侧）
-**日期**：2026-10-03
+**日期**：2026-10-03（2026-10-04 更新：相机选型已确认，见第 2.4 节）
 **状态**：**草案。** 本文只界定接口与判据，**不宣布能力可用**
 **相关**：`docs/algorithm_side_round2_20260929.md`、`docs/payload_device_adapter_plan.md`、
 `algorithm_lab/mission_llm_poc/docs/ROUND2_SCENE_BINDING_HANDOFF_20260930.md`
@@ -11,11 +11,19 @@
 ## 0. 为什么现在写这一份
 
 算法侧的巡检计划是 `TAKEOFF → GOTO → OBSERVE → RETURN_HOME → LAND`。
-截至 2026-10-03，**其中四个已实现并真飞验证**（`RETURN_HOME` 与 `HOLD` 见
-`docs/algorithm_runtime_execution_contract_v0_1.md` 3.1.1），**只剩 `OBSERVE`**。
+**动作端点层面**，其中四个已实现并真飞验证（`RETURN_HOME` 与 `HOLD` 见
+`docs/algorithm_runtime_execution_contract_v0_1.md` 3.1.1），只剩 `OBSERVE`。
 
-而 `OBSERVE` 卡住的原因**不是"还没排上"**：它没有可依据的接口定义
-（拍什么、存哪、如何判定"确实观察到了"），而且**仿真当前根本出不了图**（见第 2 节）。
+> ⚠️ **但"只剩 OBSERVE"只对端点成立，对提案链路不成立。**
+> 提案转换器 `tools/proposal-to-plan.mjs` 目前只展开 `TAKEOFF / GOTO / LAND`，
+> 把 `HOLD` 与 `RETURN_HOME` 归入 `CONVERTER_NOT_EXPANDABLE`。
+> 因此**即使 `OBSERVE` 端点实现，巡检提案仍会因整份拒绝而跑不通**。
+> 这是算法负责人于 2026-10-04 指出的，我方确认其成立。
+> 契约文档第 211-212 行原先写作"巡检任务现在只差感知载荷接口这一项"，
+> **该表述不准确，已更正**。
+
+`OBSERVE` 卡住的原因**不是"还没排上"**：它此前没有可依据的接口定义
+（拍什么、存哪、如何判定"确实观察到了"），而且**仿真此前出不了图**。
 在没有定义的情况下实现它，只会产生一个"看起来完成、实际没拍照"的假成功 ——
 这正是本项目反复避免的那类失败。
 
@@ -88,9 +96,75 @@
 `camera_capture` 存在 placeholder；把它接到 HTTP 端点上是集成侧能做的事，
 **但它拍不到真实图像** —— 端点通了也只是"调用了一次桩"。
 
----
+### 2.4 相机选型已确认（2026-10-04，仿真侧实测）
 
-## 3. 算法侧已提出的证据需求（我方接受，作为本接口的输入）
+**仿真负责人已在隔离世界中实测 `x500_mono_cam`，输出真实场景图像**（完整 RGB 帧、
+能看到测试场景中的实际目标，非空帧或占位消息）。**这解除了第 2.1 节的阻塞。**
+
+| 项目 | 实测结果 |
+| --- | --- |
+| PX4 模型 | `gz_x500_mono_cam` |
+| PX4 airframe | `4010_gz_x500_mono_cam` |
+| 消息类型 | `gz.msgs.Image` |
+| 像素格式 | `RGB_INT8`（即 RGB8） |
+| 分辨率 | **1280 × 960** |
+| 行步长 | 3840 bytes |
+| 标称帧率 | 30 Hz |
+| 实测采样间隔 | 32–36 ms |
+| 水平视场角 | 1.74 rad ≈ **99.7°** |
+| 相机信息类型 | `gz.msgs.CameraInfo` |
+| `frame_id` | `camera_link` |
+
+**相机内参（实测）**：
+
+```
+K = [ 539.93633,   0,        640,
+        0,       539.93637,  480,
+        0,         0,          1 ]
+畸变参数均为零
+```
+
+**相对 `base_link` 的安装位姿**（来自模型定义）：
+`translation = [0.12, 0.03, 0.242] m`，`rotation_rpy = [0, 0, 0] rad`
+
+> ⚠️ **这是 Gazebo 机体坐标定义，不是光学坐标。** 目前**没有单独声明 ROS optical frame**，
+> 因此**算法侧暂时不能自行假定 x-right / y-down / z-forward**。
+> 光学坐标约定必须由**图像适配层**明确后，算法侧才能据此解释像素与视场。
+
+**三机话题**（模型名将变为 `x500_mono_cam_0/1/2`）：
+
+```
+/world/simple_recon_v0_1/model/x500_mono_cam_<i>/link/camera_link/sensor/camera/image
+/world/simple_recon_v0_1/model/x500_mono_cam_<i>/link/camera_link/sensor/camera/camera_info
+```
+
+### 2.5 其他变体的结论（仿真侧实测，供记录）
+
+| 变体 | 结论 |
+| --- | --- |
+| `x500_gimbal` | **不能解决 OBSERVE**：只有云台机构和 `camera_imu`，**没有 `type="camera"` 成像传感器** |
+| `x500_depth` | 能输出 1920×1080 RGB + 640×480 浮点深度，**但深度模型使用未按飞机隔离的话题**（`/depth_camera`、`/depth_camera/points`、`/camera_info`），**三机可能话题混流**。本轮不选 |
+| `x500_mono_cam` | **话题按模型路径隔离，结构简单**，选作第一版 |
+
+> `x500_depth` 这个话题混流的问题值得记住：**三机场景下"话题是否按载具隔离"是选型的硬条件**，
+> 不只是参数好坏。混流会表现为"A 机拿到了 B 机的图"，且**不会报错**。
+
+### 2.6 ⚠️ 三机兼容性尚未回归（**执行端在此之前必须禁用**）
+
+仿真侧明确说明：当前三机正式世界与三个 MAVLink endpoint **正由 Runtime 联调占用**，
+因此**没有抢占环境切换模型**。以下五项**尚未验证**：
+
+1. harness 改为 airframe `4010` + `gz_x500_mono_cam`
+2. 更新模型身份、health evidence 与测试 fixture
+3. 回归三机启动、ARM / TAKEOFF / GOTO / HOLD / LAND
+4. 验证**三路图像隔离**、持续帧率及 Gazebo 实时因子
+5. 验证停止流程与端口释放
+
+**因此：在上述三机回归完成前，执行端应保持禁用，或明确返回
+`camera_not_validated`，不能报告成功。**
+算法侧可以先行实现 `OBSERVE` 语义与图像结果校验。
+
+---
 
 算法侧在 `ROUND2_SCENE_BINDING_HANDOFF_20260930.md:43-47` 已给出最小数据需求，
 **我方认为方向正确，直接采用**：
@@ -130,6 +204,60 @@
 
 > 这个分歧不解决就实现 OBSERVE，会重复本仓库已经踩过两次的失败形态：
 > 命令被接受、零报错、而实际什么都没发生。
+
+### 4.1 ⚠️ 状态语义：算法负责人指出的问题（**代码层面确认成立**）
+
+算法负责人 2026-10-04 指出：
+
+> 若 OBSERVE 步骤的完成条件是"确认目标"，L1 不应给该步骤返回会被 Runtime
+> 当作任务完成的 `result: "pass"`；建议用明确的部分完成/待判定状态。
+
+**我方核实后确认这成立，不是措辞问题**：
+
+```python
+# executor.py:362
+ok = bool(accepted is True) and result != "fail" and status < 400
+# lifecycle.py:365
+if getattr(outcome, "ok", False):
+    self.mark_step_succeeded(plan, step, mode="real", ...)
+```
+
+**即 `accepted=true` + `result="pass"` → 该步判成功 → 计划判 `completed`。**
+
+**而且现有状态里没有中间态**：
+
+```
+StepStatus : pending / ready / needs_operator_confirm / running / succeeded / failed
+PlanStatus : draft / validated / awaiting_confirmation / approved / executing / completed / blocked
+```
+
+`PlanStatus` **没有** partial / incomplete。所以"采集成功但观察未判定"**当前无处可放**。
+
+> 注：`StepStatus.NEEDS_OPERATOR_CONFIRM` 存在，但它的现有语义是**执行前**的审批
+> （`lifecycle.py:198` 按批准集合放行），不是**执行后**的待判定。复用它需要重新定义语义。
+
+### 4.2 我方的修法建议：**改动作名，而不是加状态**
+
+**根本问题是名字与完成条件不符**：计划里那一步实际做的是"拍一张照"，
+而完成条件被写成"确认观察到"。**这两件事本来就不同；用新状态去补，是在给语义错位打补丁。**
+
+| 方案 | 做法 | 代价 |
+| --- | --- | --- |
+| **A（我方建议）** | **动作叫 `CAPTURE` 而不是 `OBSERVE`**，完成条件 = "拍到合格图像"。计划诚实地说"我拍了照"，`pass` 语义正确。观察判定（L2）**根本不进执行计划** | **零架构改动**，语义诚实 |
+| B | 新增 `partial` / `incomplete` 状态 | 需改 executor + lifecycle + PlanStatus + 所有消费方，改动面大 |
+| C | L1 返回 `accepted=false` | 会被判失败 → 按"首败即止"**中止整份计划** |
+
+**A 的关键好处**：它在**名称层面**就把"拍到照片"与"确认看到了东西"分开：
+
+- `pass` 只声称"拍了照"——**这是真的**
+- L2 判定在计划之外完成（人工复核或后续检测器），**它本来也不该由飞行计划保证**
+
+**这与两位负责人的立场一致**：仿真侧要求"仅完成 HOLD 或到达航点不能算巡检完成"，
+算法侧要求"L1 不应返回会被当作任务完成的 pass"。
+
+**⚠️ 方案 A 会改动算法侧已写的动作名，需他们确认。** 在确认之前，本草案不预设结论。
+
+> 无论选哪个方案，有一点不变：**不得把"采集完成"渲染成"巡检完成"。**
 
 ---
 
