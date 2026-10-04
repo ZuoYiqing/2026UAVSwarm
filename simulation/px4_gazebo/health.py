@@ -386,7 +386,9 @@ def collect_health(
         models = model_probe()
     else:
         try:
-            models = {str(p["name"]) for message in capture_poses(expected_world, .05)
+            # A loaded three-camera world may run below real time; 50 ms of wall
+            # time can miss every pose update and falsely report all models gone.
+            models = {str(p["name"]) for message in capture_poses(expected_world, 2.0)
                       for p in message.get("pose", []) if "name" in p}
         except (OSError, ValueError, TimeoutError):
             models = set()
