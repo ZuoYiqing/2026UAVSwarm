@@ -8,6 +8,7 @@ const navItems = [
   ["skills", "Skills 能力库", "SK"],
   ["backend", "Adapter / Backend", "AB"],
   ["simulation", "仿真中心", "SM"],
+  ["observation", "观察复核", "OR"],
   ["assets", "硬件资产", "HW"],
   ["replay", "Audit / Replay", "RP"],
   ["model", "模型与知识", "MK"],
@@ -1459,10 +1460,195 @@ async function replayPlay() {
   render();
 }
 
+/**
+ * 观察复核（L2）页面。
+ *
+ * 这一页做的事：把**人工对图像的判定**记成一条可校验、可追溯的记录。
+ *
+ * 为什么它必须存在：采集到图像（L1，CAPTURE）与判定"是否观察到目标"（L2）是两件事。
+ * 三方已对齐：CAPTURE 的 pass **不能**把 OBSERVE、巡检步骤或原任务标记为完成。
+ * 在没有 L2 的情况下把巡检报成完成，就是本仓库反复防的那类假成功。
+ *
+ * 三条由 `SwarmConsoleModel.validateObservationReview` 强制的规则：
+ *   1. 不得编造数值置信度（confidence 必须显式 null）
+ *   2. reviewer 必须是 `human:` 前缀 —— 本阶段只接受人工复核
+ *   3. `not_observed` / `undetermined` 必须给出依据
+ */
+function observationPage() {
+  const reviewModel = reviewModelApi();
+  const draft = state.reviewDraft || {};
+  const result = state.reviewResult || null;
+
+  const field = (id, label, value, opts = {}) => {
+    const type = opts.type || "text";
+    const ph = opts.placeholder ? ` placeholder="${esc(opts.placeholder)}"` : "";
+    return `<div class="field"><label for="${id}">${esc(label)}</label>`
+      + `<input id="${id}" type="${type}" value="${esc(value ?? "")}"${ph}`
+      + ` oninput="setReviewDraft('${opts.key}', this.value)"></div>`;
+  };
+
+  const body = `
+    <div class="design-preview-notice">
+      <b>本阶段不能当验收证据</b>
+      <span>${esc("CAPTURE（采集）端点尚未实现，因此 capture_id 与图像哈希都靠人工录入——校验器只能保证格式与哈希自洽，不能证明它们来自真实采集。等 CAPTURE 接通、capture_id 由 Runtime 签发后，这一点才会成立。")}</span>
+    </div>
+    <div class="design-preview-notice">
+      <b>为什么要有 L2</b>
+      <span>${esc("采集到图像不等于观察到目标。CAPTURE 的 pass 不能把巡检报成完成；那正是本项目反复防的假成功。本页只记录人工判定，不自动产生结论。")}</span>
+    </div>
+    ${panel("新建复核记录", `
+      <div class="form-grid">
+        ${field("review-task", "任务 ID (task_id)", draft.taskId, { key: "taskId", placeholder: "TASK-1" })}
+        ${field("review-target", "目标 ID (target_id)", draft.targetId, { key: "targetId", placeholder: "target-001" })}
+        ${field("review-capture", "采集 ID (capture_id)", draft.captureId, { key: "captureId", placeholder: "cap-…" })}
+        ${field("review-criterion", "判据版本 (criterion_version)", draft.criterionVersion, { key: "criterionVersion", placeholder: "l2-criterion-v0.1" })}
+        ${field("review-reviewer", "复核人 (reviewer)", draft.reviewer, { key: "reviewer", placeholder: "human:<你的标识>" })}
+        ${field("review-vehicle", "载具 (vehicle_id)", draft.vehicleId, { key: "vehicleId", placeholder: "UAV-01" })}
+        ${field("review-camera", "相机 (camera_id)", draft.cameraId, { key: "cameraId", placeholder: "front_rgb" })}
+        ${field("review-captured-at", "采集时刻 (captured_at)", draft.capturedAt, { key: "capturedAt", placeholder: "2026-10-05T11:59:30Z" })}
+        ${field("review-width", "宽 (width)", draft.width, { key: "width", placeholder: "1280" })}
+        ${field("review-height", "高 (height)", draft.height, { key: "height", placeholder: "960" })}
+        ${field("review-encoding", "像素格式 (encoding)", draft.encoding, { key: "encoding", placeholder: "RGB8" })}
+        ${field("review-image-ref", "图像引用 (image.ref)", draft.imageRef, { key: "imageRef", placeholder: "sha256:<64 位小写十六进制>" })}
+      </div>
+      <div class="field"><label for="review-outcome">结论 (outcome)</label>
+        <select id="review-outcome" onchange="setReviewDraft('outcome', this.value)">
+          ${Object.keys(reviewModel.REVIEW_OUTCOMES).map((key) => {
+            const labels = { observed: "observed —— 按判据看到了目标", not_observed: "not_observed —— 未按判据看到（不证明目标不存在）", undetermined: "undetermined —— 判不了" };
+            return `<option value="${esc(key)}" ${draft.outcome === key ? "selected" : ""}>${esc(labels[key] || key)}</option>`;
+          }).join("")}
+        </select>
+      </div>
+      <div class="field"><label for="review-note">判断依据（文字说明）</label>
+        <input id="review-note" value="${esc(draft.note ?? "")}" placeholder="目标位于画面中央偏右 / 画面模糊无法判定" oninput="setReviewDraft('note', this.value)"></div>
+      <div class="action-buttons">
+        <button class="button primary" onclick="submitObservationReview()">校验并生成记录</button>
+        <button class="button" onclick="clearObservationReview()">清空</button>
+      </div>
+      <div class="control-notes">
+        <span class="small">结论为 <b>not_observed</b> 或 <b>undetermined</b> 时，必须填写文字说明——没有依据的否定与「检测器没报」无法区分。</span>
+        <span class="small">不提供"置信度"输入框：人工结论不伪造数值置信度。</span>
+      </div>
+    `)}
+    ${panel("校验结果", reviewResultView(result))}
+    ${panel("记录 JSON（可复制保存；格式与 Python 侧一致）",
+      result && result.ok
+        ? `<pre class="json scroll">${esc(JSON.stringify(result.record, null, 2))}</pre>`
+        : `<div class="empty-state">校验通过后在此显示记录 JSON</div>`)}
+    ${panel("导入并校验已有记录",
+      `<div class="field"><label for="review-import">粘贴记录 JSON</label>
+        <input id="review-import" placeholder='{"review_version":"0.1", …}' oninput="setReviewImport(this.value)"></div>
+       <div class="action-buttons"><button class="button" onclick="validateImportedObservationReview()">校验这份记录</button></div>
+       ${state.reviewImportResult ? reviewResultView(state.reviewImportResult) : `<div class="empty-state">尚未校验</div>`}`)}
+  `;
+
+  return `<div class="page">
+    ${pageTitle("观察复核 (L2)", "对采集图像的人工判定记录。CAPTURE pass 只代表采集完成，不代表观察到目标。")}
+    ${body}
+  </div>`;
+}
+
+/** 取复核模型；页面在 Node 测试环境里也要能渲染。 */
+function reviewModelApi() {
+  return (typeof window !== "undefined" && window.SwarmConsoleModel)
+    || (typeof SwarmConsoleModel !== "undefined" ? SwarmConsoleModel : null)
+    || {};
+}
+
+function reviewResultView(result) {
+  if (!result) return `<div class="empty-state">尚未校验</div>`;
+  if (result.ok) {
+    return `<div>${badge("校验通过", "green")} <span class="small">review_id ${esc(result.record.review_id)}，confidence 为 null，linked_task_completion 为 not_asserted。</span></div>`;
+  }
+  return `<div class="inline-error">${result.violations.length} 处不合法，已拒绝（不部分采纳）：</div>
+    <table class="table"><thead><tr><th>代码</th><th>字段</th><th>说明</th><th>实际值</th></tr></thead><tbody>
+    ${result.violations.map((v) => `<tr>
+      <td>${esc(v.code)}</td><td>${esc(v.field || "--")}</td>
+      <td>${esc(v.hint || "")}</td>
+      <td class="small">${esc(v.value === undefined || v.value === null ? "--" : JSON.stringify(v.value))}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function setReviewDraft(key, value) {
+  state.reviewDraft = { ...(state.reviewDraft || {}), [key]: value };
+  // 不整页重渲染：输入框正在被编辑，重渲染会丢光标。
+}
+
+function clearObservationReview() {
+  state.reviewDraft = {};
+  state.reviewResult = null;
+  state.reviewImportResult = null;
+  render();
+}
+
+function setReviewImport(value) {
+  state.reviewImportRaw = value;
+}
+
+/** 从草稿构造 image 对象。缺字段就让校验器去报，不在这里提前替它判断。 */
+function reviewImageFromDraft(draft) {
+  return {
+    ref: draft.imageRef,
+    sha256: String(draft.imageRef || "").replace(/^sha256:/, ""),
+    width: Number(draft.width),
+    height: Number(draft.height),
+    encoding: draft.encoding || "RGB8",
+    captured_at: draft.capturedAt,
+    vehicle_id: draft.vehicleId,
+    camera_id: draft.cameraId || "front_rgb",
+  };
+}
+
+function submitObservationReview() {
+  const model = reviewModelApi();
+  const draft = state.reviewDraft || {};
+  if (typeof model.buildObservationReview !== "function") {
+    notify("复核模型不可用", "SwarmConsoleModel.buildObservationReview 缺失。", "amber");
+    return;
+  }
+  const result = model.buildObservationReview({
+    taskId: draft.taskId,
+    targetId: draft.targetId,
+    captureId: draft.captureId,
+    image: reviewImageFromDraft(draft),
+    criterionVersion: draft.criterionVersion,
+    reviewer: draft.reviewer,
+    reviewedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    outcome: draft.outcome || "observed",
+    note: draft.note,
+  });
+  state.reviewResult = result;
+  if (result.ok) {
+    notify("记录已生成", "校验通过。请复制 JSON 保存，或用 scripts/observe_review.py 写入。", "green");
+  } else {
+    notify("记录不合法", `${result.violations.length} 处问题，未生成记录。`, "amber");
+  }
+  render();
+}
+
+function validateImportedObservationReview() {
+  const model = reviewModelApi();
+  const raw = state.reviewImportRaw;
+  if (!raw || !raw.trim()) {
+    state.reviewImportResult = { ok: false, violations: [{ code: "empty_input", field: "review-import", hint: "请先粘贴记录 JSON。" }] };
+    render();
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    state.reviewImportResult = { ok: false, violations: [{ code: "invalid_json", field: "review-import", hint: String(error.message || error) }] };
+    render();
+    return;
+  }
+  state.reviewImportResult = model.validateObservationReview(parsed);
+  render();
+}
+
 function assetsPage() {
   return placeholderPage("硬件资产", "飞控、伴随计算板、通信链路、云台、相机、载荷、传感器、电源模块的资产台账与接入状态。", hardwareTable());
 }
-
 function modelPage() {
   return placeholderPage("模型与知识", "Planner、Summarizer、Validator、知识库、Replay 到 Dataset 的闭环管理。", modelContent());
 }
@@ -1721,6 +1907,7 @@ function route() {
     skills: skillsPage,
     backend: backendPage,
     simulation: simulationPage,
+    observation: observationPage,
     assets: assetsPage,
     replay: replayPage,
     model: modelPage,

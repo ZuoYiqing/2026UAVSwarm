@@ -387,6 +387,236 @@
     );
   }
 
+  // --- 观察复核（L2）记录 ---------------------------------------------------
+  //
+  // 采集到图像（L1，CAPTURE）与判定"是否观察到目标"（L2）是两件事。
+  // 三方已对齐：CAPTURE 的 pass **不能**把 OBSERVE、巡检步骤或原任务标记为完成。
+  //
+  // ⚠️ 本段是 Python 侧 `src/uav_runtime/observation/review_record.py` 的
+  // **对照实现**。前端是静态页面（无构建步骤），不能 import Python，因此规则
+  // 必须在两端各写一次。**两份实现必须行为一致** —— 否则会出现"前端放了、
+  // 后端拒了"这种让人以为是 bug 的分歧。
+  // 用例逐条对应：`tests/observation-review.test.js` ↔
+  // `tests/unit/test_observation_review_record.py`。改一侧请同步另一侧。
+  const REVIEW_VERSION = "0.1";
+  const HUMAN_REVIEWER_PREFIX = "human:";
+  const LINKED_TASK_COMPLETION_NOT_ASSERTED = "not_asserted";
+  const REVIEW_OUTCOMES = Object.freeze({
+    observed: "observed",
+    not_observed: "not_observed",
+    undetermined: "undetermined",
+  });
+  const REVIEW_REQUIRED_FIELDS = [
+    "review_version", "review_id", "created_at", "task_id", "target_id",
+    "capture_id", "image", "criterion_version", "reviewer", "reviewed_at",
+    "outcome", "confidence", "linked_task_completion",
+  ];
+  const REVIEW_IMAGE_REQUIRED_FIELDS = [
+    "ref", "sha256", "width", "height", "encoding", "captured_at",
+    "vehicle_id", "camera_id",
+  ];
+  //: 必须是**非空字符串**的标识类字段。存在性与非空是两件事。
+  const REVIEW_IDENTITY_FIELDS = [
+    "review_id", "task_id", "target_id", "capture_id",
+    "criterion_version", "reviewed_at",
+  ];
+  const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+  function nonEmptyString(value) {
+    return typeof value === "string" && value.trim() !== "";
+  }
+
+  /**
+   * 校验一条复核记录。返回 `{ok, record?, violations}` —— **不抛异常**。
+   *
+   * 前端要能一次把全部问题显示给操作者，抛异常会逼出"改一个跑一次"的循环。
+   * 违规是**一次报全**的，与 Python 侧一致。
+   */
+  function validateObservationReview(record) {
+    const violations = [];
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      return {
+        ok: false,
+        violations: [{
+          code: "not_an_object",
+          actual_type: Array.isArray(record) ? "array" : typeof record,
+        }],
+      };
+    }
+
+    // ⚠️ 只查"键在不在"是不够的：**空字符串**能通过存在性检查，而一个
+    // `capture_id: ""` 的记录没有任何东西能把它关联到某次采集 —— 恰好废掉
+    // 这个字段的全部意义。因此标识类字段必须是**非空字符串**。
+    // （这个洞最初是在这里被测试抓到的，Python 侧一并修了。）
+    for (const field of REVIEW_REQUIRED_FIELDS) {
+      if (!(field in record)) violations.push({ code: "missing_field", field });
+    }
+    for (const field of REVIEW_IDENTITY_FIELDS) {
+      if (field in record && !nonEmptyString(record[field])) {
+        violations.push({
+          code: "empty_identity_field", field, value: record[field],
+          hint: "标识类字段必须是非空字符串。空值会让这条记录无法关联到任何任务、目标或采集。",
+        });
+      }
+    }
+
+    // 规则一：不得编造数值置信度。
+    // 检查的是"键存在且值为 null"，不是"值假" —— `confidence: 0` 也要拒，
+    // 它同样是把主观印象伪装成测量值。缺失也按同一条规则报：省略会让
+    // "忘了填"与"确实没有"看起来一样，而这条规则恰恰要区分这件事。
+    if (!("confidence" in record) || record.confidence !== null) {
+      violations.push({
+        code: "confidence_must_be_null",
+        field: "confidence",
+        value: record.confidence === undefined ? null : record.confidence,
+        hint: "人工结论不伪造数值置信度。必须显式填 null，并把判断依据写进 region 或 note。",
+      });
+    }
+
+    // 规则二：reviewer 必须是人工。
+    // `null` 必须被拒 —— 不能"值为空就跳过检查"，那样 reviewer=null 的
+    // 记录会绕过这条规则。
+    const reviewer = record.reviewer;
+    if (typeof reviewer !== "string" || !reviewer.startsWith(HUMAN_REVIEWER_PREFIX)) {
+      violations.push({
+        code: "reviewer_not_human",
+        field: "reviewer",
+        value: reviewer === undefined ? null : reviewer,
+        hint: "本阶段 L2 只接受人工复核，reviewer 必须以 human: 开头。"
+          + "仿真真值只能用于离线标注与评价，不得写入运行时检测或冒充检测结果。",
+      });
+    } else if (!reviewer.slice(HUMAN_REVIEWER_PREFIX.length).trim()) {
+      violations.push({
+        code: "reviewer_not_human", field: "reviewer", value: reviewer,
+        hint: "human: 后必须有实际标识，否则无法追溯是谁复核的。",
+      });
+    }
+
+    if (record.outcome !== undefined
+      && !Object.prototype.hasOwnProperty.call(REVIEW_OUTCOMES, record.outcome)) {
+      violations.push({
+        code: "invalid_outcome", field: "outcome", value: record.outcome,
+        allowed: Object.keys(REVIEW_OUTCOMES),
+      });
+    }
+
+    // 规则三：否定/未判定必须给出依据。
+    // not_observed 只表示"在这份图像中未按判据看到"，**不证明目标不存在**；
+    // 没有依据的否定与"检测器没报"在数据上无法区分 —— 而后者不能作为结论。
+    const hasRegion = record.region && typeof record.region === "object"
+      && !Array.isArray(record.region) && Object.keys(record.region).length > 0;
+    const hasNote = nonEmptyString(record.note);
+    if ((record.outcome === "not_observed" || record.outcome === "undetermined")
+      && !hasRegion && !hasNote) {
+      violations.push({
+        code: "missing_negative_evidence", field: "note", outcome: record.outcome,
+        hint: `outcome='${record.outcome}' 必须给出 region 或 note。`
+          + "not_observed 只表示「在这份图像中未按判据看到」，不证明目标不存在；"
+          + "没有依据的否定与「检测器没报」无法区分。",
+      });
+    }
+
+    const image = record.image;
+    if (image !== undefined && image !== null) {
+      if (typeof image !== "object" || Array.isArray(image)) {
+        violations.push({ code: "invalid_image", field: "image", value: image });
+      } else {
+        for (const field of REVIEW_IMAGE_REQUIRED_FIELDS) {
+          if (!(field in image)) violations.push({ code: "missing_field", field: `image.${field}` });
+        }
+        if (image.sha256 !== undefined && !SHA256_PATTERN.test(String(image.sha256))) {
+          violations.push({
+            code: "malformed_sha256", field: "image.sha256", value: image.sha256,
+            hint: "必须是 64 位小写十六进制。",
+          });
+        }
+        if (typeof image.ref === "string" && typeof image.sha256 === "string") {
+          const expected = `sha256:${image.sha256}`;
+          if (image.ref !== expected) {
+            violations.push({
+              code: "image_ref_hash_mismatch", field: "image.ref",
+              value: image.ref, expected,
+              hint: "ref 必须与 sha256 自洽。引用不可变，否则同一条记录会指向不同图像。",
+            });
+          }
+        }
+      }
+    }
+
+    // 结构性约束：记录**无从表达**"任务已完成"。
+    // 不靠"记得别那么做"，而是让它没有地方可写。
+    if (record.linked_task_completion !== undefined
+      && record.linked_task_completion !== LINKED_TASK_COMPLETION_NOT_ASSERTED) {
+      violations.push({
+        code: "task_completion_not_representable",
+        field: "linked_task_completion",
+        value: record.linked_task_completion,
+        allowed: [LINKED_TASK_COMPLETION_NOT_ASSERTED],
+        hint: "复核记录无从表达「任务已完成」。CAPTURE 成功不能自动完成 OBSERVE、巡检步骤"
+          + "或原任务；要表达任务完成需要另一个显式动作（尚未设计）。",
+      });
+    }
+
+    if (violations.length) return { ok: false, violations };
+
+    const normalized = { ...record };
+    normalized.review_version = String(normalized.review_version || REVIEW_VERSION);
+    normalized.confidence = null;
+    normalized.linked_task_completion = LINKED_TASK_COMPLETION_NOT_ASSERTED;
+    normalized.outcome = String(normalized.outcome);
+    return { ok: true, record: normalized, violations: [] };
+  }
+
+  /**
+   * 由记录内容派生 16 位十六进制标识（确定性）。
+   *
+   * 用排序键的 JSON：同一份内容因键序不同而得到不同 id，会让"是不是同一条"
+   * 无法判断。
+   *
+   * ⚠️ 这是**非加密**摘要，只用于生成 `review_id`。**不用于安全目的** ——
+   * 需要密码学哈希的是图像本身，那由 `image.sha256` 承担，且应由采集端计算。
+   * Python 侧用的是真 SHA-256；两端的 `review_id` **不会相同**，这是有意的：
+   * 记录以 Python 侧写的文件为准，前端生成的 id 只用于本地预览与导出。
+   */
+  function reviewDigest(payload) {
+    const canonical = JSON.stringify(payload, Object.keys(payload).sort());
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < canonical.length; i += 1) {
+      const code = canonical.charCodeAt(i);
+      h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+      h2 = Math.imul(h2 + code, 0x85ebca6b) >>> 0;
+    }
+    return (h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0")).slice(0, 16);
+  }
+
+  /** 构造一条复核记录。返回 `{ok, record?, violations}`，与校验器同形。 */
+  function buildObservationReview(args) {
+    const a = args || {};
+    const record = {
+      review_version: REVIEW_VERSION,
+      created_at: a.createdAt || new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      task_id: a.taskId,
+      target_id: a.targetId,
+      capture_id: a.captureId,
+      image: a.image ? { ...a.image } : a.image,
+      criterion_version: a.criterionVersion,
+      reviewer: a.reviewer,
+      reviewed_at: a.reviewedAt,
+      outcome: a.outcome,
+      // 本阶段人工结论一律不编造数值置信度。
+      confidence: null,
+      linked_task_completion: LINKED_TASK_COMPLETION_NOT_ASSERTED,
+    };
+    if (a.region !== undefined) record.region = { ...a.region };
+    if (a.note !== undefined) record.note = a.note;
+
+    record.review_id = `rev-${reviewDigest(record)}`;
+    // 构建入口也做校验 —— 不能只在校验时拦，否则可以经 build 造出一条
+    // reviewer="detector:..." 的记录，再想办法绕过校验。
+    return validateObservationReview(record);
+  }
+
   return {
     mergeFleet,
     findVehicle,
@@ -408,5 +638,12 @@
     eventMatchesAction,
     createVehicleSnapshotMessage,
     validateSimulationReadyMessage,
+    // 观察复核（L2）：与 Python 侧 review_record.py 对照
+    REVIEW_VERSION,
+    HUMAN_REVIEWER_PREFIX,
+    LINKED_TASK_COMPLETION_NOT_ASSERTED,
+    REVIEW_OUTCOMES,
+    validateObservationReview,
+    buildObservationReview,
   };
 });
