@@ -198,7 +198,7 @@ def derive_proposal(request: dict) -> dict:
 
 
 def ground_with_client(request: dict, client, *, seed: int = 0,
-                       max_tokens: int = 512) -> dict:
+                       max_tokens: int = 512, prompt_version: str = 'v1') -> dict:
     """Ask a local model for semantic bindings; reject invented IDs and stale input.
 
     Non-exact semantic bindings remain review candidates, never execution authority.
@@ -206,6 +206,8 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
     errors = request_errors(request)
     if errors:
         raise ContractError("; ".join(errors))
+    if prompt_version not in {'v1', 'selective_v2'}:
+        raise ContractError('UNKNOWN_GROUNDING_PROMPT_VERSION')
     choices = [{"region_id": r["region_id"], "labels": r["labels"]}
                for r in request["regions"]]
     messages = [
@@ -216,6 +218,19 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
         {"role": "user", "content": canonical_json(
             {"objective": request["objective"], "choices": choices})},
     ]
+    if prompt_version == 'selective_v2':
+        # Explicit opt-in development ablation. Never rewrite a model response.
+        messages[0]['content'] = (
+            '只输出JSON。choices是候选字典，不是要执行的目的地清单。'
+            '只选择objective实际要求前往或巡检的区域，禁止把所有候选全部输出。'
+            'bindings按objective要求的访问先后排序，每个region_id最多出现一次。'
+            'matched_text只复制objective里的区域名称短语，不含前往、起飞、巡检等动词。'
+            '如果区域名称恰好等于候选label，就逐字复制这个label。'
+            '禁止去某区不等于要求去该区，排除该区域；未知区域不能替换成已知区域。'
+            '巡检或观察用reconnaissance；仅飞行验证用flight_validation。'
+            '例如候选甲区和乙区：只去乙区只输出乙区；先乙后甲按乙甲排序。'
+            '不生成动作、坐标或安全结论。explanation用一句简短说明。'
+        )
     started = perf_counter()
     response = client.complete(messages, GROUNDING_SCHEMA, seed=seed,
                                max_tokens=max_tokens, constrained=True)
@@ -228,6 +243,7 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
             "latency_ms": elapsed_ms, "execution_ready": False,
             "settings": {"seed": seed, "temperature": 0,
                          "max_tokens": max_tokens, "constrained": True,
+                         "prompt_version": prompt_version,
                          "repair_attempts": 0},
             "accepted": False, "context": None, "proposal": None,
             "output_hash": None}

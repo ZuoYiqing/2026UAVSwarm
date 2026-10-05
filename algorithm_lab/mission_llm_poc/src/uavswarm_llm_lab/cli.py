@@ -46,6 +46,9 @@ def main(argv=None) -> int:
     for command in (bench, infer):
         command.add_argument("--unconstrained", action="store_true",
                              help="Explicit raw-output comparison; never auto-fallback")
+    for command in (ground_model, ground_eval):
+        command.add_argument('--prompt-version', choices=('v1', 'selective_v2'), default='v1',
+                             help='Explicit development ablation; preserves original response')
     for command in (demo, ground, ground_model, ground_eval, ground_eval_baseline,
                     bind_scene, check, bench, infer):
         command.add_argument("--output", type=Path, help="New JSON result file; refuses overwrite")
@@ -71,13 +74,13 @@ def main(argv=None) -> int:
                 raise ContractError("Explicit --base-url and --model are required")
             client = LocalModelClient(args.base_url, args.model, args.timeout_s)
             result = ground_with_client(context, client, seed=args.seed,
-                                        max_tokens=args.max_tokens)
+                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version)
         elif args.command == "ground-eval":
             if not args.base_url or not args.model:
                 raise ContractError("Explicit --base-url and --model are required")
             client = LocalModelClient(args.base_url, args.model, args.timeout_s)
             result = run_grounding_eval(context, client, seed=args.seed,
-                                        max_tokens=args.max_tokens)
+                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version)
         elif args.command == "ground-eval-baseline":
             result = run_rule_grounding_baseline(context)
         elif args.command == "bind-scene":
@@ -121,7 +124,20 @@ def main(argv=None) -> int:
             return 0
         return 0 if result.get("accepted") else 1
     except (ContractError, ModelError, OSError, ValueError) as exc:
-        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False))
+        diagnostic = {"error": type(exc).__name__, "message": str(exc)}
+        if isinstance(exc, ModelError) and exc.response_evidence is not None:
+            diagnostic.update(report_type='model_request_failure', accepted=False,
+                              execution_authorized=False, proposal=None,
+                              response_evidence=exc.response_evidence)
+            if args.output and not args.output.exists():
+                try:
+                    args.output.parent.mkdir(parents=True, exist_ok=True)
+                    with args.output.open('x', encoding='utf-8') as stream:
+                        json.dump(diagnostic, stream, ensure_ascii=False, indent=2)
+                        stream.write('\n')
+                except OSError as write_error:
+                    diagnostic['evidence_write_error'] = str(write_error)
+        print(json.dumps(diagnostic, ensure_ascii=False))
         return 2
 
 

@@ -53,7 +53,7 @@ def validate_corpus(corpus: dict) -> None:
 
 
 def run_grounding_eval(corpus: dict, client, *, seed: int = 0,
-                       max_tokens: int = 1024) -> dict:
+                       max_tokens: int = 1024, prompt_version: str = 'v1') -> dict:
     """One constrained model request per labelled case; preserve raw output."""
     validate_corpus(corpus)
     rows = []
@@ -62,10 +62,12 @@ def run_grounding_eval(corpus: dict, client, *, seed: int = 0,
         request["mission_id"] = "grounding-eval-" + case["case_id"]
         request["objective"] = case["objective"]
         try:
-            result = ground_with_client(request, client, seed=seed, max_tokens=max_tokens)
+            result = ground_with_client(request, client, seed=seed, max_tokens=max_tokens,
+                                        prompt_version=prompt_version)
         except ModelError as exc:
             result = {"accepted": False, "candidate_grounding": None,
-                      "proposal": None, "errors": [str(exc)], "model_executed": False}
+                      "proposal": None, "errors": [str(exc)], "model_executed": False,
+                      "response_evidence": exc.response_evidence}
         candidate = result.get("candidate_grounding")
         candidate_shape_ok = isinstance(candidate, dict) and isinstance(candidate.get("bindings"), list)
         predicted_ids = ([binding.get("region_id") for binding in candidate["bindings"]]
@@ -102,6 +104,7 @@ def run_grounding_eval(corpus: dict, client, *, seed: int = 0,
         "model_executed": completed_model_calls > 0,
         "model_requested": client.model, "created_at": datetime.now(timezone.utc).isoformat(),
         "corpus_hash": digest(corpus), "seed": seed, "temperature": 0,
+        "prompt_version": prompt_version,
         "attempted": total, "completed_model_calls": completed_model_calls,
         "semantic_scorable_cases": len(semantic_rows),
         "candidate_semantic_match_rate": (

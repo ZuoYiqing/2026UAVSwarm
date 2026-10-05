@@ -6,6 +6,8 @@ from uavswarm_llm_lab.contracts import ContractError, parse_json, resource_text
 from uavswarm_llm_lab.grounding_eval import (
     run_grounding_eval, run_rule_grounding_baseline, validate_corpus,
 )
+from uavswarm_llm_lab.intent_grounder import ground_with_client
+from uavswarm_llm_lab.local_model_client import ModelError
 
 
 class ScriptedClient:
@@ -66,6 +68,40 @@ class GroundingEvalTest(unittest.TestCase):
         self.assertFalse(report["model_executed"])
         self.assertEqual(report["total"], 9)
         self.assertEqual(report["false_accept_count"], 0)
+
+    def test_explicit_prompt_ablation_preserves_schema_and_evidence(self):
+        class RecordingClient(ScriptedClient):
+            def complete(self, messages, output_schema, **kwargs):
+                self.messages = messages
+                self.schema = output_schema
+                return super().complete(messages, output_schema, **kwargs)
+        client = RecordingClient()
+        report = run_grounding_eval(self.corpus, client, prompt_version='selective_v2')
+        self.assertEqual(report['prompt_version'], 'selective_v2')
+        self.assertIn('候选字典', client.messages[0]['content'])
+        self.assertEqual(client.schema['properties']['bindings']['minItems'], 1)
+        self.assertTrue(all(row['result']['raw_output'] for row in report['results']))
+        self.assertTrue(all(row['result']['settings']['repair_attempts'] == 0
+                            for row in report['results']))
+        self.assertEqual(report['false_accept_count'], 0)
+
+    def test_unknown_prompt_is_rejected_before_model_call(self):
+        request = self.corpus['base_request'].copy()
+        request['objective'] = self.corpus['cases'][0]['objective']
+        with self.assertRaisesRegex(ContractError, 'UNKNOWN_GROUNDING_PROMPT_VERSION'):
+            ground_with_client(request, None, prompt_version='unreviewed')
+
+    def test_incomplete_evidence_is_not_a_successful_candidate(self):
+        class IncompleteClient:
+            model = 'incomplete-fixture'
+            def complete(self, *args, **kwargs):
+                raise ModelError('MODEL_RESPONSE_INCOMPLETE',
+                                 response_evidence={'choices': [{'finish_reason': 'length'}]})
+        report = run_grounding_eval(self.corpus, IncompleteClient())
+        self.assertEqual(report['completed_model_calls'], 0)
+        self.assertEqual(report['candidate_semantic_match_rate'], 0)
+        self.assertEqual(report['false_accept_count'], 0)
+        self.assertTrue(all(row['result']['response_evidence'] for row in report['results']))
 
 
 if __name__ == "__main__":

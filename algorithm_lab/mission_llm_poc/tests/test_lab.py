@@ -346,6 +346,15 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(ModelError):
             _NoRedirect().redirect_request(None, None, 302, "", {}, "http://example.com")
 
+    def test_incomplete_response_preserves_evidence_without_accepting(self):
+        body = {'model': 'fixture', 'choices': [{'finish_reason': 'length',
+                'message': {'content': '{"unfinished":'}}],
+                'usage': {'completion_tokens': 100}}
+        with self.assertRaisesRegex(ModelError, 'MODEL_RESPONSE_INCOMPLETE') as raised:
+            self.invoke(json.dumps(body).encode('utf-8'))
+        self.assertEqual(raised.exception.response_evidence, body)
+        self.assertEqual(self.opener.open.call_count, 1)
+
     def test_timeout_no_retry(self):
         opener = MagicMock()
         opener.open.side_effect = TimeoutError("fixture")
