@@ -1,6 +1,7 @@
 # 小模型候选与板端路线（2026-10-05）
 
-本轮真正下载和实测的是 Qwen3.5-0.8B Q4_K_M。下表其他模型只完成资料核对，未下载、未实测；发布方指标不是本项目成绩。
+本轮真正下载和实测的是 Qwen3.5-0.8B 与 MiniCPM5-1B Q4_K_M；后者经用户批准继续比较。
+详见[异厂实测与新题集](MINICPM5_1B_EXPERIMENT_20261005.md)。下表其余模型只完成资料核对，未下载、未实测；发布方指标不是本项目成绩。
 任务理解、视觉观察、几何规划是三个不同问题，不能用一个语言模型的回答替代检测证据或安全路径证明。
 
 ## 候选
@@ -8,7 +9,7 @@
 | 模型 / 来源 | 规模与用途 | 许可证与部署依据 | 本项目判断 |
 | --- | --- | --- | --- |
 | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) / 千问 | 0.8B 语言主干；上游有视觉编码器，本轮 GGUF 仅测文本 | Apache-2.0；本机已有支持该架构的 CUDA 引擎 | 资源下限对照；不预设能可靠规划 |
-| [MiniCPM5-1B](https://huggingface.co/openbmb/MiniCPM5-1B) / 面壁、OpenBMB | 实际总参数 1,080,632,832；中英文本、任务理解候选 | Apache-2.0；标准 LlamaForCausalLM，上游提供 GGUF 和本地部署说明 | 推荐下一款异厂对照；先固定版本、模板、哈希，再下载实测 |
+| [MiniCPM5-1B](https://huggingface.co/openbmb/MiniCPM5-1B) / 面壁、OpenBMB | 实际总参数 1,080,632,832；中英文本、任务理解候选 | Apache-2.0；标准 LlamaForCausalLM，上游提供 GGUF 和本地部署说明 | 已固定版本和哈希并在 4050 实测；本次固定采样配置表现不可靠，不能当作厂商最优配置排名 |
 | [MiniCPM4-0.5B](https://huggingface.co/openbmb/MiniCPM4-0.5B) / 面壁、OpenBMB | 更小的中英文本模型 | Apache-2.0；原始 Transformers 示例含自定义模型代码，需要固定版本并审查 | 严格资源预算候选；系列的 AGX Orin 加速宣传不能当作本型号/本任务的测量结果 |
 | [SmolLM2-360M-Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct) / Hugging Face | 360M 文本；系列还有 135M | Apache-2.0；官方有 CPU / GPU 示例 | 极小资源对照；官方明确主要面向英语，不优先承担中文指令 |
 | [SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) / Hugging Face | 500M 图像+文本，不是多机分配算法 | Apache-2.0；官方称单图推理约 1.23GB GPU RAM，尚未在这里验证 | L2 图像观察候选；英文为主，必须用实际场景图像和独立标注验证 |

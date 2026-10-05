@@ -1,6 +1,6 @@
 param(
     [switch]$CheckOnly,
-    [ValidateSet('qwen3.5-4b', 'qwen3.5-0.8b')][string]$ModelProfile = 'qwen3.5-4b',
+    [ValidateSet('qwen3.5-4b', 'qwen3.5-0.8b', 'minicpm5-1b')][string]$ModelProfile = 'qwen3.5-4b',
     [ValidateRange(512, 8192)][int]$ContextTokens = 4096,
     [ValidateRange(1024, 65535)][int]$Port = 18080
 )
@@ -25,6 +25,15 @@ if ($ModelProfile -eq 'qwen3.5-0.8b') {
     $minimumGpuMiB = 2048
     $modelLicense = 'qwen3.5-0.8b-LICENSE.txt'
     $quantizerNotice = 'qwen3.5-0.8b-quantizer-model-card.md'
+}
+if ($ModelProfile -eq 'minicpm5-1b') {
+    $smallManifest = Get-Content (Join-Path $moduleRoot 'docs/MINICPM5_1B_DOWNLOAD_20261005.json') -Raw | ConvertFrom-Json
+    $manifest.artifacts = @($manifest.artifacts | Where-Object role -ne 'text_model') + @($smallManifest.artifacts)
+    $modelAlias = 'minicpm5-1b-q4-lab'
+    $minimumHostKiB = 3 * 1024 * 1024
+    $minimumGpuMiB = 2048
+    $modelLicense = 'minicpm5-1b-LICENSE.txt'
+    $quantizerNotice = 'minicpm5-1b-model-card.md'
 }
 $verifiedPaths = @{}
 foreach ($artifact in $manifest.artifacts) {
@@ -101,6 +110,7 @@ $arguments = @('-m', $verifiedPaths['text_model'], '--alias', $modelAlias,
     '--no-slots', '--ctx-size', "$ContextTokens", '--parallel', '1',
     '--threads', '4', '--threads-batch', '4', '--batch-size', '256', '--ubatch-size', '128',
     '--gpu-layers', 'all', '--fit', 'off', '--reasoning', 'off', '--no-context-shift')
+if ($ModelProfile -eq 'minicpm5-1b') { $arguments += '--jinja' }
 $engineProcess = Start-Process -FilePath $engine -ArgumentList $arguments -WorkingDirectory $engineRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'server.stdout.log') -RedirectStandardError (Join-Path $runRoot 'server.stderr.log')
 $record = [ordered]@{pid=$engineProcess.Id; executable=$engine; model=$verifiedPaths['text_model']; model_profile=$ModelProfile; model_alias=$modelAlias; port=$Port; minimum_host_kib=$minimumHostKiB; minimum_gpu_mib=$minimumGpuMiB; arguments=$arguments; run_directory=$runRoot; started_utc=[DateTime]::UtcNow.ToString('o'); offline_flag=$true; network_isolation_verified=$false; execution_authorized=$false; startup_status='loading'; memory_samples_kib=@(); guard_scope='startup_only'}
 $launchPath = Join-Path $runRoot 'launch.json'

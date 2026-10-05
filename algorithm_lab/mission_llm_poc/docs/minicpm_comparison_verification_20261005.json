@@ -1,0 +1,73 @@
+{
+  "recorded_date": "2026-10-05",
+  "report_type": "actual_local_model_comparison",
+  "experiment_parent_revision": "3fef58e7f643c8173b28f5b750b406f93952edc9",
+  "scope": "algorithm_lab/mission_llm_poc only; inference, not training or execution",
+  "engine": "b10964-b29c606e2 CUDA12.4 Windows x64",
+  "hardware": "RTX4050 Laptop 6141 MiB; approximately 16GB host RAM",
+  "weight_locally_verified": true,
+  "weight_size_bytes": 688065920,
+  "weight_sha256": "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa",
+  "settings": {"seed": 0, "temperature": 0, "context_tokens": 4096, "max_output_tokens": 1024, "constrained": true, "reasoning": "off", "repair_attempts": 0},
+  "mini_no_think_template_prefix_verified": true,
+  "mini_publisher_sampling_profile_tested": false,
+  "development_corpus_hash": "07b569340306dc331e859d83b3f7a493783024df7ef81808a48d909e9207c331",
+  "challenge_corpus_hash": "a75fb3e4143cf52586270bb53256bb2d74fa5398d9a0839c18ac53e2ccc565ba",
+  "challenge_frozen_before_model_evaluation": true,
+  "challenge_independent_third_party_blind_test": false,
+  "mini_grounding": {
+    "attempted": 108, "completed_responses": 37, "incomplete_responses": 71,
+    "development_v1": {"semantic_numerators": [3, 3, 2], "semantic_denominator": 8, "agreement_numerators": [6, 6, 5], "actually_accepted": [1, 1, 0], "incomplete": [2, 2, 1], "false_accepts": 0, "candidate_hashes_match": false},
+    "development_selective_v2": {"semantic_numerators": [0, 0, 0], "semantic_denominator": 8, "agreement_numerators": [5, 5, 5], "actually_accepted": [0, 0, 0], "incomplete": [5, 5, 5], "false_accepts": 0},
+    "challenge_selective_v2": {"semantic_numerators": [0, 0, 0], "semantic_denominator": 17, "agreement_numerators": [7, 7, 7], "actually_accepted": [0, 0, 0], "incomplete": [17, 17, 17], "false_accepts": 0}
+  },
+  "mini_structured_three_uav": {
+    "attempted": 2, "completed_responses": 2, "accepted": 1,
+    "outcomes": ["accepted_research_proposal", "rejected_schema_invented_unassigned_tasks"],
+    "accepted_candidate_hash": "6e31451824379a7f4000b7999342e0a43fb5a0ba498349a4eee87479477ec4a7",
+    "rejected_candidate_hash": "1957fa0e85ba9ace93e5d0c5b183d59b99067f4f84048ad17214317635ff7fcd",
+    "latencies_ms": [2671.8391, 5336.5824],
+    "planned_third_request_executed": false,
+    "batch_stop_reason": "second request failed validation; smoke returned nonzero and wrapper stopped owned server",
+    "note": "Structured tasks already supplied. Passing offline checks is not route proof, flight readiness or completed inspection."
+  },
+  "qwen_challenge_selective_v2": {
+    "attempted": 54, "completed_responses": 54, "incomplete_responses": 0,
+    "semantic_numerators": [16, 16, 16], "semantic_denominator": 17,
+    "agreement_numerators": [17, 17, 17], "actually_accepted": [10, 10, 10],
+    "false_accepts": 0, "candidate_hashes_match": true,
+    "median_request_latency_ms": 645.0446,
+    "semantic_error_case": "exclude_e", "evidence_quote_error_case": "provided_aliases"
+  },
+  "rule_challenge": {"model_executed": false, "semantic": "11/17", "acceptance_agreement": "18/18", "actually_accepted": 11, "false_accepts": 1, "false_accept_case": "background_n_target_s", "algorithm_unchanged": true},
+  "resources": {
+    "mini_all_requests": {"max_whole_gpu_used_mib": 758, "max_temperature_c": 63, "min_host_free_kib": 3450656},
+    "qwen_challenge": {"max_whole_gpu_used_mib": 688, "max_temperature_c": 56, "min_host_free_kib": 4770848},
+    "not_exclusive_model_memory": true, "not_guaranteed_transient_peaks": true
+  },
+  "full_evidence_root_relative_to_module": "artifacts/runs",
+  "evidence": [
+    {"run": "request-20261005T100630657Z", "group": "mini_dev_v1", "file_sha256": "cdc65c1624938a624ab6a59603af93d76bf1f6eb7084f9b71a3c256eb55cd5e8", "elapsed_s": 15.233},
+    {"run": "request-20261005T101036623Z", "group": "mini_dev_v1", "file_sha256": "758407e314fba91c2b566c47f82734249fdcef6cfb0ee2895544c3ad5818c03c", "elapsed_s": 15.376},
+    {"run": "request-20261005T101052055Z", "group": "mini_dev_v1", "file_sha256": "dd080188cb06f915d8885f7b27b590205092ef2748d620538d86318c9eb41939", "elapsed_s": 11.308},
+    {"run": "request-20261005T101103415Z", "group": "mini_dev_v2", "file_sha256": "312be489b01dc38a041b4dfa5f4d4532e8c1626af44dd728eaa9615a41264005", "elapsed_s": 29.164},
+    {"run": "request-20261005T101132659Z", "group": "mini_dev_v2", "file_sha256": "525defe12fcfc5dab1ff75f7457127fe0c1e8f798aa23f1b2369d9207947dee5", "elapsed_s": 29.234},
+    {"run": "request-20261005T101201941Z", "group": "mini_dev_v2", "file_sha256": "d7c1644639d3888fc342de12bd480a08eb54c72653f7f1532e94e64be82a8462", "elapsed_s": 28.272},
+    {"run": "request-20261005T101230265Z", "group": "mini_challenge_v2", "file_sha256": "0e0584ae458c708e49c090c51582afa32acdd1b45dd4d993fc9adbc2f89028cf", "elapsed_s": 86.948},
+    {"run": "request-20261005T101357266Z", "group": "mini_challenge_v2", "file_sha256": "767fc8b9c69df7d1c3878d8f56e346610125caa85b829f012d78966046d53861", "elapsed_s": 86.446},
+    {"run": "request-20261005T101523772Z", "group": "mini_challenge_v2", "file_sha256": "b57484c4c64f9d734414e35d33ec37e563de4246de4bbe56e75a892d7f749556", "elapsed_s": 85.211},
+    {"run": "request-20261005T101649031Z", "group": "mini_structured", "file_sha256": "f8671a5d4dd39d735c817c040cd1686cb27f3cf2e4b1bff3c52ef987b9936972", "elapsed_s": 3.188},
+    {"run": "request-20261005T101907204Z", "group": "mini_structured", "file_sha256": "e2d41197f86c3db1289a85a02acdbc0ce319e30a813819f70457b484473fd612", "elapsed_s": 6.449},
+    {"run": "request-20261005T101730940Z", "group": "qwen_challenge_v2", "file_sha256": "f2d93b7cf91de59703ca4dcd90de58a37c8cb8d945aa10e4a6ca7b8050c71193", "elapsed_s": 13.529},
+    {"run": "request-20261005T101744536Z", "group": "qwen_challenge_v2", "file_sha256": "f2fb3d61e4367cdebdbd9c8954010a10dfa2dfc7e80d2a4a38d02997d611e759", "elapsed_s": 13.519},
+    {"run": "request-20261005T101758106Z", "group": "qwen_challenge_v2", "file_sha256": "aa8b1aa1f09bb2a861ca2a4e07fcddd2b96df3a158dc374748ff75285945ae72", "elapsed_s": 12.861}
+  ],
+  "offline_unit_tests_passed": 45,
+  "scaffold_cases_passed": 40,
+  "execution_authorized": false,
+  "actual_vehicle_commands": 0,
+  "model_processes_stopped": true,
+  "isolated_network_cold_start_verified": false,
+  "automatic_execution_integration_blocked": true,
+  "limitations": ["Accepted does not prove semantic correctness; background false accept requires manual review and a later fix.", "Synthetic challenge set, not a generalization or safety guarantee.", "No board deployment, vision accuracy or geometric path safety demonstrated."]
+}

@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from uavswarm_llm_lab.contracts import ContractError, parse_json, resource_text
+from uavswarm_llm_lab.contracts import ContractError, digest, parse_json, resource_text
 from uavswarm_llm_lab.grounding_eval import (
     run_grounding_eval, run_rule_grounding_baseline, validate_corpus,
 )
@@ -40,6 +40,31 @@ class GroundingEvalTest(unittest.TestCase):
         validate_corpus(self.corpus)
         self.assertEqual(len(self.corpus["cases"]), 9)
         self.assertEqual(self.corpus["base_request"]["source"], "synthetic_benchmark")
+
+    def test_prospective_challenge_is_frozen(self):
+        challenge = parse_json(resource_text("benchmarks/grounding_challenge_v0_1.json"))
+        validate_corpus(challenge)
+        self.assertEqual(len(challenge["cases"]), 18)
+        self.assertEqual(digest(challenge),
+                         "a75fb3e4143cf52586270bb53256bb2d74fa5398d9a0839c18ac53e2ccc565ba")
+        orders = [case["expected_region_ids"] for case in challenge["cases"]
+                  if case["case_id"].startswith("order_")]
+        self.assertEqual(len({tuple(order) for order in orders}), 6)
+        self.assertTrue(all(set(order) == {"r-north", "r-south", "r-east"}
+                            for order in orders))
+
+    def test_agreement_does_not_hide_known_background_false_accept(self):
+        # Measurement regression, NOT an assertion that this baseline is safe.
+        # The unchanged baseline mistakes a background landmark for a destination.
+        challenge = parse_json(resource_text("benchmarks/grounding_challenge_v0_1.json"))
+        report = run_rule_grounding_baseline(challenge)
+        self.assertEqual(report["acceptance_match_rate"], 1.0)
+        self.assertEqual(report["false_accept_count"], 1)
+        row = next(row for row in report["results"]
+                   if row["case_id"] == "background_n_target_s")
+        self.assertTrue(row["accepted"])
+        self.assertTrue(row["false_accept"])
+        self.assertFalse(row["candidate_semantic_match"])
 
     def test_scoring_separates_semantics_from_acceptance(self):
         report = run_grounding_eval(self.corpus, ScriptedClient())

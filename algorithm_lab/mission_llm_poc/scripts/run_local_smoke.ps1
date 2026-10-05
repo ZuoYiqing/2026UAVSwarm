@@ -14,7 +14,7 @@ if (-not $launchPath.StartsWith((Join-Path $artifactRoot 'runs') + [IO.Path]::Di
 $launch = Get-Content -LiteralPath $launchPath -Raw | ConvertFrom-Json
 $modelAlias = if ($launch.PSObject.Properties.Name -contains 'model_alias') { $launch.model_alias } else { 'qwen3.5-4b-q4-lab' }
 $modelPort = if ($launch.PSObject.Properties.Name -contains 'port') { [int]$launch.port } else { 18080 }
-if ($modelAlias -notin @('qwen3.5-4b-q4-lab', 'qwen3.5-0.8b-q4-lab') -or $modelPort -lt 1024 -or $modelPort -gt 65535) { throw 'Unknown experiment alias or invalid loopback port.' }
+if ($modelAlias -notin @('qwen3.5-4b-q4-lab', 'qwen3.5-0.8b-q4-lab', 'minicpm5-1b-q4-lab') -or $modelPort -lt 1024 -or $modelPort -gt 65535) { throw 'Unknown experiment alias or invalid loopback port.' }
 $expectedEngine = Join-Path $artifactRoot 'runtime/llama-b10964-cuda12.4/llama-server.exe'
 $server = Get-Process -Id $launch.pid
 if ($server.Path -ne $expectedEngine -or $launch.startup_status -ne 'ready') { throw 'Expected local model is not ready.' }
