@@ -1,4 +1,4 @@
-# 三机单目相机验收记录（2026-10-05，未通过）
+# 三机单目相机阶段验收记录（2026-10-05，飞行待回归）
 
 本记录对应候选配置 `simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json`。
 它保留 `simple_recon_v0_1` 世界和三机 NED 出生位置，仅把 PX4 airframe
@@ -19,7 +19,8 @@
 - 10 秒墙钟 clock 采样的 real-time factor 为 **0.113**，低于 health 的
   **0.20** 门槛。health 返回 `not_ready` / `gazebo_clock_slow`。
 - health 曾额外报告 `gazebo_models_missing`：其模型采样窗口原为 50 ms，
-  在低实时因子下漏掉 pose 更新。本分支把窗口改为 2 秒；修改尚未在真实三机场景复测。
+  在低实时因子下漏掉 pose 更新。本分支把窗口改为 2 秒并与 MAVLink/clock
+  并行采样；后续真实三机复测已观察到全部模型和新鲜遥测。
 - harness stop 按进程身份校验后完成，`cleanup.clean=true`、world 已停止，
   14540/14541/14542 和相关端口均已释放。
 
@@ -31,6 +32,43 @@ Runtime integrated 验收。执行端应保持禁用或返回 `camera_not_valida
 [`fixtures/mono-cam-three-uav-20261005.json`](fixtures/mono-cam-three-uav-20261005.json)。
 完整临时采样留在本机 ignored `.runtime/px4_gazebo/camera_acceptance.json`，
 不会进入 Git。
+
+## GPU 适配器对照（同日补充）
+
+用户提示 WSL 可能选错 GPU 后，使用完全相同的 manifest/world/PX4 checkout 做
+两次独立 harness run。每次都检查受管理 Gazebo PID、`/proc/<pid>/maps`、
+`nvidia-smi`、Gazebo clock；两次之间按身份安全停止并确认 world 退出。
+
+| 启动环境 | run_id | 10 秒 RTF | RTX 4050 利用率 | 结果 |
+| --- | --- | ---: | --- | --- |
+| 未设置适配器变量 | `2682801e6d5e455aa27f293be5e99aff` | 0.175 | 5–11% | 低于 0.20 |
+| `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` | `ddeec4d154e14d6aaa3c303b7cd2c919` | 0.839 | 13–46% | 高于 0.20 |
+
+显式 NVIDIA 组在**同时订阅三路图像**的 12 秒窗口中 RTF 仍为 **0.809**，
+三路分别采到 370/370/369 张完整 RGB 图像，仿真帧率约 30.3 Hz。
+修复 health 的串行 pose 采样导致的遥测过期后，standalone health 实测
+`ready`、三个 model 和三个节点均 `ok`，其 10 秒 clock RTF 为 **0.888**。
+该轮 stop 返回 `cleanup.clean=true`、world 停止、14540–14542 端口释放。
+
+两组 Gazebo maps 均加载 Mesa/D3D12、`swrast_dri.so` 和
+`libnvidia-encode.so.1`。**仅凭这些库名无法判定实际 D3D12 适配器**；
+`nvidia-smi` 中默认组也有少量 RTX 活动，不能声称它完全没参与。
+但只改进程级适配器变量，RTF 从 0.175 升至 0.839，且三路图像订阅时保持
+0.809，说明适配器选择是本机低 RTF 的主要因素。未修改 Windows 注册表，
+也未降低相机分辨率、帧率或放宽 RTF 门槛。
+
+复现显式 NVIDIA 组时，仅给本次启动进程设置环境变量：
+
+```bash
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+  bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless \
+  --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+```
+
+对照 fixture 见
+[`fixtures/mono-cam-gpu-adapter-20261005.json`](fixtures/mono-cam-gpu-adapter-20261005.json)。
+**这解除本机三机相机的 RTF/standalone health 阻塞，但尚未完成本轮真实飞行
+和 Runtime integrated 验收。** 执行端继续保持 `camera_not_validated`。
 
 ## 复现与下一轮门槛
 
@@ -53,6 +91,6 @@ bash simulation/px4_gazebo/scripts/stop_three_uav.sh
 
 相机采样脚本只订阅 Gazebo，不连接 MAVLink。其 `camera_stream_status=observed`
 仅表示图像流和本场景的三路区分证据成立；`system_readiness=not_assessed`。
-完整验收还需持续 RTF 达标、standalone health READY、逐机飞行与安全停止，
-最后由 Runtime 独占 session 进行 integrated 验收。任何一步失败都不能把
+完整验收还需逐机飞行、持续图像采集与安全停止，最后由 Runtime 独占 session
+进行 integrated 验收。任何一步失败都不能把
 `CAPTURE` 或 `OBSERVE` 标为执行成功。
