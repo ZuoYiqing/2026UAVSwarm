@@ -35,21 +35,22 @@ export const EXPANDABLE_ACTIONS = Object.freeze({
   TAKEOFF: "takeoff",
   GOTO: "goto",
   LAND: "land",
-  // HOLD / RETURN_HOME 于 2026-09-30 在 Runtime 侧实现（分别对应
-  // /api/actions/hold-position 与 /api/actions/return-home）。
-  //
-  // ⚠️ 它们**能执行**，但本转换器**仍不展开** —— 两者是不同的判断：
-  //   * 展开 HOLD 需要知道"保持在哪、保持多久"，那是任务语义，不是提案展开
-  //   * 展开 RETURN_HOME 的时机涉及"何时判定任务做完了"，同样超出展开职责
-  // 也就是说这不再是"端点没实现"的问题，而是"转换器还没有展开规则"。
-  // 因此它们单独归入 CONVERTER_NOT_EXPANDABLE，措辞与"未实现"区分开，
-  // 免得调用方以为端点还不存在。
+  // HOLD / RETURN_HOME 于 2026-09-30 在 Runtime 侧实现，2026-10-05 本转换器补上展开规则。
+  // 两者的完成判据都是**位置证据**而非模式切换（详见执行契约 3.1）：
+  //   hold_position → 位置持续 hold_s 秒在容差内
+  //   return_home   → 到 home 的距离确实收敛
+  HOLD: "hold_position",
+  RETURN_HOME: "return_home",
 });
 
-/** 已实现端点、但本转换器暂不展开的动作。 */
-export const CONVERTER_NOT_EXPANDABLE = Object.freeze([
-  "HOLD", "HOLD_POSITION", "RETURN_HOME",
-]);
+/**
+ * 已实现端点、但本转换器暂不展开的动作。
+ *
+ * HOLD 与 RETURN_HOME 于 2026-10-05 移出本列表 —— 它们的展开规则已补上。
+ * **本列表现在为空是正确状态**，不是遗漏：有空缺就说明有动作的端点已存在、
+ * 却仍被报成 `action_no_expansion_rule`，那会误导调用方去等一个已经有的东西。
+ */
+export const CONVERTER_NOT_EXPANDABLE = Object.freeze([]);
 
 /** 已知但本转换器不展开的动作。列出来是为了给出"未实现"而不是"拼写错误"。 */
 export const KNOWN_NOT_EXPANDABLE = Object.freeze([
@@ -97,12 +98,22 @@ const finiteNumber = (v) => typeof v === "number" && Number.isFinite(v);
  *        **必须显式给出**的起飞高度（米，正数）。
  *        刻意不从 context.constraints.min_altitude_m 推断：那是"允许的最低高度"
  *        这种约束，不是任务要求的高度。把约束当任务高度是在臆造指令。
+ * @param {number} options.holdDurationS
+ *        **提案里含 HOLD 时必须显式给出**的悬停时长（秒，正数）。
+ *
+ *        为什么必须显式给：提案 schema 里 `HOLD` **只是 `assignments[].actions`
+ *        的一个枚举值**，没有任何承载"停留多久"的字段（已核对 schema）。
+ *        因此转换器若自己填一个默认秒数，就等于**替算法决定停留时长** ——
+ *        与"把最低高度约束当成任务高度"是同一类臆造。
+ *
+ *        HOLD 在巡检里的作用是"停住让相机采集"，时长直接决定采到多少画面，
+ *        所以它必须来自任务方，而不是展开器的默认值。
  * @param {string} [options.planId]    计划 ID；缺省由 missionId 派生
  * @returns {{plan: object, notes: string[]}}
  * @throws {ProposalRejected}
  */
 export function proposalToPlan(proposal, context, options = {}) {
-  const { takeoffAltitudeM, planId } = options;
+  const { takeoffAltitudeM, holdDurationS, planId } = options;
 
   if (!Number.isFinite(takeoffAltitudeM) || takeoffAltitudeM <= 0) {
     // 这是调用方的编程错误，不是提案的问题 —— 但仍要拒绝，不能猜一个高度。
@@ -111,6 +122,24 @@ export function proposalToPlan(proposal, context, options = {}) {
       "必须显式提供 takeoffAltitudeM（正数）。不从 constraints.min_altitude_m 推断：" +
         "那是允许的最低高度约束，不是任务要求的高度。",
       [{ field: "takeoffAltitudeM", value: takeoffAltitudeM ?? null }],
+    );
+  }
+
+  // HOLD 的时长同样必须由调用方给出，理由见函数文档：提案 schema 里没有承载它的字段。
+  // 这里先判断"提案是否真的含 HOLD"再要求 —— 不含 HOLD 的提案不该被这条规则牵连。
+  const proposalHasHold = (Array.isArray(proposal?.assignments) ? proposal.assignments : []).some(
+    (assignment) =>
+      (Array.isArray(assignment?.actions) ? assignment.actions : []).some(
+        (action) => String(action ?? "").toUpperCase() === "HOLD",
+      ),
+  );
+  if (proposalHasHold && (!Number.isFinite(holdDurationS) || holdDurationS <= 0)) {
+    throw new ProposalRejected(
+      "hold_duration_required",
+      "提案含 HOLD，必须显式提供 holdDurationS（正数，秒）。提案 schema 里 HOLD 只是 " +
+        "actions[] 的一个枚举值，没有承载停留时长的字段；展开器自己填默认值就等于替算法" +
+        "决定停留多久，而 HOLD 的时长直接决定相机能采到多少画面。",
+      [{ field: "holdDurationS", value: holdDurationS ?? null }],
     );
   }
 
@@ -246,6 +275,27 @@ export function proposalToPlan(proposal, context, options = {}) {
         });
       } else if (action === "LAND") {
         steps.push({ step_id: stepId, action_type: "land", node_id: nodeId, params: {} });
+      } else if (action === "HOLD") {
+        // HOLD 的语义是"待在现在这里"，因此**不带坐标** —— 它保持的是到达时的位置。
+        // 带坐标会变成"飞到某个点再保持"，那是 GOTO + HOLD，不是 HOLD。
+        steps.push({
+          step_id: stepId,
+          action_type: "hold_position",
+          node_id: nodeId,
+          params: { hold_s: holdDurationS },
+        });
+      } else if (action === "RETURN_HOME") {
+        // 目标由飞控自己的 home 决定（PX4 的 EKF 原点），展开器**不臆造参数**。
+        //
+        // 尤其**不在这里填 timeout_s / min_progress_m**：那两个是"观测窗口"与
+        // "收敛判据"，属执行侧的判据参数，不是任务语义。使用 Runtime 默认值，
+        // 并在 notes 里说明，避免展开器悄悄替执行侧决定"多久算返航成功"。
+        steps.push({
+          step_id: stepId,
+          action_type: "return_home",
+          node_id: nodeId,
+          params: {},
+        });
       } else if (action === "GOTO") {
         const group = waypointGroups[gotoIndex] || [];
         gotoIndex += 1;
@@ -277,6 +327,19 @@ export function proposalToPlan(proposal, context, options = {}) {
           `（交接说明未定义多 GOTO 的分段规则，此处为保守实现）。`,
       );
     }
+
+    if (actions.includes("HOLD") && Number.isFinite(holdDurationS)) {
+      notes.push(
+        `task ${taskId} 的 HOLD 展开为 hold_s=${holdDurationS}（取调用方给的 holdDurationS）。` +
+          "HOLD 不带坐标 —— 它保持的是到达时的位置。",
+      );
+    }
+    if (actions.includes("RETURN_HOME")) {
+      notes.push(
+        `task ${taskId} 的 RETURN_HOME 展开为无参数步骤：目标是飞控自己的 home，` +
+          "timeout_s / min_progress_m 使用 Runtime 默认值（属执行侧判据，不由展开器决定）。",
+      );
+    }
   }
 
   if (violations.length > 0) {
@@ -294,8 +357,12 @@ export function proposalToPlan(proposal, context, options = {}) {
     scene_id: String(proposal.scene_id),
     map_version: String(proposal.map_version),
     explanation:
-      "由 proposalToPlan 从算法提案展开。仅含 TAKEOFF/GOTO/LAND；" +
-      "不构成巡检完成的声明。",
+      "由 proposalToPlan 从算法提案展开，含 TAKEOFF / GOTO / LAND / HOLD / RETURN_HOME。" +
+      "**不构成巡检完成的声明。**" +
+      "原因：本计划只能证明飞行与采集动作被请求并留下证据（HOLD 证明位置稳定、" +
+      "RETURN_HOME 证明朝 home 收敛），它既不采集图像、也不判定是否观察到目标。" +
+      "「采集」与「观察判定」是两件事，后者需要 OBSERVE 语义与图像证据，" +
+      "不能由本计划的 completed 状态代替。",
     steps,
   };
 

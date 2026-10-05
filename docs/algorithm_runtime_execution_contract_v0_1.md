@@ -215,12 +215,29 @@ Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实
 > 其余都能端到端跑通"。**该表述不准确，已更正。**
 >
 > "只剩 `OBSERVE`"**只对动作端点成立**，对**提案链路不成立**：
-> 转换器 `proposal-to-plan.mjs` 当前只展开 `TAKEOFF / GOTO / LAND`，
-> 把 `HOLD` 与 `RETURN_HOME` 归入 `CONVERTER_NOT_EXPANDABLE`
-> （见下方三种原因码）。因此**即使 `OBSERVE` 端点实现，巡检提案仍会因整份拒绝而跑不通** ——
-> 卡在转换器没有这两个动作的展开规则，而不是端点缺失。
->
+> 转换器 `proposal-to-plan.mjs` 当时只展开 `TAKEOFF / GOTO / LAND`，
+> 把 `HOLD` 与 `RETURN_HOME` 归入 `CONVERTER_NOT_EXPANDABLE`。
 > 这一处由算法负责人指出，我方核实后确认其成立。
+
+> ✅ **2026-10-05 更新**：转换器**已补上 `HOLD` 与 `RETURN_HOME` 的展开规则**。
+> 因此现在端点层与提案链路层的缺口**都是 `OBSERVE` 一个**。
+>
+> 展开规则的两条设计要点：
+>
+> * **`HOLD` 的时长必须由调用方显式提供 `holdDurationS`，缺失即拒绝整份提案**
+>   （原因码 `hold_duration_required`）。理由：提案 schema 里 `HOLD` **只是
+>   `assignments[].actions` 的一个枚举值**，没有任何承载"停留多久"的字段。
+>   展开器若自己填默认秒数，等于**替算法决定停留时长** —— 与
+>   `takeoffAltitudeM` 拒绝从 `constraints.min_altitude_m` 推断是同一原则
+>   （"把约束当任务高度是在臆造指令"）。而 HOLD 的时长直接决定相机能采到多少画面。
+> * **`RETURN_HOME` 展开为无参数步骤**：目标是飞控自己的 home（PX4 的 EKF 原点），
+>   展开器不臆造参数；尤其**不填 `timeout_s` / `min_progress_m`** ——
+>   那两个是执行侧的**观测窗口与收敛判据**，不是任务语义。
+>
+> **计划说明的措辞**也相应收紧：`explanation` 现在写明"含 TAKEOFF / GOTO / LAND /
+> HOLD / RETURN_HOME，**不构成巡检完成的声明**"，并说明理由（本计划不采集图像、
+> 也不判定是否观察到目标）。有测试守住这一点 —— 且该测试刻意检查**肯定式**措辞
+> （如"巡检已完成"）而非简单匹配"巡检完成"四个字，因为否定声明里本就含有这四个字。
 
 `OBSERVE` 之所以仍然没有端点，不是因为"还没排上" —— 而是因为**没有可依据的接口定义**：
 拍什么、存在哪、如何判定"确实观察到了"，此前都没有定义。
@@ -233,12 +250,17 @@ Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实
 | 原因码 | 含义 |
 | --- | --- |
 | `action_endpoint_not_implemented` | 端点还不存在（如 `OBSERVE`） |
-| `action_no_expansion_rule` | **端点已存在，只是转换器还没有展开规则**（`HOLD` / `RETURN_HOME`） |
+| `action_no_expansion_rule` | **端点已存在，只是转换器还没有展开规则** |
 | `action_not_supported` | 本执行路径不提供该能力（高风险载荷动作） |
 
-`HOLD` / `RETURN_HOME` 属于第二种：调用方**可以直接调端点**，只是转换器暂时不代为展开
-（展开 `HOLD` 需要"保持在哪、多久"这类任务语义，展开 `RETURN_HOME` 需要"何时判定任务做完"，
-都超出转换器的职责）。把它们说成"未实现"会让人去等一个已经有的东西。
+**2026-10-05 更新**：`HOLD` / `RETURN_HOME` 的展开规则已补上，因此
+`CONVERTER_NOT_EXPANDABLE` **现在为空**，`action_no_expansion_rule` **暂时没有触发者**。
+
+**这个原因码保留不删。** 它的存在是为了让"端点有了但展开规则还没写"与"端点不存在"
+在措辞上可区分 —— 前者会让调用方以为端点还没有、去等一个已经有的东西。
+将来任何动作从"未实现"变成"已实现端点"时，都会先经过这个状态。
+**转换器有一条测试守住这个不变量**：`CONVERTER_NOT_EXPANDABLE` 与
+`EXPANDABLE_ACTIONS` **不得相交** —— 相交就说明动作已能展开却仍被误报成"没有展开规则"。
 
 ### 3.3 大小写
 
