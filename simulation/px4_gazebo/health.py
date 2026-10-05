@@ -358,9 +358,18 @@ def collect_health(
     expected_world = str(manifest["world_name"])
     worlds = world_probe()
     source_timestamp = harness.utc_now()
-    with ThreadPoolExecutor(max_workers=len(vehicles) + 1) as executor:
+    def current_models() -> set[str]:
+        if model_probe is not None:
+            return model_probe()
+        # A loaded three-camera world may run below real time; 50 ms of wall
+        # time can miss every pose update and falsely report all models gone.
+        return {str(p["name"]) for message in capture_poses(expected_world, 2.0)
+                for p in message.get("pose", []) if "name" in p}
+
+    with ThreadPoolExecutor(max_workers=len(vehicles) + 2) as executor:
         clock_future = executor.submit(clock_probe, expected_world, timeout_s,
             duration_s=max(2.0, stability_window_s if mode == "standalone" else 2.0))
+        model_future = executor.submit(current_models)
         if mode == "standalone":
             futures = {
                 str(vehicle["node_id"]): executor.submit(
@@ -381,15 +390,11 @@ def collect_health(
         except Exception as exc:
             clock = {"clock_advancing": False, "reason": "gazebo_clock_probe_failed",
                      "evidence": {"error": f"{type(exc).__name__}: {exc}"}}
-    source_timestamp = clock.get("source_timestamp", source_timestamp)
-    if model_probe is not None:
-        models = model_probe()
-    else:
         try:
-            models = {str(p["name"]) for message in capture_poses(expected_world, .05)
-                      for p in message.get("pose", []) if "name" in p}
+            models = model_future.result()
         except (OSError, ValueError, TimeoutError):
             models = set()
+    source_timestamp = clock.get("source_timestamp", source_timestamp)
     server = server_identity(state, identity_reader=identity_reader)
     # Re-check identities after probes; process replacement during observation
     # must not inherit the initial identity decision.

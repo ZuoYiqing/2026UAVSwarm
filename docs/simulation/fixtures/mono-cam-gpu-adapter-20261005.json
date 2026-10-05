@@ -1,0 +1,60 @@
+{
+  "fixture_version": "1.0",
+  "kind": "real_gazebo_gpu_adapter_comparison",
+  "date_local": "2026-10-05",
+  "manifest": "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json",
+  "world": "simple_recon_v0_1",
+  "px4_commit": "171f0f38cffa95f28d5e159f7aaf7599756f9e0e",
+  "gazebo_version": "8.14.0",
+  "default_adapter": {
+    "run_id": "2682801e6d5e455aa27f293be5e99aff",
+    "environment_override": null,
+    "clock_wall_s": 10,
+    "clock_sim_span_s": 1.7439999999999998,
+    "clock_real_span_s": 9.99038573,
+    "real_time_factor": 0.17456783422915942,
+    "nvidia_utilization_percent_range": [5, 11],
+    "nvidia_memory_used_mib": 379,
+    "stop_clean": true
+  },
+  "forced_nvidia_adapter": {
+    "run_id": "ddeec4d154e14d6aaa3c303b7cd2c919",
+    "environment_override": "MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA",
+    "clock_wall_s": 10,
+    "clock_sim_span_s": 8.375999999999998,
+    "clock_real_span_s": 9.979508747000011,
+    "real_time_factor": 0.8393198715836536,
+    "nvidia_utilization_percent_range": [13, 46],
+    "nvidia_memory_used_mib": 660,
+    "with_three_image_subscribers": {
+      "clock_wall_s": 12,
+      "clock_sim_span_s": 9.703999999999994,
+      "clock_real_span_s": 11.992492188,
+      "real_time_factor": 0.8091729265173147,
+      "image_frame_counts": {"UAV-01": 370, "UAV-02": 370, "UAV-03": 369},
+      "distinct_image_topics": true,
+      "distinct_first_frame_hashes": true
+    },
+    "standalone_health_after_parallel_model_probe": {
+      "status": "ready",
+      "reason": "ok",
+      "clock_real_time_factor": 0.8883127984766339,
+      "models_present": ["x500_mono_cam_0", "x500_mono_cam_1", "x500_mono_cam_2"],
+      "vehicles_ready": ["UAV-01", "UAV-02", "UAV-03"]
+    },
+    "stop_clean": true,
+    "world_stopped": true,
+    "ports_14540_14542_released": true
+  },
+  "graphics_libraries_observed_in_both_runs": [
+    "/usr/lib/wsl/lib/libd3d12.so",
+    "/usr/lib/wsl/lib/libd3d12core.so",
+    "/usr/lib/wsl/lib/libnvidia-encode.so.1",
+    "/usr/lib/x86_64-linux-gnu/dri/swrast_dri.so",
+    "/usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0.0.0",
+    "/usr/lib/x86_64-linux-gnu/libGLX_mesa.so.0.0.0"
+  ],
+  "inference": "adapter_override_strongly_improves_rtf; library_maps_alone_do_not_identify_gpu",
+  "flight_regression": "not_run",
+  "runtime_integrated_regression": "not_run"
+}

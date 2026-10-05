@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import copy
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,31 @@ def test_health_requires_clock_models_identity_and_continuous_three_node_streams
     assert all(row["heartbeat_fresh"] for row in payload["vehicles"])
     assert all(row["telemetry_fresh"] for row in payload["vehicles"])
     assert all(row["process_identity_valid"] for row in payload["vehicles"])
+
+
+def test_model_probe_runs_alongside_mavlink_probes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    base_probe = _mavlink_probe(manifest)
+    model_started = threading.Event()
+
+    def model_probe() -> set[str]:
+        model_started.set()
+        return {"x500_0", "x500_1", "x500_2"}
+
+    def mavlink_probe(endpoint: str, timeout_s: float, stability_window_s: float) -> dict[str, Any]:
+        assert model_started.wait(1.0), "pose sampling must start before MAVLink evidence expires"
+        return base_probe(endpoint, timeout_s, stability_window_s)
+
+    payload = _collect(
+        tmp_path,
+        monkeypatch,
+        mavlink_probe=mavlink_probe,
+        overrides={"model_probe": model_probe},
+    )
+    assert payload["status"] == "ready"
 
 
 def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(

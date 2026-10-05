@@ -1,0 +1,59 @@
+{
+  "fixture_version": "1.0",
+  "kind": "real_gazebo_camera_regression",
+  "status": "not_ready",
+  "reason": "gazebo_clock_slow",
+  "run_id": "d0dbde92c9de48e3bdb947f4c8c6ad08",
+  "px4_commit": "171f0f38cffa95f28d5e159f7aaf7599756f9e0e",
+  "gazebo_version": "8.14.0",
+  "world": "simple_recon_v0_1",
+  "manifest": "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json",
+  "camera_sample_wall_s": 15,
+  "image_format": "RGB_INT8",
+  "width": 1280,
+  "height": 960,
+  "image_bytes": 3686400,
+  "vehicles": [
+    {
+      "node_id": "UAV-01",
+      "system_id": 1,
+      "model": "x500_mono_cam_0",
+      "endpoint_port": 14540,
+      "sample_count": 48,
+      "sim_fps_approx": 30.36,
+      "first_frame_sha256": "ada5c3497c333f0e59e95068268de7c4e2c3c1a2cf97576a27a8f71d818a57cd"
+    },
+    {
+      "node_id": "UAV-02",
+      "system_id": 2,
+      "model": "x500_mono_cam_1",
+      "endpoint_port": 14541,
+      "sample_count": 48,
+      "sim_fps_approx": 30.28,
+      "first_frame_sha256": "b956b0707b62e39c59837be337e900be600ae2827b6f0b46812cb50d3f79ce11"
+    },
+    {
+      "node_id": "UAV-03",
+      "system_id": 3,
+      "model": "x500_mono_cam_2",
+      "endpoint_port": 14542,
+      "sample_count": 48,
+      "sim_fps_approx": 30.28,
+      "first_frame_sha256": "5046a6ed811c9fa33ed089049370a6d856a87b1016a2ba0b250ea4474e870d0a"
+    }
+  ],
+  "clock": {
+    "sample_count": 273,
+    "real_span_s": 9.662926421999998,
+    "sim_span_s": 1.088000000000001,
+    "real_time_factor": 0.11259528971708868,
+    "minimum_real_time_factor": 0.2
+  },
+  "flight_test": "not_run_due_to_health_failure",
+  "integrated_test": "not_run",
+  "stop": {
+    "clean": true,
+    "world_stopped": true,
+    "ports_released": true
+  }
+}
