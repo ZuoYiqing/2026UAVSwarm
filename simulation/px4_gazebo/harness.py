@@ -1277,10 +1277,139 @@ def collect_health(
     )
 
 
+#: 判定"这份 manifest 是否装配了成像相机"的模型名片段。
+#:
+#: ⚠️ 判据读的是 **manifest 内容**（`gazebo_model_name`），不是**文件名**。
+#: 文件名可以随便起；按名字判断的话，一个改名后的无相机 manifest 会被误判成
+#: 有相机 —— 而误判的方向恰好是"以为有相机"，也就是把问题藏起来。
+CAMERA_MODEL_MARKERS = ("mono_cam", "depth", "camera")
+
+
+def manifest_has_camera(manifest: dict[str, Any]) -> bool:
+    """这份 manifest 是否装配了成像相机。
+
+    为什么需要这个判据：**没有相机的仿真看起来完全正常** ——
+    端口对、health ready、飞机能飞，只有相机动作会失败。
+    所以"这次跑的是哪一份"必须能被显式问出来。
+    """
+    for vehicle in manifest.get("vehicles", []) or []:
+        if not isinstance(vehicle, dict):
+            continue
+        model = str(vehicle.get("gazebo_model_name") or "").lower()
+        if any(marker in model for marker in CAMERA_MODEL_MARKERS):
+            return True
+    return False
+
+
+def camera_models(manifest: dict[str, Any]) -> list[str]:
+    """列出带相机的模型名，供报告里正面确认"这次跑的确实是相机版"。"""
+    names = []
+    for vehicle in manifest.get("vehicles", []) or []:
+        if not isinstance(vehicle, dict):
+            continue
+        model = str(vehicle.get("gazebo_model_name") or "")
+        if any(marker in model.lower() for marker in CAMERA_MODEL_MARKERS):
+            names.append(model)
+    return names
+
+
+def preflight_manifest(
+    manifest: dict[str, Any],
+    *,
+    repo_root: Path,
+    worktrees_root: Path | None = None,
+    manifest_path: Path | None = None,
+) -> dict[str, Any]:
+    """启动前的自检：把两种"看起来正常、实际不可用"的状态主动报出来。
+
+    检查项
+    ------
+    ① **这份 manifest 有没有相机。** 无相机是**警告**不是错误 —— 无相机仿真本身
+       是合法用途，报成错误会破坏现有工作流。但它必须被**说出来**：否则"只有相机
+       动作会失败"这件事在别处完全看不出来。
+    ② **harness state 是否在别的仓库。** `REPO_ROOT` 是本文件所在目录的上两级，
+       因此状态与标定证据写在**跑仿真的那个仓库**下。而 Runtime 只认
+       `repo_root/.runtime/`。若状态只存在于别的 worktree，标定必然读到过期证据
+       （表现为"前端能连上飞机，但标定 stale、三维视图不显示、`goto` 被拒"）。
+       这一条是**错误**，因为光看运行状态发现不了。
+
+    Returns:
+        可 ``json.dumps`` 的报告。``ok`` 为 False 表示存在 error 级发现。
+    """
+    findings: list[dict[str, Any]] = []
+
+    has_camera = manifest_has_camera(manifest)
+    models = camera_models(manifest)
+    if not has_camera:
+        findings.append({
+            "code": "manifest_has_no_camera",
+            "severity": "warning",
+            "detail": (
+                "这份 manifest 没有装配成像相机。仿真能正常启动、health 会 ready、"
+                "飞机能飞 —— **只有相机动作会失败**。若本次要做感知相关验收，"
+                "请改用 three_uav_mono_cam_sitl.json。"
+            ),
+        })
+
+    local_state = repo_root / ".runtime" / "px4_gazebo" / "harness_state.json"
+    other_states: list[Path] = []
+    if worktrees_root is not None and worktrees_root.is_dir():
+        for candidate in sorted(worktrees_root.glob("*/.runtime/px4_gazebo/harness_state.json")):
+            try:
+                if candidate.resolve() == local_state.resolve():
+                    continue
+            except OSError:
+                pass
+            other_states.append(candidate)
+
+    if other_states:
+        # 本仓库有没有状态都要报 —— 两者都有更危险：本仓库那份可能是**旧的**，
+        # 而 Runtime 恰好会读它。
+        #
+        # detail 里**直接带上路径**：`paths` 字段是给机器读的，而这句话是给人读的。
+        # 让人再去翻 JSON 才能知道是哪个 worktree，等于没说。
+        listed = "、".join(str(p) for p in other_states)
+        findings.append({
+            "code": "state_in_other_worktree",
+            "severity": "error",
+            "local_state_present": local_state.is_file(),
+            "detail": (
+                f"仿真状态存在于别的仓库：{listed}。"
+                f"而 Runtime 只认 {local_state}。"
+                + ("本仓库也有一份，但它可能来自**更早的运行**。"
+                   if local_state.is_file() else "本仓库没有这份状态。")
+                + " 结果会是「前端能连上飞机，但标定读到过期证据」。"
+                " 要么从本仓库启动仿真，要么让调用方把仓库根指向那个 worktree。"
+            ),
+            "paths": [str(p) for p in other_states],
+        })
+
+    return {
+        "ok": not any(f["severity"] == "error" for f in findings),
+        "camera": {"present": has_camera, "models": models},
+        "manifest": {
+            "path": str(manifest_path) if manifest_path is not None else None,
+            "vehicle_count": len([v for v in (manifest.get("vehicles") or []) if isinstance(v, dict)]),
+        },
+        "repo_root": str(repo_root),
+        "findings": findings,
+    }
+
+
+def _default_worktrees_root(repo_root: Path) -> Path | None:
+    """默认的 worktree 父目录。
+
+    本项目的约定是 ``<父目录>/<repo 名>-worktrees/``。找不到就返回 None ——
+    不能瞎猜一个目录然后据它报警。
+    """
+    candidate = repo_root.parent / f"{repo_root.name}-worktrees"
+    return candidate if candidate.is_dir() else None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("validate-config", "mapping", "start"):
+    for name in ("validate-config", "mapping", "start", "preflight"):
         command = subparsers.add_parser(name)
         command.add_argument(
             "--config",
@@ -1291,6 +1420,11 @@ def _build_parser() -> argparse.ArgumentParser:
             mode = command.add_mutually_exclusive_group()
             mode.add_argument("--headless", action="store_true")
             mode.add_argument("--gui", action="store_true")
+        if name == "preflight":
+            # 允许调用方指定仓库根与 worktree 父目录：即"仿真跑在哪个仓库"这件事
+            # 由调用方决定，而不是从本文件位置推断 —— 推断在跨仓库场景下会出错。
+            command.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+            command.add_argument("--worktrees-root", type=Path, default=None)
     subparsers.add_parser("stop")
     return parser
 
@@ -1305,6 +1439,23 @@ def main(argv: list[str] | None = None) -> int:
             print_mapping_table(load_manifest(args.config))
         elif args.command == "start":
             start_harness(args.config, headless=bool(args.headless))
+        elif args.command == "preflight":
+            manifest = load_manifest(args.config)
+            repo_root = Path(args.repo_root)
+            worktrees_root = (
+                Path(args.worktrees_root) if args.worktrees_root is not None
+                else _default_worktrees_root(repo_root)
+            )
+            report = preflight_manifest(
+                manifest,
+                repo_root=repo_root,
+                worktrees_root=worktrees_root,
+                manifest_path=Path(args.config),
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            # 退出码是调用方（ops.sh 等）唯一能可靠消费的信号。
+            # 若错位时仍返回 0，调用方就只能解析文字判断，那迟早会失效。
+            return 0 if report["ok"] else 1
         elif args.command == "stop":
             stop_harness()
     except HarnessError as exc:
