@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$LaunchRecord,
     [string]$ContextFile = 'examples/three_uav_inspection.json',
-    [ValidateSet('infer', 'ground-model')][string]$Mode = 'infer',
+    [ValidateSet('infer', 'ground-model', 'ground-eval')][string]$Mode = 'infer',
     [switch]$KeepServer
 )
 $ErrorActionPreference = 'Stop'
@@ -32,6 +32,7 @@ $client = Start-Process -FilePath $python -ArgumentList $quotedArguments -Workin
 $samples = [Collections.Generic.List[object]]::new()
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $stopReason = $null
+$maxRuntimeSec = if ($Mode -eq 'ground-eval') { 300 } else { 120 }
 try {
     while (-not $client.HasExited) {
         $freeKiB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
@@ -41,7 +42,7 @@ try {
         $samples.Add([ordered]@{elapsed_s=$watch.Elapsed.TotalSeconds; host_free_kib=$freeKiB; gpu_used_mib=$gpu[0]; gpu_free_mib=$gpu[1]; temperature_c=$gpu[2]; gpu_utilization_percent=$gpu[3]})
         if ($freeKiB -lt 1536*1024) { throw 'LOW_HOST_RAM' }
         if ($gpu[2] -ge 85) { throw 'EXPERIMENT_TEMPERATURE_LIMIT' }
-        if ($watch.Elapsed.TotalSeconds -gt 120) { throw 'EXPERIMENT_TIMEOUT' }
+        if ($watch.Elapsed.TotalSeconds -gt $maxRuntimeSec) { throw 'EXPERIMENT_TIMEOUT' }
         if ($server.HasExited) { throw 'MODEL_PROCESS_EXITED' }
         Start-Sleep -Milliseconds 500
     }
@@ -56,7 +57,7 @@ try {
         Stop-Process -Id $server.Id
         $serverStoppedAfterRequest = $true
     }
-    $report = [ordered]@{kind='single_request_resource_samples'; mode=$Mode; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
+    $report = [ordered]@{kind='bounded_resource_samples'; mode=$Mode; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; max_runtime_s=$maxRuntimeSec; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $runRoot 'resources.json') -Encoding utf8
 }
 Write-Output "REQUEST_ARTIFACTS=$runRoot"

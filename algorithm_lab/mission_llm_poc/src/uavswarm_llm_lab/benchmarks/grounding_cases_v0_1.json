@@ -1,0 +1,73 @@
+{
+  "corpus_version": "0.1",
+  "purpose": "Bounded local-model semantic grounding, never a flight plan or live scene",
+  "base_request": {
+    "schema_version": "0.1",
+    "mission_id": "grounding-eval-base",
+    "snapshot_id": "synthetic-grounding-eval-20261005",
+    "source": "synthetic_benchmark",
+    "scene_id": "synthetic_grounding_scene_v0_1",
+    "map_version": "synthetic_grounding_scene_v0_1-map-1",
+    "coordinate_frame": "scene_ned",
+    "objective": "飞行验证：起飞、前往A区、降落。",
+    "snapshot_age_ms": 0,
+    "snapshot_valid_for_ms": 120000,
+    "constraints": {
+      "min_battery_pct": 30,
+      "max_sample_age_ms": 120000,
+      "min_vehicles": 1,
+      "allow_partial": false,
+      "min_altitude_m": 3,
+      "max_altitude_m": 30
+    },
+    "fleet": [
+      {
+        "node_id": "UAV-SYN-01",
+        "connected": true,
+        "stale": false,
+        "battery_pct": 80,
+        "capabilities": ["TAKEOFF", "GOTO", "OBSERVE", "RETURN_HOME", "LAND"],
+        "current_assignment": null,
+        "spatial": {
+          "frame": "scene_ned",
+          "scene_id": "synthetic_grounding_scene_v0_1",
+          "map_version": "synthetic_grounding_scene_v0_1-map-1",
+          "public_position_usable": true,
+          "sample_age_ms": 0,
+          "position_m": {"north_m": 0, "east_m": 0, "down_m": 0}
+        }
+      }
+    ],
+    "waypoints": [
+      {"waypoint_id": "WP-SYN-A", "position_m": {"north_m": 10, "east_m": 0, "down_m": -10}},
+      {"waypoint_id": "WP-SYN-B", "position_m": {"north_m": 0, "east_m": 10, "down_m": -10}}
+    ],
+    "regions": [
+      {"region_id": "route-a", "labels": ["A区", "route-a", "东区"],
+       "waypoint_ids": ["WP-SYN-A"], "source_reference": "synthetic_grounding_eval_v0_1"},
+      {"region_id": "route-b", "labels": ["B区", "route-b"],
+       "waypoint_ids": ["WP-SYN-B"], "source_reference": "synthetic_grounding_eval_v0_1"}
+    ],
+    "policy_denials": []
+  },
+  "cases": [
+    {"case_id": "exact_a", "objective": "飞行验证：起飞、前往A区、降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-a"], "expected_accept": true},
+    {"case_id": "exact_b", "objective": "请做飞行验证：起飞，然后前往B区，最后降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-b"], "expected_accept": true},
+    {"case_id": "ordered_ab", "objective": "飞行验证：起飞、前往A区，再前往B区，降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-a", "route-b"], "expected_accept": true},
+    {"case_id": "ordered_ba", "objective": "飞行验证：起飞、前往B区，再前往A区，降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-b", "route-a"], "expected_accept": true},
+    {"case_id": "east_alias", "objective": "飞行验证：起飞、前往东部试验区、降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-a"], "expected_accept": false},
+    {"case_id": "negated_b", "objective": "飞行验证：起飞、不要去B区，只前往A区、降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-a"], "expected_accept": false},
+    {"case_id": "unknown_c", "objective": "飞行验证：起飞、前往C区、降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": [], "expected_accept": false},
+    {"case_id": "recon_a", "objective": "对A区执行巡检。",
+     "expected_intent": "reconnaissance", "expected_region_ids": ["route-a"], "expected_accept": false},
+    {"case_id": "no_land", "objective": "飞行验证：起飞、前往A区、不要降落。",
+     "expected_intent": "flight_validation", "expected_region_ids": ["route-a"], "expected_accept": false}
+  ]
+}

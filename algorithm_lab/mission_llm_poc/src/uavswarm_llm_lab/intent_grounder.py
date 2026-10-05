@@ -5,6 +5,7 @@ This is an auditable baseline, not free-form navigation or a geometry planner.
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from time import perf_counter
 
 from jsonschema import Draft202012Validator
@@ -16,6 +17,7 @@ from .semantic_validator import context_errors
 
 FLIGHT_ACTIONS = ["TAKEOFF", "GOTO", "LAND"]
 RECON_ACTIONS = ["TAKEOFF", "GOTO", "OBSERVE", "RETURN_HOME", "LAND"]
+EXCLUSION_PREFIXES = ("不要去", "不去", "别去", "避开", "不要前往", "禁止前往")
 GROUNDING_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["intent_type", "bindings", "explanation"],
@@ -104,11 +106,26 @@ def _intent_type(objective: str) -> str:
     return "flight_validation" if flight else "reconnaissance"
 
 
+def _excluded_region_ids(request: dict) -> list[str]:
+    """Do not silently turn an explicitly excluded region into a positive task."""
+    objective = request["objective"]
+    excluded = []
+    for region in request["regions"]:
+        if any(re.search(re.escape(prefix) + r"\s*" + re.escape(label), objective,
+                         flags=re.IGNORECASE)
+               for prefix in EXCLUSION_PREFIXES for label in region["labels"]):
+            excluded.append(region["region_id"])
+    return sorted(excluded)
+
+
 def derive_context(request: dict) -> tuple[dict, dict]:
     """Match explicit supplied labels only; reject absent or ambiguous references."""
     errors = request_errors(request)
     if errors:
         raise ContractError("; ".join(errors))
+    excluded = _excluded_region_ids(request)
+    if excluded:
+        raise ContractError("OBJECTIVE_EXCLUSION_UNREPRESENTABLE:" + ",".join(excluded))
     intent_type = _intent_type(request["objective"])
     objective = request["objective"].casefold()
     matches = []
@@ -224,6 +241,10 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
                    for e in Draft202012Validator(GROUNDING_SCHEMA).iter_errors(candidate))
     if shape:
         return {**base, "errors": ["GROUNDING_SCHEMA: " + item for item in shape]}
+    excluded = _excluded_region_ids(request)
+    if excluded:
+        return {**base, "errors": ["OBJECTIVE_EXCLUSION_UNREPRESENTABLE:" +
+                                    ",".join(excluded)]}
     errors = []
     try:
         expected_intent = _intent_type(request["objective"])
