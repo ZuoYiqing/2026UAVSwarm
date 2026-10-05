@@ -14,6 +14,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CONVERTER_NOT_EXPANDABLE,
   EXPANDABLE_ACTIONS,
   KNOWN_NOT_EXPANDABLE,
   ProposalRejected,
@@ -365,16 +366,38 @@ test("现有巡检样例被整份拒绝：它要求 OBSERVE 与 RETURN_HOME", (t
   };
 
   assert.throws(
-    () => proposalToPlan(proposal, ctx, { takeoffAltitudeM: 5 }),
+    () => proposalToPlan(proposal, ctx, { takeoffAltitudeM: 5, holdDurationS: 5 }),
     (error) => {
       assert.equal(error.name, "ProposalRejected");
       assert.equal(error.code, "proposal_not_executable");
 
-      const actions = error.violations
-        .filter((v) => v.kind === "action_not_expandable")
-        .map((v) => v.action);
+      const violations = error.violations.filter((v) => v.kind === "action_not_expandable");
+      const actions = violations.map((v) => v.action);
+
+      // 真正的巡检样例要求 OBSERVE —— 它至今没有端点，必须被指出。
       assert.ok(actions.includes("OBSERVE"), `应指出 OBSERVE 不可展开，实际 ${JSON.stringify(actions)}`);
-      assert.ok(actions.includes("RETURN_HOME"), `应指出 RETURN_HOME 不可展开，实际 ${JSON.stringify(actions)}`);
+
+      // ⚠️ 本条原先还断言 RETURN_HOME 不可展开。2026-10-05 转换器补上了 HOLD 与
+      // RETURN_HOME 的展开规则，因此该断言已过时，改为断言它们**不再**被误报。
+      // 保留这部分是有意的：若将来有人把这两个动作从 EXPANDABLE_ACTIONS 移回，
+      // 这条会立刻变红，而不是悄悄退回到"展不开"。
+      assert.ok(
+        !actions.includes("RETURN_HOME"),
+        `RETURN_HOME 已可展开，不应再出现在不可展开违规里：${JSON.stringify(actions)}`,
+      );
+      assert.ok(
+        !actions.includes("HOLD"),
+        `HOLD 已可展开，不应再出现在不可展开违规里：${JSON.stringify(actions)}`,
+      );
+
+      // OBSERVE 的原因码必须是"端点不存在"，不能说成"展开规则缺失" ——
+      // 后者会让人以为端点已经有了，去等一个不存在的东西。
+      const observeViolation = violations.find((v) => v.action === "OBSERVE");
+      assert.equal(
+        observeViolation.reason_code,
+        "action_endpoint_not_implemented",
+        "OBSERVE 应报端点未实现，而不是展开规则缺失",
+      );
 
       // 拒绝必须是整份的：不能返回"去掉这两个动作后剩下的可执行子集"
       const body = error.toResponse();
@@ -391,10 +414,191 @@ test("现有巡检样例被整份拒绝：它要求 OBSERVE 与 RETURN_HOME", (t
 // --- 常量一致性 -------------------------------------------------------------
 
 test("可展开动作与 Runtime 端点一一对应，且与不可展开列表不重叠", () => {
-  assert.deepEqual(Object.keys(EXPANDABLE_ACTIONS).sort(), ["GOTO", "LAND", "TAKEOFF"]);
+  assert.deepEqual(
+    Object.keys(EXPANDABLE_ACTIONS).sort(),
+    ["GOTO", "HOLD", "LAND", "RETURN_HOME", "TAKEOFF"],
+  );
   for (const [name, endpoint] of Object.entries(EXPANDABLE_ACTIONS)) {
-    assert.ok(["takeoff", "goto", "land"].includes(endpoint), `${name} 的端点名异常`);
+    assert.ok(
+      ["takeoff", "goto", "land", "hold_position", "return_home"].includes(endpoint),
+      `${name} 的端点名异常`,
+    );
   }
   const overlap = Object.keys(EXPANDABLE_ACTIONS).filter((a) => KNOWN_NOT_EXPANDABLE.includes(a));
   assert.deepEqual(overlap, [], "两个列表不应有交集");
+  // CONVERTER_NOT_EXPANDABLE 必须真的与可展开列表不相交 —— 它是"端点有了、
+  // 展开规则也补上了"之后应当被清空的列表。若两者相交，说明有一边忘了改。
+  const staleConverterList = CONVERTER_NOT_EXPANDABLE.filter((a) =>
+    Object.prototype.hasOwnProperty.call(EXPANDABLE_ACTIONS, a),
+  );
+  assert.deepEqual(
+    staleConverterList,
+    [],
+    "已可展开的动作不应仍留在 CONVERTER_NOT_EXPANDABLE（会给出 action_no_expansion_rule，误导调用方）",
+  );
 });
+
+// --- HOLD / RETURN_HOME 展开 ------------------------------------------------
+
+/**
+ * 巡检序列的提案：TAKEOFF → GOTO → HOLD → RETURN_HOME → LAND。
+ * 这正是算法侧任务模板里的 required_actions（把 OBSERVE 换成 HOLD 便于本文件
+ * 不依赖相机能力）。
+ */
+function reconProposal(ctx) {
+  return proposalFrom(ctx, { actions: ["TAKEOFF", "GOTO", "HOLD", "RETURN_HOME", "LAND"] });
+}
+
+test("HOLD 与 RETURN_HOME 可展开为对应的 action_type", (t) => {
+  let ctx;
+  try {
+    ({ context: ctx } = flightValidationContext());
+  } catch {
+    t.skip("未找到算法侧样例（可用 UAV_ALGO_REPO 指定）");
+    return;
+  }
+
+  const { plan } = proposalToPlan(reconProposal(ctx), ctx, {
+    takeoffAltitudeM: 3,
+    holdDurationS: 5,
+  });
+
+  const actionTypes = plan.steps.map((s) => s.action_type);
+  assert.ok(actionTypes.includes("hold_position"), `应含 hold_position：${actionTypes}`);
+  assert.ok(actionTypes.includes("return_home"), `应含 return_home：${actionTypes}`);
+
+  // 每台机各一次
+  const holdSteps = plan.steps.filter((s) => s.action_type === "hold_position");
+  const homeSteps = plan.steps.filter((s) => s.action_type === "return_home");
+  assert.equal(holdSteps.length, 3, "3 机各一次 HOLD");
+  assert.equal(homeSteps.length, 3, "3 机各一次 RETURN_HOME");
+});
+
+test("HOLD 展开的 hold_s 取调用方给的值，且每步都带 target 载具", (t) => {
+  let ctx;
+  try {
+    ({ context: ctx } = flightValidationContext());
+  } catch {
+    t.skip("未找到算法侧样例");
+    return;
+  }
+
+  const { plan } = proposalToPlan(reconProposal(ctx), ctx, {
+    takeoffAltitudeM: 3,
+    holdDurationS: 7.5,
+  });
+
+  for (const step of plan.steps.filter((s) => s.action_type === "hold_position")) {
+    assert.equal(step.params.hold_s, 7.5, "hold_s 必须等于调用方给的 holdDurationS");
+    assert.ok(step.node_id, "HOLD 步骤必须有目标载具");
+    // HOLD 的语义是"待在现在这里"，不带坐标；带了就说明接线错了
+    for (const coord of ["north_m", "east_m", "down_m"]) {
+      assert.ok(!(coord in step.params), `HOLD 不该带 ${coord}`);
+    }
+  }
+});
+
+test("RETURN_HOME 展开不带坐标也不带时长 —— 目标由飞控自己知道", (t) => {
+  let ctx;
+  try {
+    ({ context: ctx } = flightValidationContext());
+  } catch {
+    t.skip("未找到算法侧样例");
+    return;
+  }
+
+  const { plan } = proposalToPlan(reconProposal(ctx), ctx, {
+    takeoffAltitudeM: 3,
+    holdDurationS: 5,
+  });
+
+  for (const step of plan.steps.filter((s) => s.action_type === "return_home")) {
+    assert.deepEqual(step.params, {}, "RETURN_HOME 目标由飞控的 home 决定，展开器不应臆造参数");
+    assert.ok(step.node_id, "RETURN_HOME 步骤必须有目标载具");
+  }
+});
+
+// 时长必须显式给出 —— 与 takeoffAltitudeM 同一原则：
+// 提案 schema 里 HOLD 只是 actions[] 的一个枚举值，**没有承载"停留多久"的字段**。
+// 转换器若自己填一个默认秒数，等于替算法决定停留时长，那是臆造指令。
+for (const bad of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5"]) {
+  test(`提案含 HOLD 但 holdDurationS=${String(bad)} 时拒绝整份提案`, (t) => {
+    let ctx;
+    try {
+      ({ context: ctx } = flightValidationContext());
+    } catch {
+      t.skip("未找到算法侧样例");
+      return;
+    }
+
+    const options = { takeoffAltitudeM: 3 };
+    if (bad !== undefined) options.holdDurationS = bad;
+
+    assert.throws(
+      () => proposalToPlan(reconProposal(ctx), ctx, options),
+      (error) => {
+        assert.ok(error instanceof ProposalRejected, `应为 ProposalRejected，实际 ${error?.name}`);
+        assert.equal(error.code, "hold_duration_required");
+        // 拒绝要点名是哪个字段缺了，而不是一句"参数错误"
+        assert.ok(
+          error.violations.some((v) => v.field === "holdDurationS"),
+          `违规项应指出 field=holdDurationS：${JSON.stringify(error.violations)}`,
+        );
+        return true;
+      },
+    );
+  });
+}
+
+test("提案不含 HOLD 时，不要求 holdDurationS", (t) => {
+  let ctx;
+  try {
+    ({ context: ctx } = flightValidationContext());
+  } catch {
+    t.skip("未找到算法侧样例");
+    return;
+  }
+
+  // 只有 TAKEOFF/GOTO/LAND：不该因为没有 holdDurationS 而被拒
+  const { plan } = proposalToPlan(proposalFrom(ctx), ctx, { takeoffAltitudeM: 3 });
+  assert.equal(plan.steps.filter((s) => s.action_type === "hold_position").length, 0);
+  assert.ok(plan.steps.length > 0, "应正常展开");
+});
+
+test("计划说明不得声称巡检完成", (t) => {
+  let ctx;
+  try {
+    ({ context: ctx } = flightValidationContext());
+  } catch {
+    t.skip("未找到算法侧样例");
+    return;
+  }
+
+  const { plan } = proposalToPlan(reconProposal(ctx), ctx, {
+    takeoffAltitudeM: 3,
+    holdDurationS: 5,
+  });
+  const text = plan.explanation;
+
+  // 计划里有 HOLD/RETURN_HOME 仍不等于"巡检完成" —— 采集与判定都不在此计划内。
+  //
+  // ⚠️ 这里刻意不断言 /巡检完成/ 不出现：说明文字里**应该**出现"不构成巡检完成"，
+  // 而那个否定句本身就含有"巡检完成"四个字。最初我把断言写成了 /巡检完成/.test()
+  // 取反，结果把否定句误判成肯定句 —— 是测试错，不是实现错。
+  // 正确做法是检查**肯定式**的措辞，并把否定声明的存在单独断言。
+  for (const forbidden of ["巡检已完成", "已完成巡检", "巡检完成。", "inspection complete"]) {
+    assert.ok(
+      !text.includes(forbidden),
+      `计划说明不得出现肯定式完成措辞「${forbidden}」：${text}`,
+    );
+  }
+  assert.ok(
+    text.includes("不构成巡检完成"),
+    `计划说明应显式声明它不是巡检完成：${text}`,
+  );
+  // 也不得暗示"已经拍到/看到"——本计划不含 CAPTURE，图像证据不在其中
+  for (const forbidden of ["已采集", "已观察到", "已拍摄"]) {
+    assert.ok(!text.includes(forbidden), `计划说明不得声称已采集/已观察：${forbidden}`);
+  }
+});
+

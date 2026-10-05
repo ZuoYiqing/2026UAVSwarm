@@ -246,6 +246,80 @@ class LandRequest(BackendRequest):
 
 
 @dataclass(slots=True)
+class HoldPositionRequest(BackendRequest):
+    """保持当前位置悬停（HOLD）。
+
+    不需要坐标：HOLD 的语义就是"待在现在这里"。因此也**不需要标定平移量**，
+    与 goto 不同 —— 没有坐标换算就不会有换算错误。
+
+    判据是**位置稳定**而不是模式切换成功：飞控接受 LOITER 不等于飞机停住了。
+    """
+
+    tolerance_m: float = 2.0
+    hold_s: float = 3.0
+    timeout_s: float = 20.0
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "HoldPositionRequest":
+        base = BackendRequest.from_json(payload)
+
+        def positive(field: str, default: float, *, allow_zero: bool = True) -> float:
+            raw = payload.get(field, default)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise RequestValidationError(
+                    "invalid_parameter", field, f"{field} 必须是数字", value=raw
+                )
+            value = float(raw)
+            if not math.isfinite(value) or value < 0 or (not allow_zero and value == 0):
+                raise RequestValidationError(
+                    "invalid_parameter", field,
+                    f"{field} 必须是非负有限数" if allow_zero else f"{field} 必须大于 0",
+                    value=raw,
+                )
+            return value
+
+        return cls(
+            **asdict(base),
+            tolerance_m=positive("tolerance_m", 2.0, allow_zero=False),
+            hold_s=positive("hold_s", 3.0, allow_zero=False),
+            timeout_s=positive("timeout_s", 20.0, allow_zero=False),
+        )
+
+
+@dataclass(slots=True)
+class ReturnHomeRequest(BackendRequest):
+    """自主返航（RETURN_HOME / ``AUTO + RTL``）。
+
+    不需要坐标：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
+
+    判据是**到 home 的距离确实缩小**而不是模式切换成功。
+    本项目出过一次事故：收尾阶段把 AUTO_RTL 当成安全悬停接受，飞机自主返航
+    而动作报 pass。所以这里只认位置证据。
+    """
+
+    timeout_s: float = 60.0
+    min_progress_m: float = 5.0
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "ReturnHomeRequest":
+        base = BackendRequest.from_json(payload)
+        values = {}
+        for field, default in (("timeout_s", 60.0), ("min_progress_m", 5.0)):
+            raw = payload.get(field, default)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise RequestValidationError(
+                    "invalid_parameter", field, f"{field} 必须是数字", value=raw
+                )
+            value = float(raw)
+            if not math.isfinite(value) or value <= 0:
+                raise RequestValidationError(
+                    "invalid_parameter", field, f"{field} 必须是正的有限数", value=raw
+                )
+            values[field] = value
+        return cls(**asdict(base), **values)
+
+
+@dataclass(slots=True)
 class GotoRequest(BackendRequest):
     """飞到共享 scene_ned 坐标系下的指定点。
 

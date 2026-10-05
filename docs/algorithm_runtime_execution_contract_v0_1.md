@@ -133,19 +133,107 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
 | `takeoff` | `altitude_m`（默认 3.0）<br>`altitude_tolerance_m`（默认 0.3）<br>`stable_duration_ms`（默认 1000） | 高度进入容差并**稳定保持**指定时长 |
 | `smoke_takeoff` | 同上，另 `auto_land`（默认 true） | 达到阈值比例并自动降落 |
 | `goto` | `north_m` / `east_m` / `down_m`（`scene_ned`，见 4）<br>`arrival_tolerance_m`（默认 1.0）<br>`hold_s`（默认 1.0） | 三维距离**持续** `hold_s` 秒落在容差内 |
+| `hold_position`（别名 `hold`） | `tolerance_m`（默认 2.0）<br>`hold_s`（默认 3.0）<br>`timeout_s`（默认 20.0） | 位置相对**模式生效时**的位置**持续** `hold_s` 秒落在容差内 |
+| `return_home` | `timeout_s`（默认 60.0）<br>`min_progress_m`（默认 5.0） | 到 home 的**三维距离确实缩小** `min_progress_m` |
 | `land` | 无（只需 `node_id`） | 落地且 disarmed |
 
 `params` 里**端点不认识的键会被丢弃**，不会转成 Runtime 忽略的未知字段。这样规划层的拼写错误
 不会静默生效。
 
+> **⚠️ 这两个新动作的完成判据是位置，不是模式。**
+>
+> 这是本契约里最值得强调的一点，因为它对应一次真实事故：2026-09-28 的 goto 收尾阶段
+> 把"任意非 OFFBOARD 模式"当成安全悬停接受，于是 **AUTO_RTL 被判为安全状态** ——
+> 飞机开始自主返航，而动作报 `pass`。
+>
+> 因此：
+>
+> * `hold_position` 只报模式成功是不够的 —— 飞控接受 LOITER 不等于飞机停住了
+>   （风、估计器漂移都可能让它在 LOITER 下缓慢移动）。判据是**位置持续在容差内**。
+> * `return_home` 只报"模式变成 RTL"是**错误**的 —— 飞控接受 RTL 不等于它在返航
+>   （可能被拒绝执行、被其它模式抢占、或 home 点未定义）。判据是**距离确实收敛**。
+>
+> 两者都**只采信模式切换之后**的新位置样本：切换前的旧位置不能当作新模式生效的证据。
+>
+> `AUTO_RTL` **仍不在** `PINNED_MODES` 里，而且不应被加进去 —— 那个集合的语义是
+> "确认安全、可作为回退目标"，RTL 是自主机动。本端点是对 RTL 的**显式请求**，
+> 与"把它当成安全回退接受"是两件不同的事。
+
+#### 3.1.1 真飞验证结果（2026-10-03，SITL）
+
+`HOLD` 与 `RETURN_HOME` 已在仿真中真飞验证。UAV-01：起飞 → `goto` 到
+`N=60 E=12 高度=20 m`（误差 0.50 m）→ `HOLD` → `RETURN_HOME`。
+
+```
+[HOLD]  tolerance_m=2.0  hold_s=4.0
+        result=pass  held=true  reason=stable_within_tolerance
+        max_drift_m=0.035   samples=41   mode=AUTO_LOITER
+
+[RETURN_HOME]  timeout_s=90  min_progress_m=5.0
+        result=pass  returning=true  reason=converging_on_home
+        initial_distance_m=60.75  final_distance_m=55.50  reduction=5.26
+        mode=AUTO_RTL confirmed=true
+        高度 20.0 → 29.7 m（PX4 RTL 先爬升到安全返航高度，属预期行为）
+```
+
+**一次反向验证**：在此之前，一次误触发的 `return_home`（飞机在地面、距 home 0.05 m）
+被**如实判为失败**（`return_home_not_converging`）——尽管模式成功切成了 `AUTO_RTL`
+且策略 `allow`。若判据写成"模式变成 RTL 即成功"，那次会误报通过。这正是本端点
+刻意采用位置判据的原因。
+
+#### 3.1.2 超时不再"一刀切"（2026-10-05）
+
+**问题（实测暴露，非设想）**：原先所有"等不到完成条件"的超时都报同一个原因码，
+而它把三种**含义相反**的情况混成了一种：
+
+| 实测场景 | 原原因码 | 实际情况 |
+| --- | --- | --- |
+| 350 m 航线没飞完 | `arrival_timeout` | **飞机在正常飞行、越来越近**，只是时间不够 |
+| RTL 后降落超时 | `landing_completion_timeout` | **飞机已经落地**（`landed_state=on_ground`） |
+| 坠机后降落超时 | `landing_completion_timeout` | 飞机坠了、**永远等不到条件** |
+
+调用方只看 `result: fail` 会得出错误结论：第一种该"再等等"，后两种该"出事了"。
+
+**现在的做法**：超时仍然报 `fail`（**判据一个字没放松**），但额外给出两个字段：
+
+| 字段 | 取值 |
+| --- | --- |
+| `completion_state` | `partial_evidence` / `insufficient_evidence` / `not_on_ground_after_land` |
+| `completion_timeout_detail` | 一句人话，说明"超时前最后观测到的是什么状态" |
+
+**分类判据刻意不是"数值还在不在变"**：最初设想用"高度还在变 / 位置不再变"来区分，
+实测证明不可靠 —— "不再变化"无法区分"载具卡住"、"稳稳悬停等条件"、"遥测采样停了"。
+现在改用**观测循环本来就在记录的分量**，因此不需要猜"有没有在动"：
+
+| 分类 | 含义 |
+| --- | --- |
+| `partial_evidence` | 完成条件里**有一个成立**（如已 on_ground、或高度已进容差）→ 卡在中间 |
+| `not_on_ground_after_land` | 降落时飞控**明确报不在地面**且仍 armed → 再等也不会完成，建议人工确认 |
+| `insufficient_evidence` | **没有可判定的读数** → 连"卡在哪"都无从判断 |
+
+**两个实测案例的文案因此相反**，这正是本次要解决的问题：
+
+```
+② 已落地但未 disarm  → 「这不代表降落失败，请据遥测确认」
+③ 坠机卡死           → 「无法通过继续等待完成降落，建议人工确认载具实际状态」
+```
+
+> ⚠️ **实现过程中修掉的两个自身缺陷**（都由"实证跑真实场景"发现，单测没覆盖）：
+> 一是 `hold_position` 的完成证据漏了 `tolerance_m`，导致分类判不出"漂移是否在
+> 容差内"，而说明文案却**假定**它在容差内 —— 对"漂了 30 m"给出"位置在容差内"；
+> 二是文案读的是自造的 `last_distance_m`，真实字段名是 `final_distance_m`，
+> 于是永远打印 `None`。两者的共同形状是**证据的产生方与解释方对不上**，
+> 现在加了一条规则：文案不得比判据更乐观。
+
 ### 3.2 已声明、但**无法执行**的动作
 
-Runtime 的策略注册表声明了 **21 个动作**，其中只有 4 个有真实端点（3.1）。
+Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实端点（3.1：`takeoff`
+`smoke_takeoff` `goto` `hold_position`（含别名 `hold`）`return_home` `land`）。
 其余按"为什么不能执行"分为三类，**错误措辞刻意不同**：
 
 | 类别 | 动作 | 原因码 |
 | --- | --- | --- |
-| **未实现**（飞行类） | `hover` `hold` `hold_position` `return_home` `land_safe` `reduce_speed` `maintain_heading` | `action_endpoint_not_implemented` |
+| **未实现**（飞行类） | `hover` `land_safe` `reduce_speed` `maintain_heading` | `action_endpoint_not_implemented` |
 | **未实现**（系统类） | `health_query` `report_status` `sensor_read` | `action_endpoint_not_implemented` |
 | **未实现**（载荷类） | `camera_capture` `gimbal_set_angle` `light_set_state` `speaker_play_message` | `action_endpoint_not_implemented` |
 | **未实现**（上游专有） | `observe`（不在策略注册表内，但算法侧 schema 允许） | `action_endpoint_not_implemented` |
@@ -161,9 +249,62 @@ Runtime 的策略注册表声明了 **21 个动作**，其中只有 4 个有真�
 > 10Hz 流正常发出、零报错，而飞机一动不动。
 
 **给算法侧的请求**：请把任务模板里的 `required_actions` 限制在 3.1 的集合内，或明确标注
-哪些动作属于"待实现"。当前 `base_context.json` 里每个任务的 `required_actions` 是
-`["TAKEOFF","GOTO","OBSERVE","RETURN_HOME","LAND"]`，其中 **3 个无法执行**
-（`OBSERVE`、`RETURN_HOME` 未实现），因此这样的任务目前**无法端到端跑通**。
+哪些动作属于"待实现"。
+
+**2026-09-30 更新**：`RETURN_HOME` 与 `HOLD` 现已实现，因此 `base_context.json` 里
+`["TAKEOFF","GOTO","OBSERVE","RETURN_HOME","LAND"]` 这五个动作中**只剩 `OBSERVE`
+一个没有执行端点**。
+
+> ⚠️ **2026-10-04 更正**：本段原先写作"巡检任务现在只差感知载荷接口这一项，
+> 其余都能端到端跑通"。**该表述不准确，已更正。**
+>
+> "只剩 `OBSERVE`"**只对动作端点成立**，对**提案链路不成立**：
+> 转换器 `proposal-to-plan.mjs` 当时只展开 `TAKEOFF / GOTO / LAND`，
+> 把 `HOLD` 与 `RETURN_HOME` 归入 `CONVERTER_NOT_EXPANDABLE`。
+> 这一处由算法负责人指出，我方核实后确认其成立。
+
+> ✅ **2026-10-05 更新**：转换器**已补上 `HOLD` 与 `RETURN_HOME` 的展开规则**。
+> 因此现在端点层与提案链路层的缺口**都是 `OBSERVE` 一个**。
+>
+> 展开规则的两条设计要点：
+>
+> * **`HOLD` 的时长必须由调用方显式提供 `holdDurationS`，缺失即拒绝整份提案**
+>   （原因码 `hold_duration_required`）。理由：提案 schema 里 `HOLD` **只是
+>   `assignments[].actions` 的一个枚举值**，没有任何承载"停留多久"的字段。
+>   展开器若自己填默认秒数，等于**替算法决定停留时长** —— 与
+>   `takeoffAltitudeM` 拒绝从 `constraints.min_altitude_m` 推断是同一原则
+>   （"把约束当任务高度是在臆造指令"）。而 HOLD 的时长直接决定相机能采到多少画面。
+> * **`RETURN_HOME` 展开为无参数步骤**：目标是飞控自己的 home（PX4 的 EKF 原点），
+>   展开器不臆造参数；尤其**不填 `timeout_s` / `min_progress_m`** ——
+>   那两个是执行侧的**观测窗口与收敛判据**，不是任务语义。
+>
+> **计划说明的措辞**也相应收紧：`explanation` 现在写明"含 TAKEOFF / GOTO / LAND /
+> HOLD / RETURN_HOME，**不构成巡检完成的声明**"，并说明理由（本计划不采集图像、
+> 也不判定是否观察到目标）。有测试守住这一点 —— 且该测试刻意检查**肯定式**措辞
+> （如"巡检已完成"）而非简单匹配"巡检完成"四个字，因为否定声明里本就含有这四个字。
+
+`OBSERVE` 之所以仍然没有端点，不是因为"还没排上" —— 而是因为**没有可依据的接口定义**：
+拍什么、存在哪、如何判定"确实观察到了"，此前都没有定义。
+（2026-10-04 仿真侧已确认选用 `x500_mono_cam` 并实测出图，接口定义见
+`docs/OBSERVE_interface_requirements_draft.md`。）在定义出来之前实现它，
+只会产生一个"看起来完成、实际没拍照"的假成功。
+
+**转换器的措辞**：`proposal-to-plan.mjs` 现在把不展开的动作分为三种原因码，措辞刻意不同：
+
+| 原因码 | 含义 |
+| --- | --- |
+| `action_endpoint_not_implemented` | 端点还不存在（如 `OBSERVE`） |
+| `action_no_expansion_rule` | **端点已存在，只是转换器还没有展开规则** |
+| `action_not_supported` | 本执行路径不提供该能力（高风险载荷动作） |
+
+**2026-10-05 更新**：`HOLD` / `RETURN_HOME` 的展开规则已补上，因此
+`CONVERTER_NOT_EXPANDABLE` **现在为空**，`action_no_expansion_rule` **暂时没有触发者**。
+
+**这个原因码保留不删。** 它的存在是为了让"端点有了但展开规则还没写"与"端点不存在"
+在措辞上可区分 —— 前者会让调用方以为端点还没有、去等一个已经有的东西。
+将来任何动作从"未实现"变成"已实现端点"时，都会先经过这个状态。
+**转换器有一条测试守住这个不变量**：`CONVERTER_NOT_EXPANDABLE` 与
+`EXPANDABLE_ACTIONS` **不得相交** —— 相交就说明动作已能展开却仍被误报成"没有展开规则"。
 
 ### 3.3 大小写
 
@@ -398,8 +539,8 @@ Runtime 的策略注册表声明了 **21 个动作**，其中只有 4 个有真�
 
 | 项目 | 状态 |
 | --- | --- |
-| `HOLD` / `RETURN_HOME` 端点 | 未实现；注册表已声明 |
-| `OBSERVE` 端点 | 未实现；需要感知载荷接口定义 |
+| `HOLD` / `RETURN_HOME` 端点 | ✅ **已实现**（2026-09-30，见 3.1） |
+| `OBSERVE` 端点 | 未实现；**需要感知载荷接口定义**（拍什么、存哪、如何判定观察到） |
 | `scene_id` / `map_version` 纳入请求并校验 | ✅ **已实现**（2026-09-28，见 5.3） |
 | proposal → plan 的转换器 | ✅ **已实现**：`frontend/swarm-console/simulation-3d/tools/proposal-to-plan.mjs`（尚未接 CLI/HTTP） |
 | 计划级反馈回调（Runtime → 算法侧推送） | 未实现；当前算法侧需轮询 `GET /api/actions/recent` 或重读计划结果 |
