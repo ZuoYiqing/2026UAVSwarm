@@ -22,7 +22,8 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 class LocalModelClient:
-    def __init__(self, base_url: str, model: str, timeout_s: float = 90):
+    def __init__(self, base_url: str, model: str, timeout_s: float = 90,
+                 *, sampling_temperature: float = 0, sampling_min_p: float | None = None):
         url = urlsplit(base_url)
         if (url.scheme != "http" or url.hostname not in {"127.0.0.1", "::1"}
                 or url.username is not None or url.password is not None
@@ -31,15 +32,29 @@ class LocalModelClient:
             raise ModelError("Expected http://127.0.0.1:<port>/v1 or http://[::1]:<port>/v1")
         if not model.strip() or not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ModelError("Model and positive finite timeout are required")
+        if (not isinstance(sampling_temperature, (int, float)) or
+                isinstance(sampling_temperature, bool) or
+                not math.isfinite(sampling_temperature) or
+                not 0 <= sampling_temperature <= 2):
+            raise ModelError("Sampling temperature must be finite and in [0, 2]")
+        if (sampling_min_p is not None and
+                (not isinstance(sampling_min_p, (int, float)) or
+                 isinstance(sampling_min_p, bool) or
+                 not math.isfinite(sampling_min_p) or
+                 not 0 <= sampling_min_p <= 1)):
+            raise ModelError("Sampling min_p must be finite and in [0, 1]")
         self.endpoint = base_url.rstrip("/") + "/chat/completions"
         self.model = model
         self.timeout_s = timeout_s
+        self.sampling = {"temperature": sampling_temperature}
+        if sampling_min_p is not None:
+            self.sampling["min_p"] = sampling_min_p
 
     def complete(self, messages: list, output_schema: dict, *, seed: int,
                  max_tokens: int, constrained: bool) -> dict:
         if type(seed) is not int or type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
             raise ModelError("Invalid inference limits")
-        payload = {"model": self.model, "messages": messages, "temperature": 0,
+        payload = {"model": self.model, "messages": messages, **self.sampling,
                    "seed": seed, "max_tokens": max_tokens, "stream": False}
         if constrained:
             payload["response_format"] = {

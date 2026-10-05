@@ -18,6 +18,7 @@ from .semantic_validator import context_errors
 FLIGHT_ACTIONS = ["TAKEOFF", "GOTO", "LAND"]
 RECON_ACTIONS = ["TAKEOFF", "GOTO", "OBSERVE", "RETURN_HOME", "LAND"]
 EXCLUSION_PREFIXES = ("不要去", "不去", "别去", "避开", "不要前往", "禁止前往")
+NON_TARGET_ROLES = ("背景地标", "背景", "参照物", "参照", "参考点", "参考")
 GROUNDING_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["intent_type", "bindings", "explanation"],
@@ -118,6 +119,33 @@ def _excluded_region_ids(request: dict) -> list[str]:
     return sorted(excluded)
 
 
+def _non_target_region_ids(request: dict) -> list[str]:
+    """Recognize explicit background roles; reject unfamiliar role wording.
+
+    This is intentionally bounded. A label's mere occurrence is not proof that it
+    is a destination, and an unparsed role cue must not be silently ignored.
+    """
+    objective = request["objective"]
+    ignored = []
+    recognized_spans = []
+    for region in request["regions"]:
+        for label in region["labels"]:
+            match = re.search(re.escape(label) + r"\s*(?:只是|仅是|仅作为|只作为|只是作为)\s*(?:背景地标|背景|参照物|参照|参考点|参考)",
+                              objective, flags=re.IGNORECASE)
+            if match:
+                if re.search(r"(?:前往|到|去|巡检|搜索)\s*" + re.escape(label),
+                             objective, flags=re.IGNORECASE):
+                    raise ContractError("OBJECTIVE_REGION_ROLE_CONTRADICTION:" + region["region_id"])
+                ignored.append(region["region_id"])
+                recognized_spans.append(match.span())
+                break
+    cue_pattern = "|".join(re.escape(cue) for cue in NON_TARGET_ROLES)
+    if any(not any(start <= cue.start() < end for start, end in recognized_spans)
+           for cue in re.finditer(cue_pattern, objective)):
+        raise ContractError("OBJECTIVE_REGION_ROLE_AMBIGUOUS: clarify background references")
+    return sorted(ignored)
+
+
 def derive_context(request: dict) -> tuple[dict, dict]:
     """Match explicit supplied labels only; reject absent or ambiguous references."""
     errors = request_errors(request)
@@ -126,10 +154,13 @@ def derive_context(request: dict) -> tuple[dict, dict]:
     excluded = _excluded_region_ids(request)
     if excluded:
         raise ContractError("OBJECTIVE_EXCLUSION_UNREPRESENTABLE:" + ",".join(excluded))
+    non_targets = set(_non_target_region_ids(request))
     intent_type = _intent_type(request["objective"])
     objective = request["objective"].casefold()
     matches = []
     for region in request["regions"]:
+        if region["region_id"] in non_targets:
+            continue
         phrases = [label for label in region["labels"] if label.casefold() in objective]
         if phrases:
             earliest = min(objective.index(label.casefold()) for label in phrases)
@@ -198,7 +229,8 @@ def derive_proposal(request: dict) -> dict:
 
 
 def ground_with_client(request: dict, client, *, seed: int = 0,
-                       max_tokens: int = 512, prompt_version: str = 'v1') -> dict:
+                       max_tokens: int = 512, prompt_version: str = 'v1',
+                       constrained: bool = True) -> dict:
     """Ask a local model for semantic bindings; reject invented IDs and stale input.
 
     Non-exact semantic bindings remain review candidates, never execution authority.
@@ -208,6 +240,8 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
         raise ContractError("; ".join(errors))
     if prompt_version not in {'v1', 'selective_v2'}:
         raise ContractError('UNKNOWN_GROUNDING_PROMPT_VERSION')
+    if type(constrained) is not bool:
+        raise ContractError('GROUNDING_CONSTRAINT_MODE_INVALID')
     choices = [{"region_id": r["region_id"], "labels": r["labels"]}
                for r in request["regions"]]
     messages = [
@@ -233,7 +267,7 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
         )
     started = perf_counter()
     response = client.complete(messages, GROUNDING_SCHEMA, seed=seed,
-                               max_tokens=max_tokens, constrained=True)
+                               max_tokens=max_tokens, constrained=constrained)
     elapsed_ms = (perf_counter() - started) * 1000
     raw = response["content"]
     base = {"mode": "local_model_intent_grounding", "model_executed": True,
@@ -241,8 +275,8 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
             "usage": response["usage"], "raw_output": raw,
             "input_hash": digest(request), "prompt_hash": digest(messages),
             "latency_ms": elapsed_ms, "execution_ready": False,
-            "settings": {"seed": seed, "temperature": 0,
-                         "max_tokens": max_tokens, "constrained": True,
+            "settings": {"seed": seed, **getattr(client, "sampling", {"temperature": 0}),
+                         "max_tokens": max_tokens, "constrained": constrained,
                          "prompt_version": prompt_version,
                          "repair_attempts": 0},
             "accepted": False, "context": None, "proposal": None,
@@ -261,6 +295,10 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
     if excluded:
         return {**base, "errors": ["OBJECTIVE_EXCLUSION_UNREPRESENTABLE:" +
                                     ",".join(excluded)]}
+    try:
+        non_targets = set(_non_target_region_ids(request))
+    except ContractError as exc:
+        return {**base, "errors": [str(exc)]}
     errors = []
     try:
         expected_intent = _intent_type(request["objective"])
@@ -279,6 +317,8 @@ def ground_with_client(request: dict, client, *, seed: int = 0,
             errors.append("UNKNOWN_REGION_ID:" + region_id)
         if region_id in seen:
             errors.append("DUPLICATE_REGION_ID:" + region_id)
+        if region_id in non_targets:
+            errors.append("NON_TARGET_REGION_SELECTED:" + region_id)
         if phrase not in objective:
             errors.append("MATCHED_TEXT_NOT_IN_OBJECTIVE:" + region_id)
         seen.add(region_id)

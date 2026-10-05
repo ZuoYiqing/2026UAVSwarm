@@ -6,7 +6,7 @@ from uavswarm_llm_lab.contracts import ContractError, digest, parse_json, resour
 from uavswarm_llm_lab.grounding_eval import (
     run_grounding_eval, run_rule_grounding_baseline, validate_corpus,
 )
-from uavswarm_llm_lab.intent_grounder import ground_with_client
+from uavswarm_llm_lab.intent_grounder import derive_proposal, ground_with_client
 from uavswarm_llm_lab.local_model_client import ModelError
 
 
@@ -53,18 +53,54 @@ class GroundingEvalTest(unittest.TestCase):
         self.assertTrue(all(set(order) == {"r-north", "r-south", "r-east"}
                             for order in orders))
 
-    def test_agreement_does_not_hide_known_background_false_accept(self):
-        # Measurement regression, NOT an assertion that this baseline is safe.
-        # The unchanged baseline mistakes a background landmark for a destination.
+    def test_background_landmark_is_not_a_destination(self):
+        # The previous baseline accepted an extra destination on this case.
         challenge = parse_json(resource_text("benchmarks/grounding_challenge_v0_1.json"))
         report = run_rule_grounding_baseline(challenge)
         self.assertEqual(report["acceptance_match_rate"], 1.0)
-        self.assertEqual(report["false_accept_count"], 1)
+        self.assertEqual(report["false_accept_count"], 0)
         row = next(row for row in report["results"]
                    if row["case_id"] == "background_n_target_s")
         self.assertTrue(row["accepted"])
-        self.assertTrue(row["false_accept"])
-        self.assertFalse(row["candidate_semantic_match"])
+        self.assertFalse(row["false_accept"])
+        self.assertTrue(row["candidate_semantic_match"])
+
+    def test_background_role_is_enforced_on_rule_and_model_candidates(self):
+        challenge = parse_json(resource_text("benchmarks/grounding_challenge_v0_1.json"))
+        request = challenge["base_request"].copy()
+        request["objective"] = "飞行验证：北仓仅作为参照物；起飞、前往南库、降落。"
+        derived = derive_proposal(request)
+        self.assertEqual([item["region_id"] for item in derived["grounding"]["bindings"]],
+                         ["r-south"])
+        self.assertIsNotNone(derived["proposal"])
+
+        class WrongModel:
+            model = "scripted-test-only"
+            def complete(self, messages, output_schema, **kwargs):
+                return {"content": json.dumps({
+                    "intent_type": "flight_validation",
+                    "bindings": [{"region_id": "r-north", "matched_text": "北仓"},
+                                 {"region_id": "r-south", "matched_text": "南库"}],
+                    "explanation": "fixture"}, ensure_ascii=False),
+                    "model": self.model, "usage": {}}
+
+        checked = ground_with_client(request, WrongModel())
+        self.assertFalse(checked["accepted"])
+        self.assertIsNone(checked["proposal"])
+        self.assertIn("NON_TARGET_REGION_SELECTED:r-north", checked["errors"])
+
+    def test_unclear_or_contradictory_background_role_fails_closed(self):
+        challenge = parse_json(resource_text("benchmarks/grounding_challenge_v0_1.json"))
+        request = challenge["base_request"].copy()
+        request["objective"] = "飞行验证：北仓在背景；起飞、前往南库、降落。"
+        with self.assertRaisesRegex(ContractError, "OBJECTIVE_REGION_ROLE_AMBIGUOUS"):
+            derive_proposal(request)
+        request["objective"] = "飞行验证：北仓只是背景地标；起飞、前往北仓、降落。"
+        with self.assertRaisesRegex(ContractError, "OBJECTIVE_REGION_ROLE_CONTRADICTION"):
+            derive_proposal(request)
+        request["objective"] = "飞行验证：北仓只是背景地标；东塔在背景；起飞、前往南库、降落。"
+        with self.assertRaisesRegex(ContractError, "OBJECTIVE_REGION_ROLE_AMBIGUOUS"):
+            derive_proposal(request)
 
     def test_scoring_separates_semantics_from_acceptance(self):
         report = run_grounding_eval(self.corpus, ScriptedClient())
@@ -109,6 +145,25 @@ class GroundingEvalTest(unittest.TestCase):
         self.assertTrue(all(row['result']['settings']['repair_attempts'] == 0
                             for row in report['results']))
         self.assertEqual(report['false_accept_count'], 0)
+
+    def test_unconstrained_format_ablation_still_validates_candidates(self):
+        class RecordingClient(ScriptedClient):
+            def __init__(self):
+                self.modes = []
+            def complete(self, messages, output_schema, **kwargs):
+                self.modes.append(kwargs['constrained'])
+                return super().complete(messages, output_schema, **kwargs)
+        client = RecordingClient()
+        report = run_grounding_eval(self.corpus, client, constrained=False)
+        self.assertFalse(report['constrained'])
+        self.assertEqual(client.modes, [False] * 9)
+        rows = {row['case_id']: row for row in report['results']}
+        self.assertTrue(rows['exact_a']['accepted'])
+        self.assertFalse(rows['unknown_c']['accepted'])
+        self.assertFalse(rows['recon_a']['accepted'])
+        self.assertFalse(rows['negated_b']['accepted'])
+        self.assertTrue(all(row['result']['settings']['constrained'] is False
+                            for row in report['results']))
 
     def test_unknown_prompt_is_rejected_before_model_call(self):
         request = self.corpus['base_request'].copy()

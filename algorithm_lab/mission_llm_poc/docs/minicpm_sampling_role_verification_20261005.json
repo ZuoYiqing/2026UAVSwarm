@@ -1,0 +1,27 @@
+{
+  "recorded_date": "2026-10-05",
+  "parent_revision": "f7429e7",
+  "model": "minicpm5-1b-q4-lab",
+  "scope": "local text inference and algorithm-only semantic role guard",
+  "development_corpus_hash": "07b569340306dc331e859d83b3f7a493783024df7ef81808a48d909e9207c331",
+  "challenge_corpus_hash": "a75fb3e4143cf52586270bb53256bb2d74fa5398d9a0839c18ac53e2ccc565ba",
+  "max_output_tokens": 1024,
+  "seed": 0,
+  "sampling_runs": [
+    {"run": "request-20261005T151046571Z", "corpus": "development", "profile": "minp_zero", "temperature": 0, "min_p": 0, "constrained": true, "attempted": 9, "completed": 4, "semantic": 0, "accepted": 0, "false_accept": 0, "file_sha256": "349fe5784df66408a06a9babadbd7404a3090be2c1bda45c18c35c86d77ca4ef"},
+    {"run": "request-20261005T151116950Z", "corpus": "challenge", "profile": "minp_zero", "temperature": 0, "min_p": 0, "constrained": true, "attempted": 18, "completed": 2, "semantic": 0, "accepted": 0, "false_accept": 0, "file_sha256": "e3d0f7d718d1419eb89ce4ed4948a910bd115fef96327fb9e42213abf68cfcf5"},
+    {"run": "request-20261005T151244780Z", "corpus": "development", "profile": "minicpm_no_think", "temperature": 0.7, "min_p": 0, "constrained": true, "attempted": 9, "completed": 5, "semantic": 1, "accepted": 0, "false_accept": 0, "file_sha256": "abe8dc7a208ceeb5a701e94cbb744557c4a46e417333bd2a20d89526fee46e58"},
+    {"run": "request-20261005T151309229Z", "corpus": "challenge", "profile": "minicpm_no_think", "temperature": 0.7, "min_p": 0, "constrained": true, "attempted": 18, "completed": 12, "semantic": 1, "accepted": 0, "false_accept": 0, "file_sha256": "e578b9b69675bad0e8302cfdf3efe4b1cf7610d5cc9ba4406b5918118c97a968"},
+    {"run": "request-20261005T151553091Z", "corpus": "development", "profile": "minicpm_no_think", "temperature": 0.7, "min_p": 0, "constrained": false, "attempted": 9, "completed": 9, "semantic": 0, "accepted": 0, "false_accept": 0, "file_sha256": "26880f6a8af2416e0e32379125e7198835ea3d4ad8a0e6796f14ad1eafb9947b"},
+    {"run": "request-20261005T151556587Z", "corpus": "challenge", "profile": "minicpm_no_think", "temperature": 0.7, "min_p": 0, "constrained": false, "attempted": 18, "completed": 18, "semantic": 0, "accepted": 0, "false_accept": 0, "file_sha256": "3a1808818146e20eae1e389029887f5bd672ca7752c51a403488eadae2f1f5d4"}
+  ],
+  "post_fix_rule_challenge": {"semantic": "12/17", "acceptance_agreement": "18/18", "false_accept": 0, "evidence_file": "artifacts/tests/challenge-baseline-final-role-fix-20261005.json", "file_sha256": "ac557b1951523c810e4eefd9c3491d8650f8c3e48492f820733086f4143d4633"},
+  "resources": {"max_whole_gpu_used_mib": 749, "max_temperature_c": 62, "min_host_free_kib": 2521148, "whole_device_points_not_exclusive_or_transient_peaks": true},
+  "algorithm_unit_tests_passed": 49,
+  "scaffold_cases_passed": 40,
+  "model_processes_stopped": true,
+  "execution_authorized": false,
+  "vehicle_commands_sent": 0,
+  "offline_isolated_cold_start_verified": false,
+  "limitations": ["Each profile ran one pass; this is diagnostic evidence, not a model ranking.", "The current contract cannot express unknown/no-match as a valid empty binding.", "The background-role recognizer covers explicit bounded phrasing and fails closed for unclear wording."]
+}

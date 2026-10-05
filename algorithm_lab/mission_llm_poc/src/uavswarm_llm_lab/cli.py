@@ -49,6 +49,12 @@ def main(argv=None) -> int:
     for command in (ground_model, ground_eval):
         command.add_argument('--prompt-version', choices=('v1', 'selective_v2'), default='v1',
                              help='Explicit development ablation; preserves original response')
+        command.add_argument('--unconstrained', action='store_true',
+                             help='Explicit format-control experiment; same post-response validation')
+        command.add_argument('--temperature', type=float, default=0,
+                             help='Explicit sampling experiment; default remains zero')
+        command.add_argument('--min-p', type=float, default=None,
+                             help='Explicit minimum probability; default uses the engine setting')
     for command in (demo, ground, ground_model, ground_eval, ground_eval_baseline,
                     bind_scene, check, bench, infer):
         command.add_argument("--output", type=Path, help="New JSON result file; refuses overwrite")
@@ -72,15 +78,21 @@ def main(argv=None) -> int:
         elif args.command == "ground-model":
             if not args.base_url or not args.model:
                 raise ContractError("Explicit --base-url and --model are required")
-            client = LocalModelClient(args.base_url, args.model, args.timeout_s)
+            client = LocalModelClient(args.base_url, args.model, args.timeout_s,
+                                      sampling_temperature=args.temperature,
+                                      sampling_min_p=args.min_p)
             result = ground_with_client(context, client, seed=args.seed,
-                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version)
+                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version,
+                                        constrained=not args.unconstrained)
         elif args.command == "ground-eval":
             if not args.base_url or not args.model:
                 raise ContractError("Explicit --base-url and --model are required")
-            client = LocalModelClient(args.base_url, args.model, args.timeout_s)
+            client = LocalModelClient(args.base_url, args.model, args.timeout_s,
+                                      sampling_temperature=args.temperature,
+                                      sampling_min_p=args.min_p)
             result = run_grounding_eval(context, client, seed=args.seed,
-                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version)
+                                        max_tokens=args.max_tokens, prompt_version=args.prompt_version,
+                                        constrained=not args.unconstrained)
         elif args.command == "ground-eval-baseline":
             result = run_rule_grounding_baseline(context)
         elif args.command == "bind-scene":
