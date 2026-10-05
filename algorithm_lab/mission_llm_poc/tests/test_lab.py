@@ -332,6 +332,26 @@ class ClientTest(unittest.TestCase):
         self.assertNotIn("tools", payload)
         self.assertEqual(payload["response_format"]["type"], "json_schema")
 
+    def test_explicit_sampling_is_sent_and_default_stays_unchanged(self):
+        self.invoke(b'{"choices":[{"finish_reason":"stop","message":{"content":"{}"}}]}')
+        default_payload = json.loads(self.opener.open.call_args.args[0].data)
+        self.assertEqual(default_payload["temperature"], 0)
+        self.assertNotIn("min_p", default_payload)
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value = (
+            b'{"choices":[{"finish_reason":"stop","message":{"content":"{}"}}]}')
+        client = LocalModelClient("http://127.0.0.1:18080/v1", "fixture",
+                                  sampling_temperature=0.7, sampling_min_p=0)
+        with patch("uavswarm_llm_lab.local_model_client.build_opener", return_value=opener):
+            client.complete([], schema("proposal"), seed=0, max_tokens=100, constrained=True)
+        payload = json.loads(opener.open.call_args.args[0].data)
+        self.assertEqual((payload["temperature"], payload["min_p"]), (0.7, 0))
+        self.assertNotIn("tools", payload)
+        for bad in (float("nan"), -0.1, 1.1, True):
+            with self.subTest(bad=bad), self.assertRaises(ModelError):
+                LocalModelClient("http://127.0.0.1:18080/v1", "fixture",
+                                 sampling_min_p=bad)
+
     def test_bad_incomplete_and_tool_responses(self):
         responses = [b"{}", b"[]", b"not json", b"x" * 1_048_577,
                      b'{"choices":[null]}',

@@ -3,6 +3,8 @@ param(
     [string]$ContextFile = 'examples/three_uav_inspection.json',
     [ValidateSet('infer', 'ground-model', 'ground-eval')][string]$Mode = 'infer',
     [ValidateSet('v1', 'selective_v2')][string]$PromptVersion = 'v1',
+    [ValidateSet('control', 'minp_zero', 'minicpm_no_think')][string]$SamplingProfile = 'control',
+    [switch]$Unconstrained,
     [switch]$KeepServer
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +17,12 @@ $launch = Get-Content -LiteralPath $launchPath -Raw | ConvertFrom-Json
 $modelAlias = if ($launch.PSObject.Properties.Name -contains 'model_alias') { $launch.model_alias } else { 'qwen3.5-4b-q4-lab' }
 $modelPort = if ($launch.PSObject.Properties.Name -contains 'port') { [int]$launch.port } else { 18080 }
 if ($modelAlias -notin @('qwen3.5-4b-q4-lab', 'qwen3.5-0.8b-q4-lab', 'minicpm5-1b-q4-lab') -or $modelPort -lt 1024 -or $modelPort -gt 65535) { throw 'Unknown experiment alias or invalid loopback port.' }
+if ($SamplingProfile -ne 'control' -and ($modelAlias -ne 'minicpm5-1b-q4-lab' -or $Mode -notin @('ground-model', 'ground-eval'))) {
+    throw 'Explicit sampling profiles are limited to the MiniCPM grounding experiment.'
+}
+if ($Unconstrained -and ($modelAlias -ne 'minicpm5-1b-q4-lab' -or $Mode -notin @('ground-model', 'ground-eval'))) {
+    throw 'Unconstrained ablation is limited to the MiniCPM grounding experiment.'
+}
 $expectedEngine = Join-Path $artifactRoot 'runtime/llama-b10964-cuda12.4/llama-server.exe'
 $server = Get-Process -Id $launch.pid
 if ($server.Path -ne $expectedEngine -or $launch.startup_status -ne 'ready') { throw 'Expected local model is not ready.' }
@@ -33,6 +41,9 @@ $argumentValues = @('-m','uavswarm_llm_lab',$Mode,$contextPath,'--base-url',"htt
     '--model',$modelAlias,'--max-tokens','1024','--timeout-s','90','--output',$outputPath)
 if ($Mode -in @('ground-model', 'ground-eval')) { $argumentValues += @('--prompt-version', $PromptVersion) }
 elseif ($PromptVersion -ne 'v1') { throw 'Prompt ablation is only available for grounding.' }
+if ($SamplingProfile -ne 'control') { $argumentValues += @('--min-p', '0') }
+if ($SamplingProfile -eq 'minicpm_no_think') { $argumentValues += @('--temperature', '0.7') }
+if ($Unconstrained) { $argumentValues += '--unconstrained' }
 $quotedArguments = @($argumentValues | ForEach-Object { '"' + $_ + '"' })
 $client = Start-Process -FilePath $python -ArgumentList $quotedArguments -WorkingDirectory $moduleRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'client.stdout.log') -RedirectStandardError (Join-Path $runRoot 'client.stderr.log')
 $samples = [Collections.Generic.List[object]]::new()
@@ -63,7 +74,7 @@ try {
         Stop-Process -Id $server.Id
         $serverStoppedAfterRequest = $true
     }
-    $report = [ordered]@{kind='bounded_resource_samples'; mode=$Mode; model_alias=$modelAlias; prompt_version=$PromptVersion; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; max_runtime_s=$maxRuntimeSec; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
+    $report = [ordered]@{kind='bounded_resource_samples'; mode=$Mode; model_alias=$modelAlias; prompt_version=$PromptVersion; sampling_profile=$SamplingProfile; constrained=(-not $Unconstrained); context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; max_runtime_s=$maxRuntimeSec; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $runRoot 'resources.json') -Encoding utf8
 }
 Write-Output "REQUEST_ARTIFACTS=$runRoot"

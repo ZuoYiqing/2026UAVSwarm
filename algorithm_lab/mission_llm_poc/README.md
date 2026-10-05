@@ -1,5 +1,9 @@
 # Mission LLM Lab v0.1
 
+2026-10-05 最新：[三款模型的逐例输入输出及测试方法](docs/MODEL_EXPERIMENT_WALKTHROUGH_20261005.md)，
+[MiniCPM 采样/格式实验与背景地标修复](docs/MINICPM_SAMPLING_AND_ROLE_FIX_20261005.md)。
+旧报告的分数均是旧代码实验记录；修复后的规则基线另列，不能回写成旧实验的成绩。
+
 2026-10-05 后续：[MiniCPM5-1B 异厂实测与 18 条新题](docs/MINICPM5_1B_EXPERIMENT_20261005.md)。
 面壁官方 Q4_K_M 已在 D 盘核验并运行；不是仅做模型调研。
 新题暴露规则基线会把背景地标当成目的地：`accepted` 不能证明语义正确，
