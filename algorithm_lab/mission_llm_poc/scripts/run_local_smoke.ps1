@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$LaunchRecord,
     [string]$ContextFile = 'examples/three_uav_inspection.json',
     [ValidateSet('infer', 'ground-model', 'ground-eval')][string]$Mode = 'infer',
+    [ValidateSet('v1', 'selective_v2')][string]$PromptVersion = 'v1',
     [switch]$KeepServer
 )
 $ErrorActionPreference = 'Stop'
@@ -11,6 +12,9 @@ $artifactRoot = Join-Path $moduleRoot 'artifacts'
 $launchPath = [IO.Path]::GetFullPath($LaunchRecord)
 if (-not $launchPath.StartsWith((Join-Path $artifactRoot 'runs') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Launch record must belong to this experiment.' }
 $launch = Get-Content -LiteralPath $launchPath -Raw | ConvertFrom-Json
+$modelAlias = if ($launch.PSObject.Properties.Name -contains 'model_alias') { $launch.model_alias } else { 'qwen3.5-4b-q4-lab' }
+$modelPort = if ($launch.PSObject.Properties.Name -contains 'port') { [int]$launch.port } else { 18080 }
+if ($modelAlias -notin @('qwen3.5-4b-q4-lab', 'qwen3.5-0.8b-q4-lab', 'minicpm5-1b-q4-lab') -or $modelPort -lt 1024 -or $modelPort -gt 65535) { throw 'Unknown experiment alias or invalid loopback port.' }
 $expectedEngine = Join-Path $artifactRoot 'runtime/llama-b10964-cuda12.4/llama-server.exe'
 $server = Get-Process -Id $launch.pid
 if ($server.Path -ne $expectedEngine -or $launch.startup_status -ne 'ready') { throw 'Expected local model is not ready.' }
@@ -25,8 +29,10 @@ $env:PYTHONPATH = Join-Path $moduleRoot 'src'
 $outputPath = Join-Path $runRoot 'proposal.json'
 $python = Join-Path $moduleRoot '.venv/Scripts/python.exe'
 # Current checkout paths contain no spaces; quote each argument for portable launches.
-$argumentValues = @('-m','uavswarm_llm_lab',$Mode,$contextPath,'--base-url','http://127.0.0.1:18080/v1',
-    '--model','qwen3.5-4b-q4-lab','--max-tokens','1024','--timeout-s','90','--output',$outputPath)
+$argumentValues = @('-m','uavswarm_llm_lab',$Mode,$contextPath,'--base-url',"http://127.0.0.1:$modelPort/v1",
+    '--model',$modelAlias,'--max-tokens','1024','--timeout-s','90','--output',$outputPath)
+if ($Mode -in @('ground-model', 'ground-eval')) { $argumentValues += @('--prompt-version', $PromptVersion) }
+elseif ($PromptVersion -ne 'v1') { throw 'Prompt ablation is only available for grounding.' }
 $quotedArguments = @($argumentValues | ForEach-Object { '"' + $_ + '"' })
 $client = Start-Process -FilePath $python -ArgumentList $quotedArguments -WorkingDirectory $moduleRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'client.stdout.log') -RedirectStandardError (Join-Path $runRoot 'client.stderr.log')
 $samples = [Collections.Generic.List[object]]::new()
@@ -57,7 +63,7 @@ try {
         Stop-Process -Id $server.Id
         $serverStoppedAfterRequest = $true
     }
-    $report = [ordered]@{kind='bounded_resource_samples'; mode=$Mode; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; max_runtime_s=$maxRuntimeSec; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
+    $report = [ordered]@{kind='bounded_resource_samples'; mode=$Mode; model_alias=$modelAlias; prompt_version=$PromptVersion; context=$ContextFile; launch_record=$launchPath; proposal_path=$outputPath; elapsed_s=$watch.Elapsed.TotalSeconds; max_runtime_s=$maxRuntimeSec; stop_reason=$stopReason; sample_count=$samples.Count; server_stopped_after_request=$serverStoppedAfterRequest; samples=$samples; note='Whole-GPU point samples, not exclusive model memory or guaranteed transient peaks.'}
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $runRoot 'resources.json') -Encoding utf8
 }
 Write-Output "REQUEST_ARTIFACTS=$runRoot"

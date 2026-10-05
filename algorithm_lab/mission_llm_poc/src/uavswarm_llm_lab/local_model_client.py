@@ -11,7 +11,9 @@ from .contracts import ContractError, parse_json
 
 
 class ModelError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, response_evidence=None):
+        super().__init__(message)
+        self.response_evidence = response_evidence
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -60,7 +62,8 @@ class LocalModelClient:
             if not isinstance(message, dict):
                 raise ModelError("MODEL_MESSAGE_NOT_OBJECT")
             if choice.get("finish_reason") != "stop":
-                raise ModelError("MODEL_RESPONSE_INCOMPLETE")
+                # Evidence only: never accept, continue or repair a truncated response.
+                raise ModelError("MODEL_RESPONSE_INCOMPLETE", response_evidence=data)
             if message.get("tool_calls") or message.get("function_call"):
                 raise ModelError("MODEL_TOOL_CALL_REFUSED")
             content = message["content"]

@@ -1,0 +1,54 @@
+{
+  "corpus_version": "0.1",
+  "purpose": "Prospective 18-case challenge frozen before either model is run on these inputs. Synthetic regions, no execution authority. Same previously fixed prompts and scoring rules.",
+  "base_request": {
+    "schema_version": "0.1",
+    "mission_id": "grounding-challenge-base",
+    "snapshot_id": "synthetic-grounding-challenge-20261005",
+    "source": "synthetic_benchmark",
+    "scene_id": "synthetic_three_region_challenge",
+    "map_version": "synthetic_three_region_challenge-map-1",
+    "coordinate_frame": "scene_ned",
+    "objective": "飞行验证：起飞、前往北仓、降落。",
+    "snapshot_age_ms": 0,
+    "snapshot_valid_for_ms": 120000,
+    "constraints": {"min_battery_pct": 30, "max_sample_age_ms": 120000, "min_vehicles": 1, "allow_partial": false, "min_altitude_m": 3, "max_altitude_m": 30},
+    "fleet": [{
+      "node_id": "UAV-SYN-01", "connected": true, "stale": false, "battery_pct": 80,
+      "capabilities": ["TAKEOFF", "GOTO", "OBSERVE", "RETURN_HOME", "LAND"],
+      "current_assignment": null,
+      "spatial": {"frame": "scene_ned", "scene_id": "synthetic_three_region_challenge", "map_version": "synthetic_three_region_challenge-map-1", "public_position_usable": true, "sample_age_ms": 0, "position_m": {"north_m": 0, "east_m": 0, "down_m": 0}}
+    }],
+    "waypoints": [
+      {"waypoint_id": "WP-N", "position_m": {"north_m": 20, "east_m": 0, "down_m": -10}},
+      {"waypoint_id": "WP-S", "position_m": {"north_m": -20, "east_m": 0, "down_m": -10}},
+      {"waypoint_id": "WP-E", "position_m": {"north_m": 0, "east_m": 20, "down_m": -10}}
+    ],
+    "regions": [
+      {"region_id": "r-east", "labels": ["东塔", "E塔"], "waypoint_ids": ["WP-E"], "source_reference": "synthetic_challenge_v0_1"},
+      {"region_id": "r-north", "labels": ["北仓", "N库"], "waypoint_ids": ["WP-N"], "source_reference": "synthetic_challenge_v0_1"},
+      {"region_id": "r-south", "labels": ["南库", "S库"], "waypoint_ids": ["WP-S"], "source_reference": "synthetic_challenge_v0_1"}
+    ],
+    "policy_denials": []
+  },
+  "cases": [
+    {"case_id": "single_n", "objective": "飞行验证：起飞之后只前往北仓，随后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-north"], "expected_accept": true},
+    {"case_id": "single_s", "objective": "执行飞行验证，起飞，前往南库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south"], "expected_accept": true},
+    {"case_id": "single_e", "objective": "请开展飞行验证：起飞后前往东塔，到达后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-east"], "expected_accept": true},
+    {"case_id": "order_nse", "objective": "飞行验证：起飞，先前往北仓，再到南库，接着到东塔，最后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-north", "r-south", "r-east"], "expected_accept": true},
+    {"case_id": "order_nes", "objective": "飞行验证：起飞，前往北仓，然后东塔，然后南库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-north", "r-east", "r-south"], "expected_accept": true},
+    {"case_id": "order_sne", "objective": "飞行验证：起飞，依次前往南库、北仓、东塔，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south", "r-north", "r-east"], "expected_accept": true},
+    {"case_id": "order_sen", "objective": "飞行验证：起飞，先前往南库，再到东塔，最后到北仓，之后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south", "r-east", "r-north"], "expected_accept": true},
+    {"case_id": "order_ens", "objective": "飞行验证：起飞，前往东塔、北仓、南库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-east", "r-north", "r-south"], "expected_accept": true},
+    {"case_id": "order_esn", "objective": "飞行验证：起飞后前往东塔，再前往南库，最后前往北仓并降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-east", "r-south", "r-north"], "expected_accept": true},
+    {"case_id": "provided_aliases", "objective": "飞行验证：起飞，依次前往S库和N库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south", "r-north"], "expected_accept": true},
+    {"case_id": "exclude_s", "objective": "飞行验证：起飞，不要去南库，只前往北仓，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-north"], "expected_accept": false},
+    {"case_id": "exclude_e", "objective": "飞行验证：起飞，避开东塔，前往南库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south"], "expected_accept": false},
+    {"case_id": "unknown_w", "objective": "飞行验证：起飞，前往西站，降落。", "expected_intent": "flight_validation", "expected_region_ids": [], "expected_accept": false},
+    {"case_id": "nonexact_n", "objective": "飞行验证：起飞，前往北侧的仓库，降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-north"], "expected_accept": false},
+    {"case_id": "inspection_n", "objective": "请对北仓执行巡检。", "expected_intent": "reconnaissance", "expected_region_ids": ["r-north"], "expected_accept": false},
+    {"case_id": "no_land_s", "objective": "飞行验证：起飞，前往南库，不要降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south"], "expected_accept": false},
+    {"case_id": "no_takeoff_e", "objective": "飞行验证：不要起飞，前往东塔，然后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-east"], "expected_accept": false},
+    {"case_id": "background_n_target_s", "objective": "飞行验证：北仓只是背景地标；起飞后只前往南库，最后降落。", "expected_intent": "flight_validation", "expected_region_ids": ["r-south"], "expected_accept": true}
+  ]
+}

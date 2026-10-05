@@ -1,0 +1,32 @@
+{
+  "manifest_version": "0.1",
+  "recorded_date": "2026-10-05",
+  "status": "PROPOSED_NOT_DOWNLOADED",
+  "approval": "User explicitly requested downloading and independently testing the 0.8B model on 2026-10-05.",
+  "purpose": "Text-only grounding comparison; no flight execution, image projector or training.",
+  "proposed_free_disk_budget_bytes": 2000000000,
+  "deployed_inference_requires_internet": false,
+  "external_model_fallback_allowed": false,
+  "artifacts": [
+    {
+      "role": "text_model",
+      "publisher": "unsloth",
+      "upstream_model": "Qwen/Qwen3.5-0.8B",
+      "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "cb02287e2172232d38d9eb470061351961ce1ba6",
+      "filename": "Qwen3.5-0.8B-Q4_K_M.gguf",
+      "size_bytes": 532517120,
+      "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/cb02287e2172232d38d9eb470061351961ce1ba6/Qwen3.5-0.8B-Q4_K_M.gguf",
+      "proposed_local_relative_path": "artifacts/models/qwen3.5-0.8b/Qwen3.5-0.8B-Q4_K_M.gguf",
+      "license": "Apache-2.0; retain upstream and quantizer notices.",
+      "provenance": "Community quantization of post-trained upstream model, not official quantized weights.",
+      "hash_source": "Pinned repository LFS metadata; verify local bytes after download."
+    }
+  ],
+  "engine": "Reuse locally verified b10964 CUDA12.4 bundle from DOWNLOAD_PROPOSAL_20260920.json; no new runtime download.",
+  "upstream_license_url": "https://huggingface.co/Qwen/Qwen3.5-0.8B/resolve/2fc06364715b967f1860aea9cf38778875588b17/LICENSE",
+  "quantizer_notice_url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/raw/cb02287e2172232d38d9eb470061351961ce1ba6/README.md",
+  "settings": {"context_tokens": 4096, "max_output_tokens": 1024, "seed": 0, "temperature": 0, "automatic_output_repair": false},
+  "resource_budgets": {"startup_free_host_gib": 3, "startup_free_gpu_mib": 2048, "abort_free_host_gib": 1.5, "abort_temperature_c": 85, "note": "Experimental admission guards, not measured memory requirements; 4B guards unchanged."}
+}

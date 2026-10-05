@@ -1,5 +1,17 @@
 # Mission LLM Lab v0.1
 
+2026-10-05 后续：[MiniCPM5-1B 异厂实测与 18 条新题](docs/MINICPM5_1B_EXPERIMENT_20261005.md)。
+面壁官方 Q4_K_M 已在 D 盘核验并运行；不是仅做模型调研。
+新题暴露规则基线会把背景地标当成目的地：`accepted` 不能证明语义正确，
+当前目标绑定路径仍须人工核对，不可据此自动提交执行。原始失败和旧基线保持不变。
+
+2026-10-05 新增：[Qwen3.5-0.8B 独立真实实验](docs/QWEN_0_8B_EXPERIMENT_20261005.md)。
+已在 D 盘下载并核验，4050 完成 54 次语义请求；原提示词三轮均 3/8，显式开发提示词三轮均 5/8。
+原三机提案另请求两次，均因输出截断拒绝；已补齐截断响应证据记录。
+这是推理，不是训练或飞行；没有证明自主巡检或板端部署可用。
+面壁等异厂候选和板端差异见[小模型路线](docs/SMALL_MODEL_CANDIDATES_20261005.md)。
+下文保留各阶段的历史记录，不代表这些阶段都已完成真实模型评测。
+
 独立的任务提案实验模块。已完成Step 1–2及Step 3的D盘下载、校验和首次模型加载。
 2026-09-22：[本地准备与资源实测](docs/LOCAL_MODEL_PREPARATION_20260922.md)。
 4B Q4模型已加载并完成一次真实任务提案；原始JSON有效且三项分配正确，
@@ -91,7 +103,7 @@ D盘 `artifacts` 下，因此修改实验代码后无需为了试跑反复构建
 
 原有 `demo` / `infer` 路径仍以结构化 task/action/waypoint 清单为权威输入。
 新增 `ground` 路径从明确标签的自然语言目标派生 `tasks[]`，不生成新坐标；
-`ground-model` 允许本地模型提出语义绑定候选，但真实模型结果仍待复跑。
+`ground-model` 允许本地模型提出语义绑定候选；真实模型结果见文首实验记录。
 两条路径的能力指标分别记录，不能把规则绑定结果当作模型理解能力。
 同一节点可承担多个任务；输出不是并发飞行时间表。
 规则基线按 task_id 排序，选择已分任务最少的合格节点，以 node_id 打破平局；
@@ -118,7 +130,8 @@ position_m 使用 north/east/down 米，正 down 表示向下；
 .\.venv\Scripts\python.exe -m uavswarm_llm_lab benchmark --local-model --base-url http://127.0.0.1:18080/v1 --model APPROVED_MODEL_ID --output results/model-run-001.json
 ```
 
-本机已在该地址完成一次加载及任务请求，当前服务已停止；重新启动仍要求至少5GiB可用RAM。
+4B 重新启动仍要求至少 5GiB 可用 RAM；显式 0.8B / MiniCPM5-1B 实验配置要求 3GiB。
+这是实验准入预算，不是通用运行最低配置，也没有降低 4B 的门槛。
 客户端只支持 HTTP literal loopback；
 不使用环境代理、不跟随重定向、不重试、不发送 tools。
 默认请求约束 JSON；如服务不支持会明确失败。--unconstrained 仅用于显式对比。

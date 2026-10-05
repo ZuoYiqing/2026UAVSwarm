@@ -1,5 +1,6 @@
 param(
     [switch]$CheckOnly,
+    [ValidateSet('qwen3.5-4b', 'qwen3.5-0.8b', 'minicpm5-1b')][string]$ModelProfile = 'qwen3.5-4b',
     [ValidateRange(512, 8192)][int]$ContextTokens = 4096,
     [ValidateRange(1024, 65535)][int]$Port = 18080
 )
@@ -10,6 +11,30 @@ if (-not $moduleRoot.StartsWith('D:\', [StringComparison]::OrdinalIgnoreCase)) {
 $artifactRoot = Join-Path $moduleRoot 'artifacts'
 $engineRoot = Join-Path $artifactRoot 'runtime/llama-b10964-cuda12.4'
 $manifest = Get-Content (Join-Path $moduleRoot 'docs/DOWNLOAD_PROPOSAL_20260920.json') -Raw | ConvertFrom-Json
+$modelAlias = 'qwen3.5-4b-q4-lab'
+$minimumHostKiB = 5 * 1024 * 1024
+$minimumGpuMiB = 4608
+$modelLicense = 'qwen3.5-4b-LICENSE.txt'
+$quantizerNotice = 'quantizer-model-card.md'
+if ($ModelProfile -eq 'qwen3.5-0.8b') {
+    $smallManifest = Get-Content (Join-Path $moduleRoot 'docs/QWEN_0_8B_DOWNLOAD_20261005.json') -Raw | ConvertFrom-Json
+    $manifest.artifacts = @($manifest.artifacts | Where-Object role -ne 'text_model') + @($smallManifest.artifacts)
+    $modelAlias = 'qwen3.5-0.8b-q4-lab'
+    # Experimental admission budgets, not measured peaks or a 4B guard relaxation.
+    $minimumHostKiB = 3 * 1024 * 1024
+    $minimumGpuMiB = 2048
+    $modelLicense = 'qwen3.5-0.8b-LICENSE.txt'
+    $quantizerNotice = 'qwen3.5-0.8b-quantizer-model-card.md'
+}
+if ($ModelProfile -eq 'minicpm5-1b') {
+    $smallManifest = Get-Content (Join-Path $moduleRoot 'docs/MINICPM5_1B_DOWNLOAD_20261005.json') -Raw | ConvertFrom-Json
+    $manifest.artifacts = @($manifest.artifacts | Where-Object role -ne 'text_model') + @($smallManifest.artifacts)
+    $modelAlias = 'minicpm5-1b-q4-lab'
+    $minimumHostKiB = 3 * 1024 * 1024
+    $minimumGpuMiB = 2048
+    $modelLicense = 'minicpm5-1b-LICENSE.txt'
+    $quantizerNotice = 'minicpm5-1b-model-card.md'
+}
 $verifiedPaths = @{}
 foreach ($artifact in $manifest.artifacts) {
     $path = [IO.Path]::GetFullPath((Join-Path $moduleRoot $artifact.proposed_local_relative_path))
@@ -21,7 +46,7 @@ foreach ($artifact in $manifest.artifacts) {
     }
     $verifiedPaths[$artifact.role] = $path
 }
-foreach ($license in @('qwen3.5-4b-LICENSE.txt', 'quantizer-model-card.md', 'llama-b10964-LICENSE.txt', 'cuda-12.4.1-eula.html')) {
+foreach ($license in @($modelLicense, $quantizerNotice, 'llama-b10964-LICENSE.txt', 'cuda-12.4.1-eula.html')) {
     if (-not (Test-Path -LiteralPath (Join-Path $artifactRoot "licenses/$license"))) { throw "Missing license/provenance: $license" }
 }
 New-Item -ItemType Directory -Path $engineRoot -Force | Out-Null
@@ -72,21 +97,22 @@ if ($LASTEXITCODE -ne 0) { throw 'Engine version check failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Engine device check failed.' }
 if ($CheckOnly) { return }
 $freeMemoryKiB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
-if ($freeMemoryKiB -lt 5 * 1024 * 1024) { throw 'Less than 5 GiB RAM free. Close unused applications; do not force model loading.' }
+if ($freeMemoryKiB -lt $minimumHostKiB) { throw "Insufficient RAM for $ModelProfile admission budget ($minimumHostKiB KiB). Do not force loading." }
 $gpuFreeMiB = [int]((& nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | Select-Object -First 1).Trim())
-if ($LASTEXITCODE -ne 0 -or $gpuFreeMiB -lt 4608) { throw 'Insufficient free GPU memory for the initial 4B experiment.' }
+if ($LASTEXITCODE -ne 0 -or $gpuFreeMiB -lt $minimumGpuMiB) { throw "Insufficient free GPU memory for $ModelProfile admission budget." }
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
 try { $probe.Start() } finally { $probe.Stop() }
 $runRoot = Join-Path $artifactRoot ('runs/' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))
 New-Item -ItemType Directory -Path $runRoot | Out-Null
-$arguments = @('-m', $verifiedPaths['text_model'], '--alias', 'qwen3.5-4b-q4-lab',
+$arguments = @('-m', $verifiedPaths['text_model'], '--alias', $modelAlias,
     '--host', '127.0.0.1', '--port', "$Port", '--offline', '--no-webui', '--no-agent',
     '--no-ui-mcp-proxy', '--cors-origins', "http://127.0.0.1:$Port", '--no-cors-credentials',
     '--no-slots', '--ctx-size', "$ContextTokens", '--parallel', '1',
     '--threads', '4', '--threads-batch', '4', '--batch-size', '256', '--ubatch-size', '128',
     '--gpu-layers', 'all', '--fit', 'off', '--reasoning', 'off', '--no-context-shift')
+if ($ModelProfile -eq 'minicpm5-1b') { $arguments += '--jinja' }
 $engineProcess = Start-Process -FilePath $engine -ArgumentList $arguments -WorkingDirectory $engineRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runRoot 'server.stdout.log') -RedirectStandardError (Join-Path $runRoot 'server.stderr.log')
-$record = [ordered]@{pid=$engineProcess.Id; executable=$engine; model=$verifiedPaths['text_model']; arguments=$arguments; run_directory=$runRoot; started_utc=[DateTime]::UtcNow.ToString('o'); offline_flag=$true; network_isolation_verified=$false; execution_authorized=$false; startup_status='loading'; memory_samples_kib=@(); guard_scope='startup_only'}
+$record = [ordered]@{pid=$engineProcess.Id; executable=$engine; model=$verifiedPaths['text_model']; model_profile=$ModelProfile; model_alias=$modelAlias; port=$Port; minimum_host_kib=$minimumHostKiB; minimum_gpu_mib=$minimumGpuMiB; arguments=$arguments; run_directory=$runRoot; started_utc=[DateTime]::UtcNow.ToString('o'); offline_flag=$true; network_isolation_verified=$false; execution_authorized=$false; startup_status='loading'; memory_samples_kib=@(); guard_scope='startup_only'}
 $launchPath = Join-Path $runRoot 'launch.json'
 $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $launchPath -Encoding utf8
 try {
