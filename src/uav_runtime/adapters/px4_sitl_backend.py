@@ -439,6 +439,7 @@ class Px4SitlBackend:
                 result["result"] = "pass"
             else:
                 result["failure_reason"] = "takeoff_completion_timeout"
+                self._classify_completion_timeout(result, "takeoff")
             return self._finish_smoke_result(result)
         except Exception as exc:
             result["failure_reason"] = f"px4_action_exception:{type(exc).__name__}"
@@ -504,6 +505,9 @@ class Px4SitlBackend:
                 result["result"] = "pass"
             else:
                 result["failure_reason"] = "landing_completion_timeout"
+                # 实测中最容易误判的一处：飞机可能**已经落地**，只是没 disarm
+                # （或飞控在坠机姿态下不再报告 on_ground）。分类让这两种可区分。
+                self._classify_completion_timeout(result, "land")
             return self._finish_smoke_result(result)
         except Exception as exc:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
@@ -620,6 +624,9 @@ class Px4SitlBackend:
 
         if outcome.get("failure_reason"):
             result["failure_reason"] = str(outcome["failure_reason"])
+            # 到达超时要区分"还在接近"与"完全没动" —— 实测中 350 m 航线
+            # 只因时间不够就报了 arrival_timeout，与"被挡住飞不过去"同码。
+            self._classify_completion_timeout(result, "goto")
             return self._finish_smoke_result(result)
 
         result["result"] = "pass"
@@ -683,11 +690,17 @@ class Px4SitlBackend:
             "reason": outcome.get("reason"),
             "max_drift_m": outcome.get("max_drift_m"),
             "samples": outcome.get("samples"),
+            # 容差必须在这里 —— 它是对外暴露的完成证据的一部分，也是分类判断
+            # "漂移是否在容差内"的依据。最初漏了它，于是分类拿不到判据、
+            # 而说明文案却**假定**漂移在容差内，对"漂了 30 m"给出"位置在容差内"。
+            "tolerance_m": outcome.get("tolerance_m"),
+            "hold_s": outcome.get("hold_s"),
         }
         result["completion_state"] = str(outcome.get("reason") or "unknown")
 
         if outcome.get("failure_reason"):
             result["failure_reason"] = str(outcome["failure_reason"])
+            self._classify_completion_timeout(result, "hold_position")
             return self._finish_smoke_result(result)
 
         result["result"] = "pass"
@@ -752,19 +765,156 @@ class Px4SitlBackend:
             "initial_distance_m": outcome.get("initial_distance_m"),
             "final_distance_m": outcome.get("final_distance_m"),
             "distance_reduction_m": outcome.get("distance_reduction_m"),
+            # 收敛要求同样要暴露 —— 分类与说明文案都读它。
+            "min_progress_m": outcome.get("min_progress_m"),
+            "samples": outcome.get("samples"),
         }
         result["completion_state"] = str(outcome.get("reason") or "unknown")
 
         if outcome.get("failure_reason"):
             result["failure_reason"] = str(outcome["failure_reason"])
+            self._classify_completion_timeout(result, "return_home")
             return self._finish_smoke_result(result)
 
         result["result"] = "pass"
         return self._finish_smoke_result(result)
 
+    def _classify_completion_timeout(self, result: dict[str, Any], action: str) -> None:
+        """给"观测超时"补上分类，让调用方能区分"接近过"与"没反应"。
+
+        背景（实测，不是假设）
+        ----------------------
+        原先所有超时都报同一个原因码，而它把三种完全不同的情况混成了一种：
+
+          · 350 m 航线没飞完 → `arrival_timeout`，但飞机在正常飞行、越来越近
+          · RTL 后降落超时   → `landing_completion_timeout`，而飞机**已经落地**
+          · 坠机后降落超时   → `landing_completion_timeout`，飞机坠了、永远等不到条件
+
+        调用方只看 `result: fail` 会得出错误结论：第一种该"再等等"，后两种该"出事了"。
+
+        ⚠️ 分类**不改变** `result`，超时仍然报 `fail`。
+        它只让失败更可读 —— 放松任何判据都不是这里该做的事。
+
+        写入的字段：
+          completion_state          partial_evidence / insufficient_evidence
+          completion_timeout_detail 人类可读的"卡在哪"，便于日志与前端直接显示
+        """
+        # 仅处理"因为等不到完成条件而超时"的情况。ACK 超时（命令没被接受）
+        # 与观测超时是两回事，不该混用同一套分类。
+        if result.get("failure_reason") not in {
+            "takeoff_completion_timeout",
+            "landing_completion_timeout",
+            "arrival_timeout",
+            "hold_timeout",
+            "return_home_not_converging",
+        }:
+            return
+        try:
+            classification = self.session.classify_incomplete(action)
+        except Exception:  # noqa: BLE001 - 分类失败绝不能掩盖原始失败原因
+            return
+        if not classification:
+            return
+
+        result["completion_state"] = classification
+        evidence = getattr(self.session, "_last_completion_evidence", None)
+        result["completion_timeout_detail"] = self._describe_incomplete(
+            action, classification, evidence if isinstance(evidence, dict) else {}
+        )
+
     @staticmethod
-    def _ack_accepted(ack: dict[str, Any]) -> bool:
-        return not bool(ack.get("timeout")) and int(
+    def _describe_incomplete(action: str, classification: str, evidence: dict[str, Any]) -> str:
+        """把分类翻译成一句人话，说清"最后看到的是什么状态"。
+
+        为什么单独写：原因码再细也需要一句可读的说明。实测中"降落在 RTL 之后超时"
+        那次的证据里其实已经写着 `landed_state=on_ground`、`armed=true`，
+        但没有人会去读那一长串 JSON —— 于是"飞机其实已经落地"这件事被淹没了。
+        """
+        if action == "land":
+            landed = evidence.get("landed_state_name") or "unknown"
+            armed = evidence.get("armed")
+            if classification == "not_on_ground_after_land":
+                # 与下一条**刻意不同**：这里没有"别只看本结果"的安抚。
+                # 飞控明确报不在空中/不在地面，且仍 armed —— 再等下去也不会变。
+                return (
+                    f"超时前最后观测：落地状态={landed}、armed={armed}。"
+                    "飞控明确未报告 on_ground，载具无法通过继续等待完成降落 —— "
+                    "通常意味着载具已不在正常飞行状态（例如坠机或卡死），"
+                    "**建议人工确认载具实际状态**，不要把它当作正常降落中的等待。"
+                )
+            if classification == "partial_evidence":
+                return (
+                    f"超时前最后观测：落地状态={landed}、armed={armed}。"
+                    "两个完成条件里已有一个成立 —— 载具可能已经落地但未解除解锁，"
+                    "或已解除解锁但飞控仍未报告 on_ground。"
+                    "**这不代表降落失败**：请据遥测确认实际状态，不要只看本结果。"
+                )
+            return (
+                f"超时前最后观测：落地状态={landed}、armed={armed}、"
+                f"遥测={evidence.get('telemetry_state')}。"
+                "没有取得可用于判断完成度的新鲜证据，无法说明卡在哪一步。"
+            )
+
+        if action == "takeoff":
+            last = evidence.get("last_altitude_m")
+            target = evidence.get("target_altitude_m")
+            peak = evidence.get("max_altitude_m")
+            if classification == "partial_evidence":
+                return (
+                    f"超时前最后观测：高度={last} m（目标 {target} m），过程最高={peak} m。"
+                    "高度证据可判定 —— 载具在爬升或已接近目标高度，只是未满足"
+                    "「进入容差并稳定保持」的完整条件。"
+                )
+            return "超时前没有取得可用高度样本，无法说明载具是否离地。"
+
+        if action == "goto":
+            last = evidence.get("last_error_m")
+            nearest = evidence.get("min_error_m")
+            tol = evidence.get("target_error_m")
+            if classification == "partial_evidence":
+                return (
+                    f"超时前最后观测：距目标 {last} m，全过程最近 {nearest} m"
+                    f"（到达容差 {tol} m）。载具接近过目标 —— 可能只是飞行时间不够，"
+                    "也可能被障碍挡住无法继续靠近，请结合位置判断。"
+                )
+            return "超时前没有取得可用的位置样本，无法说明载具是否在接近目标。"
+
+        if action in ("hold_position", "hold"):
+            drift = evidence.get("max_drift_m")
+            tol = evidence.get("tolerance_m")
+            if classification != "partial_evidence":
+                return "超时前没有取得可用的位置样本，无法说明载具是否稳定。"
+            # ⚠️ 必须按实际数值分两种说法。最初这里无条件写"位置在容差内"，
+            # 那是在**假定**结果；对"漂了 30 m"的场景给出了与事实相反的话。
+            # 文案不能比判据更乐观。
+            if isinstance(drift, (int, float)) and isinstance(tol, (int, float)) and drift <= tol:
+                return (
+                    f"超时前最后观测：最大漂移 {drift} m（容差 {tol} m）。"
+                    "位置在容差内，缺的只是「持续保持」的时长。"
+                )
+            return (
+                f"超时前最后观测：最大漂移 {drift} m，超出容差 {tol} m。"
+                "载具没有稳定在容差内 —— 可能仍在移动（风、控制器或估计器漂移），"
+                "也可能是保持时长尚未满足。"
+            )
+
+        if action == "return_home":
+            # 键名用 final_distance_m / initial_distance_m —— 与契约里对外暴露的
+            # 完成证据字段一致。最初这里写的是自造的 last_distance_m，于是永远
+            # 读到 None，对真实失败给出"距 home None m"这种没有信息的话。
+            last = evidence.get("final_distance_m")
+            first = evidence.get("initial_distance_m")
+            if classification == "partial_evidence":
+                return (
+                    f"超时前最后观测：距 home {last} m（起始 {first} m）。"
+                    "距离可判定，但没有达到要求的收敛量。"
+                )
+            return "超时前没有取得可用的位置样本，无法说明载具是否在返航。"
+
+        return f"分类={classification}（无更详细的说明）"
+
+    @staticmethod
+    def _ack_accepted(ack: dict[str, Any]) -> bool:        return not bool(ack.get("timeout")) and int(
             ack.get("result") if ack.get("result") is not None else -1
         ) == 0
 

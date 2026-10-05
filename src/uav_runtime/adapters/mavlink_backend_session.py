@@ -124,6 +124,143 @@ POSITION_TARGET_TYPEMASK_IGNORE_ALL_BUT_POSITION = 3576
 MAV_FRAME_LOCAL_NED = 1
 
 
+def classify_incomplete_evidence(action: str, evidence: dict[str, Any]) -> str | None:
+    """把"超时但没完成"分类，让调用方能区分"接近过"与"没反应"。
+
+    为什么需要这个
+    --------------
+    原先所有超时都报同一个原因码。实测中它把三种**完全不同**的情况混成了一种：
+
+      · 350 m 航线没飞完 → `arrival_timeout`，但飞机在正常飞行、越来越近
+      · RTL 后降落超时   → `landing_completion_timeout`，而飞机**已经落地**
+      · 坠机后降落超时   → `landing_completion_timeout`，飞机坠了、永远等不到条件
+
+    调用方只看 `result: fail` 会得出错误结论 —— 第一种该"再等等"，后两种该"出事了"。
+
+    ⚠️ 判据刻意**不**是"数值还在不在变"
+    ------------------------------------
+    最初设想用"高度还在变 / 位置不再变"来区分。**实测证明那条判据不可靠**：
+    "不再变化"无法区分"载具卡住"、"稳稳悬停等条件"、"遥测采样停了"三种情况，
+    而且需要在观测循环里跨时间记录趋势。
+
+    改用**观测循环本来就在记录的分量**，因此不需要猜"有没有在动"：
+
+      partial_evidence      —— 至少一个完成条件是**可判定的**（该分量有新鲜样本）。
+                               说明看到了部分满足，卡在中间。
+      insufficient_evidence —— 完成条件**都没有可判定依据**（无样本、或样本陈旧）。
+                               连"卡在哪"都无从判断。
+
+    这个区分正好命中上面第 2、3 种：降落时 `landed_state == on_ground` 而
+    `armed == true` 属 partial（落地了但没 disarm）；完全没有遥测则属 insufficient。
+
+    Returns:
+        分类字符串；若证据已显示完成、或动作类型不认识，返回 ``None``
+        （表示"不该改原因码"）。
+    """
+    if not isinstance(evidence, dict):
+        return None
+
+    # 已完成的不该被归类 —— 调用方只在失败路径上调这个函数。
+    if evidence.get("completion_reached") is True:
+        return None
+    # ⚠️ 刻意**不**检查 `observed`：在 observe_takeoff_completion 里它是
+    # `bool(samples)` —— "有没有拿到样本"，**不是**"有没有完成"。
+    # 最初把它当完成标志，结果所有"拿到样本但没满足条件"的失败都被跳过分类，
+    # 分类函数在最需要它的场景下静默失效。这类字段同名不同义是很容易踩的。
+    if evidence.get("held") is True or evidence.get("returning") is True:
+        return None
+
+    def has_number(key: str) -> bool:
+        value = evidence.get(key)
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    if action == "land":
+        # 完成条件 = on_ground **且** disarmed，两者都要新鲜样本。
+        #
+        # ⚠️ 这里只把 "unknown" 当作无依据：
+        # `telemetry_state == "incomplete"` 的含义是"**部分样本存在但不新鲜**"，
+        # 那是**可判定**的情形（比如拿到了 landed_state 但没拿到 armed）——
+        # 实测中坠机卡死报的正是 incomplete。最初把它也算作 insufficient，
+        # 恰好废掉了最需要分类的那一次。
+        telemetry_state = str(evidence.get("telemetry_state") or "")
+        if telemetry_state == "unknown":
+            return "insufficient_evidence"
+        on_ground = evidence.get("landed_state") == 1
+        disarmed = evidence.get("armed") is False
+        if on_ground or disarmed:
+            # 半个完成条件**成立** —— 这是可判定的。
+            # `landed_state=on_ground` 即使来自陈旧样本，也真实说明"某个时刻曾在
+            # 地面"，那是有效信息，不该被"陈旧"抹掉。
+            return "partial_evidence"
+        # 两个完成条件都不成立。再分两种，因为它们的**含义完全不同**：
+        #   · 有读数但不满足（如飞控明确报 not_on_ground）→ 卡住，且不会自己好
+        #   · 完全没有读数 → 无从判断
+        #
+        # ⚠️ 这一支最初被写成 `partial_evidence`（只要 `landed_state is not None`
+        # 就算），那是错的：读数的**存在**不等于条件的**成立**。后果是坠机卡死
+        # 与"正常降落中"拿到同一句话"这不代表降落失败"，而前者需要人工介入。
+        has_reading = evidence.get("landed_state") is not None or evidence.get("armed") is not None
+        if not has_reading:
+            return "insufficient_evidence"
+        if telemetry_state == "stale":
+            # 陈旧读数说明的是"过去某时刻"，不能用来判断"现在卡在哪"。
+            return "insufficient_evidence"
+        # 有新鲜读数，且明确不在地面 —— 载具无法靠"再等等"完成降落。
+        return "not_on_ground_after_land"
+
+    if action == "takeoff":
+        # 完成条件 = 高度进入容差并稳定保持。有高度样本就说明这一项可判定。
+        if not has_number("last_altitude_m"):
+            return "insufficient_evidence"
+        lower = evidence.get("target_altitude_m")
+        tolerance = evidence.get("tolerance_m")
+        if has_number(lower) and has_number(tolerance):
+            target = float(lower)
+            band = float(tolerance)
+            last = float(evidence["last_altitude_m"])
+            if target - band <= last <= target + band:
+                # 高度已在容差内，缺的只是"稳定保持"这一段时长。
+                return "partial_evidence"
+        # 高度有读数但没进容差：接近过没有？
+        if has_number("max_altitude_m"):
+            target = float(evidence.get("target_altitude_m") or 0.0)
+            if float(evidence["max_altitude_m"]) >= target * 0.5:
+                return "partial_evidence"
+        return "partial_evidence" if evidence.get("sample_count") else "insufficient_evidence"
+
+    if action == "goto":
+        # 完成条件 = 三维误差持续落在容差内。有误差读数就说明这一项可判定。
+        if not has_number("last_error_m") and not has_number("min_error_m"):
+            return "insufficient_evidence"
+        tolerance = evidence.get("target_error_m")
+        if has_number("min_error_m") and has_number(tolerance):
+            if float(evidence["min_error_m"]) <= float(tolerance) * 2.0:
+                # 最近时已经很接近（两倍容差内），只是没能"持续"停在容差里。
+                return "partial_evidence"
+        return "partial_evidence" if evidence.get("samples") else "insufficient_evidence"
+
+    if action in ("hold_position", "hold"):
+        if not has_number("max_drift_m"):
+            return "insufficient_evidence"
+        tolerance = evidence.get("tolerance_m")
+        if has_number(tolerance) and float(evidence["max_drift_m"]) <= float(tolerance):
+            # 漂移在容差内，缺的只是"持续"这段时长。
+            return "partial_evidence"
+        return "partial_evidence" if evidence.get("samples") else "insufficient_evidence"
+
+    if action == "return_home":
+        # 完成条件 = 到 home 的距离收敛足够。距离有读数就说明这一项可判定。
+        # 字段名用 final_distance_m —— 它是契约里对外暴露的名字（见
+        # docs/algorithm_runtime_execution_contract_v0_1.md 3.1）。
+        # 这里刻意**不**另造一个 last_distance_m：同一份证据有两个名字，
+        # 迟早会有一处读错。
+        if not has_number("final_distance_m") and not has_number("initial_distance_m"):
+            return "insufficient_evidence"
+        return "partial_evidence" if evidence.get("samples") else "insufficient_evidence"
+
+    return None
+
+
 def mav_result_name(result: int | None) -> str:
     if result is None:
         return "MAV_RESULT_TIMEOUT"
@@ -212,6 +349,12 @@ class MavlinkBackendSession:
     #: 会话起点，用于生成 SET_POSITION_TARGET 的 time_boot_ms。
     #: PX4 不强依赖该值，但按规范应单调递增。
     _session_started_monotonic: float = field(default_factory=time.monotonic)
+    #: 最近一次完成度观测的证据字典。
+    #:
+    #: 存在的理由：超时后要判断"卡在哪"，而判断必须基于**产生该失败的那份证据**。
+    #: 若事后另传一份参数来判断，就可能出现"判据与实际执行的不是同一份" ——
+    #: 那样的分类会撒谎。因此观测循环把证据留在这里，分类只读它。
+    _last_completion_evidence: dict[str, Any] = field(default_factory=dict)
     last_receive_error: str | None = None
     last_send_error: str | None = None
     identity_error: dict[str, Any] | None = None
@@ -1157,7 +1300,7 @@ class MavlinkBackendSession:
                 if not self.connected and self.last_receive_error:
                     break
                 self._rx_condition.wait(timeout=max(min(deadline - time.monotonic(), 0.25), 0.01))
-        return {
+        evidence = {
             "status": "cancelled" if cancelled else "succeeded" if completed else "timed_out",
             "observed": bool(samples),
             "sample_count": len(samples),
@@ -1176,6 +1319,34 @@ class MavlinkBackendSession:
             "completion_reached": completed,
             "cancelled": cancelled,
         }
+        # 留证据给 classify_incomplete：分类必须基于产生该结果的那份证据。
+        self._record_completion_evidence(evidence)
+        return evidence
+
+    def classify_incomplete(self, action: str) -> str | None:
+        """按动作类型，用本会话最近一次观测证据做"未完成"分类。
+
+        观测循环返回的证据字典本身带有判据（目标值、容差、实际读数），因此这里
+        不需要调用方额外拼装参数 —— 分类读的就是**产生该失败的那份证据**。
+
+        这很重要：若另传一份参数来分类，就可能出现"判据与实际执行的不是同一份"，
+        那样的分类会撒谎。所以本方法只按 ``self._last_completion_evidence`` 判断。
+
+        Returns:
+            分类字符串，或 ``None``（无证据 / 已完成 / 动作类型不认识）。
+
+        ⚠️ "没有证据" 与 "证据不足" 是两件事：
+        前者是**没观测过**（返回 None，不该凭空给分类），后者是观测过了、但读数
+        不足以判断卡在哪（返回 ``insufficient_evidence``）。最初把两者混为一谈，
+        于是任何没观测过的会话都会得到一个看起来合理的分类 —— 那是编出来的。
+        """
+        if not self._last_completion_evidence:
+            return None
+        return classify_incomplete_evidence(action, self._last_completion_evidence)
+
+    def _record_completion_evidence(self, evidence: dict[str, Any]) -> None:
+        """记录最近一次观测证据，供 ``classify_incomplete`` 使用。"""
+        self._last_completion_evidence = dict(evidence) if isinstance(evidence, dict) else {}
 
     def observe_landed_and_disarmed(
         self,
@@ -1266,7 +1437,7 @@ class MavlinkBackendSession:
             if evidence_count
             else "unknown"
         )
-        return {
+        evidence = {
             "status": "cancelled" if cancelled else "succeeded" if complete else "timed_out",
             "after_sequence": int(after_sequence),
             "last_sequence": seen_sequence,
@@ -1284,6 +1455,10 @@ class MavlinkBackendSession:
             "completion_reached": complete,
             "cancelled": cancelled,
         }
+        # 留证据给 classify_incomplete。降落尤其需要：实测中"落地了但没 disarm"
+        # 与"坠机后永远等不到条件"原先报同一个原因码，调用方无法区分。
+        self._record_completion_evidence(evidence)
+        return evidence
 
     # --- hold_position（HOLD）与 return_home（RETURN_HOME）-----------------
     #
@@ -1370,13 +1545,24 @@ class MavlinkBackendSession:
         inside_since: float | None = None
         samples = 0
 
+        def finish(evidence: dict[str, Any]) -> dict[str, Any]:
+            """统一出口：先留证据，再返回。
+
+            三条退出路径（取消 / 保持成功 / 超时）都必须留证据 —— 否则
+            ``classify_incomplete`` 会读到**上一次动作**的旧证据，从而给出错误分类。
+            这种"读到别的动作的证据"的错法是静默的，所以用单一出口结构避免它。
+            """
+            self._record_completion_evidence(evidence)
+            return evidence
+
         while time.monotonic() < deadline:
             if cancel_event is not None and cancel_event.is_set():
-                return {
+                return finish({
                     "held": False, "reason": "cancelled", "samples": samples,
                     "max_drift_m": max_drift, "reference": reference,
+                    "tolerance_m": tolerance, "hold_s": hold_s,
                     "mode": mode_evidence, "failure_reason": "cancelled",
-                }
+                })
             with self._rx_condition:
                 fresh = [row for row in self._local_positions if row[0] > start_sequence]
             if fresh:
@@ -1399,27 +1585,32 @@ class MavlinkBackendSession:
                         if inside_since is None:
                             inside_since = received_monotonic
                         elif received_monotonic - inside_since >= hold_s:
-                            return {
+                            return finish({
                                 "held": True, "reason": "stable_within_tolerance",
                                 "samples": samples, "max_drift_m": max_drift,
                                 "reference": reference, "held_s": received_monotonic - inside_since,
+                                "tolerance_m": tolerance, "hold_s": hold_s,
                                 "mode": mode_evidence, "failure_reason": None,
-                            }
+                            })
                     else:
                         # 出容差就重新计时：要求的是"连续"在容差内，
                         # 不是"累计够久"。
                         inside_since = None
             time.sleep(0.02)
 
-        return {
+        return finish({
             "held": False,
             "reason": "hold_timeout",
             "samples": samples,
             "max_drift_m": max_drift,
             "reference": reference,
+            # 容差随证据一起返回：分类要判断"漂移是否在容差内"，判据必须与
+            # 实际执行的那一份是同一个值，不能事后另传。
+            "tolerance_m": tolerance,
+            "hold_s": hold_s,
             "mode": mode_evidence,
             "failure_reason": "hold_timeout",
-        }
+        })
 
     def return_home(
         self,
@@ -1494,14 +1685,19 @@ class MavlinkBackendSession:
         last_down: float | None = None
         samples = 0
 
+        def finish(evidence: dict[str, Any]) -> dict[str, Any]:
+            """统一出口：先留证据，再返回（理由同 hold_position.finish）。"""
+            self._record_completion_evidence(evidence)
+            return evidence
+
         while time.monotonic() < deadline:
             if cancel_event is not None and cancel_event.is_set():
-                return {
+                return finish({
                     "returning": False, "reason": "cancelled", "samples": samples,
                     "initial_distance_m": first_distance, "final_distance_m": last_distance,
                     "distance_reduction_m": None, "mode": mode_evidence,
                     "failure_reason": "cancelled",
-                }
+                })
             with self._rx_condition:
                 fresh = [row for row in self._local_positions if row[0] > start_sequence]
             if fresh:
@@ -1517,20 +1713,21 @@ class MavlinkBackendSession:
                 # 用"最远时刻 − 当前"衡量进展：RTL 可能先爬升再平飞，
                 # 用逐样本单调下降会把正常返航误判为失败。
                 if (max_distance - distance) >= max(float(min_progress_m), 0.0):
-                    return {
+                    return finish({
                         "returning": True, "reason": "converging_on_home",
                         "samples": samples,
                         "initial_distance_m": first_distance,
                         "max_distance_m": max_distance,
                         "final_distance_m": distance,
                         "distance_reduction_m": max_distance - distance,
+                        "min_progress_m": float(min_progress_m),
                         "last_down_m": last_down,
                         "mode": mode_evidence,
                         "failure_reason": None,
-                    }
+                    })
             time.sleep(0.05)
 
-        return {
+        return finish({
             "returning": False,
             "reason": "no_convergence",
             "samples": samples,
@@ -1541,10 +1738,13 @@ class MavlinkBackendSession:
                 None if (max_distance is None or last_distance is None)
                 else max_distance - last_distance
             ),
+            # 收敛要求随证据一起返回：分类要判断"是否接近过"，判据必须与
+            # 实际执行的那一份是同一个值。
+            "min_progress_m": float(min_progress_m),
             "last_down_m": last_down,
             "mode": mode_evidence,
             "failure_reason": "return_home_not_converging",
-        }
+        })
 
     def observe_arrival(
         self,
@@ -1573,13 +1773,17 @@ class MavlinkBackendSession:
         tolerance = max(float(tolerance_m), 0.0)
         inside_since: float | None = None
         last_error: float | None = None
+        # 最小误差用于超时后的判读：它区分"接近过但没进容差"与"根本没靠近"。
+        # 只看 last_error_m 会把"曾经飞到目标附近又飘走"误报成"从没靠近"。
+        min_error: float | None = None
         samples = 0
 
         while time.monotonic() < deadline:
             if cancel_event is not None and cancel_event.is_set():
                 return {
                     "observed": False, "reason": "cancelled", "samples": samples,
-                    "last_error_m": last_error, "start_sequence": start_sequence,
+                    "last_error_m": last_error, "min_error_m": min_error,
+                    "target_error_m": tolerance, "start_sequence": start_sequence,
                 }
             with self._rx_condition:
                 fresh = [row for row in self._local_positions if row[0] > start_sequence]
@@ -1594,6 +1798,7 @@ class MavlinkBackendSession:
                     + (float(z) - float(down_m)) ** 2
                 )
                 last_error = error
+                min_error = error if min_error is None else min(min_error, error)
                 if error <= tolerance:
                     if inside_since is None:
                         inside_since = received_monotonic
@@ -1601,22 +1806,30 @@ class MavlinkBackendSession:
                         return {
                             "observed": True, "reason": "stable_within_tolerance",
                             "samples": samples, "last_error_m": error,
+                            "min_error_m": min_error, "target_error_m": tolerance,
                             "hold_s": received_monotonic - inside_since,
                             "start_sequence": start_sequence,
                         }
                 else:
                     inside_since = None
             if not self.connected and self.last_receive_error:
-                return {
+                failed = {
                     "observed": False, "reason": "receive_loop_failed", "samples": samples,
-                    "last_error_m": last_error, "start_sequence": start_sequence,
+                    "last_error_m": last_error, "min_error_m": min_error,
+                    "target_error_m": tolerance, "start_sequence": start_sequence,
                 }
+                self._record_completion_evidence(failed)
+                return failed
             time.sleep(0.02)
 
-        return {
+        timed_out = {
             "observed": False, "reason": "arrival_timeout", "samples": samples,
-            "last_error_m": last_error, "start_sequence": start_sequence,
+            "last_error_m": last_error, "min_error_m": min_error,
+            "target_error_m": tolerance, "start_sequence": start_sequence,
         }
+        # 留证据给 classify_incomplete —— 与 hold_position / return_home 一致。
+        self._record_completion_evidence(timed_out)
+        return timed_out
 
     def local_position_cursor(self) -> int:
         """Return the RX sequence after which a new observation may consume samples."""
