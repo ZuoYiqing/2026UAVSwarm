@@ -9,6 +9,7 @@ const navItems = [
   ["backend", "Adapter / Backend", "AB"],
   ["simulation", "仿真中心", "SM"],
   ["observation", "观察复核", "OR"],
+  ["clarification", "澄清待办", "CL"],
   ["assets", "硬件资产", "HW"],
   ["replay", "Audit / Replay", "RP"],
   ["model", "模型与知识", "MK"],
@@ -1646,6 +1647,222 @@ function validateImportedObservationReview() {
   render();
 }
 
+/**
+ * 澄清待办页面。
+ *
+ * 算法侧遇到目标歧义时**不猜**，而是返回澄清请求要求操作者补全。交接说明写明：
+ *
+ *   > `resolution=resubmit_objective_without_tasks`。调用方应在现有控制台把问题
+ *   > 呈现给操作者。
+ *
+ * 这一页就是那个"呈现"。两种真实形状：
+ *   · `EXTERNAL_TASKS_FORBIDDEN` —— 请求里带了 `tasks`，需要**去掉 tasks 重新提交**
+ *   · `AMBIGUOUS_HIGHEST_BUILDING` 等 —— 目标歧义，需要**从候选里指定实体**
+ *
+ * ⚠️ 这一页最容易做错的地方：让操作者"改一下再提交"，却没告诉他**改了哪里**。
+ * 那会变成"提交→被拒→再提交"的循环。所以每个澄清都显式给出：
+ *   问题是什么 / 为什么被拒 / 下一步该改哪个字段。
+ */
+function clarificationPage() {
+  const model = reviewModelApi();
+  const parsed = state.clarificationParsed || null;
+  const resubmitResult = state.clarificationResubmitResult || null;
+
+  const body = `
+    <div class="design-preview-notice">
+      <b>算法侧不会猜</b>
+      <span>${esc("遇到目标歧义或请求形态不合格时，算法侧返回澄清请求而不是猜一个答案。猜错等于飞错目标，所以这里要求人来定。")}</span>
+    </div>
+    ${panel("粘贴算法侧返回的澄清请求",
+      `<div class="field"><label for="clarify-raw">澄清请求 JSON（或整份响应）</label>
+        <input id="clarify-raw" placeholder='{"status":"clarification_required", …}' oninput="setClarificationRaw(this.value)"></div>
+       <div class="action-buttons"><button class="button primary" onclick="parseClarification()">解析</button>
+         <button class="button" onclick="useClarificationSample('ambiguous')">填入示例：目标歧义</button>
+         <button class="button" onclick="useClarificationSample('tasks')">填入示例：请求带了 tasks</button>
+       </div>`)}
+    ${panel("澄清内容", clarificationView(parsed))}
+    ${panel("修正后重新提交",
+      `${clarificationMissionHint(parsed)}
+       <div class="field"><label for="clarify-mission">任务 ID mission_id</label>
+        <input id="clarify-mission" value="${esc(state.clarifyMissionId ?? "")}" oninput="setClarifyMissionId(this.value)"></div>
+       <div class="field"><label for="clarify-objective">任务目标 objective</label>
+        <input id="clarify-objective" value="${esc(state.clarifyObjective ?? "")}" oninput="setClarifyObjective(this.value)"></div>
+       <div class="action-buttons"><button class="button primary" onclick="buildClarificationResubmit()">生成重提交请求</button></div>
+       <div class="control-notes">
+         <span class="small"><b>重提交不带 tasks</b>：算法侧要求任务清单由目标派生。带上 tasks 会再次被拒，所以这里根本不给输入口。</span>
+         <span class="small"><b>句子里必须出现实体 ID</b>：算法侧按显式标签匹配。写"就是那栋高的"仍然会是歧义。</span>
+       </div>`)}
+    ${panel("重提交请求 JSON",
+      resubmitResult && resubmitResult.ok
+        ? `<pre class="json scroll">${esc(JSON.stringify(resubmitResult.request, null, 2))}</pre>`
+        : `<div class="empty-state">生成后在此显示</div>`)}
+    ${resubmitResult && !resubmitResult.ok ? reviewResultView(resubmitResult) : ""}
+  `;
+
+  return `<div class="page">
+    ${pageTitle("澄清待办", "算法侧遇到歧义时返回的问题，以及修正后重新提交的请求。")}
+    ${body}
+  </div>`;
+}
+
+function clarificationView(parsed) {
+  if (!parsed) return `<div class="empty-state">尚未解析</div>`;
+  if (!parsed.ok) return reviewResultView(parsed);
+
+  const c = parsed.clarification;
+  const kindLabel = c.kind === "external_tasks_forbidden"
+    ? "请求形态不合格（带了 tasks）"
+    : "目标歧义";
+  const nextStep = c.kind === "external_tasks_forbidden"
+    ? "去掉 tasks，只保留 objective 与 mission_id 后重新提交。"
+    : "从下列候选里指定一个目标实体，把它的 ID 写进 objective 后重新提交。";
+
+  const candidateRows = c.candidates.length
+    ? `<table class="table"><thead><tr><th>目标实体</th><th>高度 (m)</th><th>中心 N (m)</th><th>中心 E (m)</th><th>选择</th></tr></thead><tbody>
+      ${c.candidates.map((cand) => `<tr>
+        <td>${esc(cand.targetId)}</td>
+        <td>${esc(cand.heightM ?? "--")}</td>
+        <td>${esc(cand.centerNorthM ?? "--")}</td>
+        <td>${esc(cand.centerEastM ?? "--")}</td>
+        <td><button class="button" onclick="selectClarificationCandidate('${esc(cand.targetId)}')">选它</button></td>
+      </tr>`).join("")}</tbody></table>`
+    : `<div class="empty-state">没有候选可指定</div>`;
+
+  return `<div>
+    ${badge(kindLabel, c.kind === "external_tasks_forbidden" ? "amber" : "cyan")}
+    ${c.reasonCode ? badge(c.reasonCode, "amber") : ""}
+    ${parsed.violations.length ? `<div class="inline-error">${esc(parsed.violations.map((v) => v.hint).join(" "))}</div>` : ""}
+    <table class="table">
+      <tr><th>问题</th><td>${esc(c.question ?? "（算法侧未给出问题文本，请据 reason_code 判断）")}</td></tr>
+      ${c.matchedText ? `<tr><th>匹配到的说法</th><td>${esc(c.matchedText)}</td></tr>` : ""}
+      ${c.conflictingFields.length ? `<tr><th>冲突字段</th><td>${esc(c.conflictingFields.join("、"))}</td></tr>` : ""}
+      ${c.audience ? `<tr><th>应答者</th><td>${esc(c.audience)}</td></tr>` : ""}
+      ${c.missionId ? `<tr><th>任务</th><td>${esc(c.missionId)}</td></tr>` : ""}
+      <tr><th>下一步</th><td>${esc(nextStep)}</td></tr>
+    </table>
+    ${panel("候选目标", candidateRows, "nested")}</div>`;
+}
+
+function setClarificationRaw(value) { state.clarificationRaw = value; }
+function setClarifyObjective(value) { state.clarifyObjective = value; }
+function setClarifyMissionId(value) { state.clarifyMissionId = value; }
+
+function useClarificationSample(which) {
+  const samples = {
+    ambiguous: {
+      // 贴近 scene_binding 的真实返回：带 objective 与 scene 身份，且**没有** mission_id。
+      authority: "objective",
+      objective: "到最高的那栋楼旁边",
+      scene_id: "simple_recon_v0_1",
+      map_version: "simple_recon_v0_1-map-1",
+      coordinate_frame: "scene_ned",
+      status: "clarification_required", accepted: false,
+      reason_code: "AMBIGUOUS_HIGHEST_BUILDING", matched_text: "最高的那栋楼",
+      candidates: [
+        { target_id: "link-block-4-3-2-1", height_m: 52.0, center_north_m: 350.0, center_east_m: 53.2 },
+        { target_id: "link-block-4-3-3-2", height_m: 52.0, center_north_m: 432.0, center_east_m: 179.8 },
+      ],
+      clarification_question: "最高建筑并列；请指定目标建筑 ID。",
+    },
+    tasks: {
+      reason_code: "EXTERNAL_TASKS_FORBIDDEN",
+      clarification_request: {
+        audience: "originating_operator", mission_id: "mission-1",
+        conflicting_fields: ["objective", "tasks"],
+        question: "请确认原始任务目标并重新提交；任务清单将由目标派生。",
+        resolution: "resubmit_objective_without_tasks",
+      },
+    },
+  };
+  state.clarificationRaw = JSON.stringify(samples[which], null, 2);
+  state.clarificationParsed = null;
+  state.clarificationResubmitResult = null;
+  render();
+}
+
+function parseClarification() {
+  const model = reviewModelApi();
+  const raw = state.clarificationRaw;
+  if (!raw || !raw.trim()) {
+    state.clarificationParsed = { ok: false, violations: [{ code: "empty_input", field: "clarify-raw", hint: "请先粘贴澄清请求 JSON。" }] };
+    render();
+    return;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (error) {
+    state.clarificationParsed = { ok: false, violations: [{ code: "invalid_json", field: "clarify-raw", hint: String(error.message || error) }] };
+    render();
+    return;
+  }
+  const parsed = model.normalizeClarification(payload);
+  state.clarificationParsed = parsed;
+  if (parsed.ok) {
+    // mission_id：澄清自带就预填，**不自带就显式置空**。
+    // 置空而不是留着 undefined —— 否则输入框渲染出 "undefined"，
+    // 而"没有值"与"值是个叫 undefined 的字符串"在界面上看起来一样。
+    state.clarifyMissionId = parsed.clarification.missionId || "";
+    // objective：`scene_binding` 的返回里带原始那句话，预填它。
+    // 不预填的话操作者得重新手打一遍，而句子里往往正是需要保留的上下文
+    // （"最高的那栋楼旁边"）—— 手打一遍很容易丢掉它，然后又被拒一次。
+    state.clarifyObjective = parsed.clarification.objective || "";
+    state.clarifyOriginalObjective = state.clarifyObjective;
+    notify("已解析澄清请求", parsed.clarification.question || parsed.clarification.reasonCode || "", "cyan");
+  } else {
+    notify("这不是澄清请求", "普通拒绝不应被当成需要回答的问题。", "amber");
+  }
+  render();
+}
+
+function selectClarificationCandidate(targetId) {
+  const model = reviewModelApi();
+  const parsed = state.clarificationParsed;
+  if (!parsed || !parsed.ok) return;
+  // 把候选 ID 拼进 objective。**句子里必须出现实体 ID** ——
+  // 算法侧按显式标签匹配，写"就是那栋高的"仍然会是歧义。
+  state.clarifyObjective = model.composeClarifiedObjective({
+    originalObjective: state.clarifyObjective || "",
+    selectedTargetId: targetId,
+  });
+  notify("已选定目标实体", `${targetId} 已写入 objective。`, "green");
+  render();
+}
+
+function buildClarificationResubmit() {
+  const model = reviewModelApi();
+  const parsed = state.clarificationParsed;
+  const result = model.buildClarificationResubmission({
+    missionId: state.clarifyMissionId,
+    objective: state.clarifyObjective,
+    resolution: parsed && parsed.ok ? parsed.clarification.resolution : undefined,
+  });
+  state.clarificationResubmitResult = result;
+  notify(result.ok ? "已生成重提交请求" : "无法生成",
+    result.ok ? "只含 mission_id 与 objective，不含 tasks。" : `${result.violations.length} 处问题。`,
+    result.ok ? "green" : "amber");
+  render();
+}
+
+/**
+ * 澄清请求不带 `mission_id` 时的提示。
+ *
+ * 为什么需要：`scene_binding` 的返回里**没有** `mission_id`（它的 `_base` 只给
+ * authority / objective / scene_id / map_version / …）。于是操作者填完 objective、
+ * 点"生成"，只会看到一句 `mission_id_required` —— **却不知道这个值该从哪来**。
+ *
+ * 修法不是自动编一个 id（那会让重提交关联到一个不存在的任务），
+ * 而是**把这件事说明白**。
+ */
+function clarificationMissionHint(parsed) {
+  if (!parsed || !parsed.ok) return "";
+  if (parsed.clarification.missionId) return "";
+  return `<div class="design-preview-notice">
+    <b>需要你填 mission_id</b>
+    <span>${esc("这条澄清请求里没有 mission_id —— 场景绑定（scene_binding）的返回本来就不带它。请从你最初提交的任务里取，界面不会替你编一个：编出来的 id 会让重提交关联到一个不存在的任务。")}</span>
+  </div>`;
+}
+
 function assetsPage() {
   return placeholderPage("硬件资产", "飞控、伴随计算板、通信链路、云台、相机、载荷、传感器、电源模块的资产台账与接入状态。", hardwareTable());
 }
@@ -1908,6 +2125,7 @@ function route() {
     backend: backendPage,
     simulation: simulationPage,
     observation: observationPage,
+    clarification: clarificationPage,
     assets: assetsPage,
     replay: replayPage,
     model: modelPage,

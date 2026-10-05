@@ -617,6 +617,175 @@
     return validateObservationReview(record);
   }
 
+  // --- 澄清请求（clarification）---------------------------------------------
+  //
+  // 算法侧遇到目标歧义时**不猜**，而是返回一个澄清请求要求操作者补全。
+  // 交接说明（ROUND2_SCENE_BINDING_HANDOFF_20260930.md:54）写明：
+  //
+  //   > `resolution=resubmit_objective_without_tasks`。调用方应在现有控制台把问题
+  //   > 呈现给操作者。
+  //
+  // 两种真实形状（都取自算法侧代码，不是设想）：
+  //
+  //   ① derive_proposal：请求带了 `tasks` → EXTERNAL_TASKS_FORBIDDEN
+  //      {clarification_request: {audience, mission_id, conflicting_fields,
+  //                               question, resolution}}
+  //   ② scene_binding：目标歧义，带候选
+  //      {status:"clarification_required", reason_code, candidates[],
+  //       clarification_question, matched_text?}
+  //
+  // ⚠️ **最要紧的约束**：`resubmit_objective_without_tasks` 要求重提交时**不带 tasks**。
+  // 带回去会再次触发 EXTERNAL_TASKS_FORBIDDEN —— 操作者会陷入"提交→被拒→再提交"
+  // 的循环，而且从表面上看不出原因。所以构建重提交时**带 tasks 的输入必须被拒绝，
+  // 不是静默丢弃**：静默丢弃会让操作者以为自己提交的东西被接受了。
+  const CLARIFICATION_RESOLUTIONS = Object.freeze({
+    resubmit_objective_without_tasks: "resubmit_objective_without_tasks",
+  });
+
+  function isClarification(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (value.status === "clarification_required") return true;
+    if (value.clarification_request && typeof value.clarification_request === "object") return true;
+    // 有些路径只给 reason_code 与问题，没有 status
+    if (typeof value.clarification_question === "string" && value.clarification_question.trim()) {
+      return true;
+    }
+    return false;
+  }
+
+  /** 把候选规范化为统一的展示形状；缺 `target_id` 的候选被跳过（记进 violations）。 */
+  function normalizeCandidates(rawCandidates) {
+    const candidates = [];
+    const skipped = [];
+    for (const item of asArray(rawCandidates)) {
+      if (!item || typeof item !== "object") { skipped.push(item); continue; }
+      const targetId = item.target_id;
+      if (!nonEmptyString(targetId)) { skipped.push(item); continue; }
+      const candidate = { targetId };
+      // 几何字段按需带出 —— 操作者要靠它们区分"并列最高"之类的候选。
+      if (finiteNumber(item.height_m) !== null) candidate.heightM = finiteNumber(item.height_m);
+      if (finiteNumber(item.center_north_m) !== null) candidate.centerNorthM = finiteNumber(item.center_north_m);
+      if (finiteNumber(item.center_east_m) !== null) candidate.centerEastM = finiteNumber(item.center_east_m);
+      if (nonEmptyString(item.source_reference)) candidate.sourceReference = item.source_reference;
+      candidates.push(candidate);
+    }
+    return { candidates, skipped };
+  }
+
+  /**
+   * 把算法侧返回的澄清请求规范化成界面可呈现的形状。
+   * 返回 `{ok, clarification?, violations}` —— 不抛异常。
+   */
+  function normalizeClarification(value) {
+    if (!isClarification(value)) {
+      return {
+        ok: false,
+        violations: [{
+          code: "not_a_clarification",
+          hint: "这不是澄清请求。普通拒绝（如 REQUEST_REJECTED）应走别的呈现路径，"
+            + "不要当成需要操作者回答的问题 —— 那会让操作者去回答一个没有答案的问题。",
+        }],
+      };
+    }
+
+    const inner = (value.clarification_request && typeof value.clarification_request === "object")
+      ? value.clarification_request : value;
+    const reasonCode = value.reason_code || inner.reason_code || null;
+    const conflictingFields = asArray(inner.conflicting_fields).map(String);
+
+    const externalTasks = reasonCode === "EXTERNAL_TASKS_FORBIDDEN"
+      || conflictingFields.includes("tasks");
+
+    const { candidates, skipped } = normalizeCandidates(value.candidates || inner.candidates);
+
+    const question = nonEmptyString(inner.question) ? inner.question
+      : nonEmptyString(value.clarification_question) ? value.clarification_question
+      : inner.question === undefined && value.clarification_question === undefined ? null
+      : null;
+
+    return {
+      ok: true,
+      violations: skipped.length
+        ? [{ code: "candidate_skipped", count: skipped.length,
+             hint: "有候选缺少 target_id，已跳过（无法据此指定目标）。" }]
+        : [],
+      clarification: {
+        kind: externalTasks ? "external_tasks_forbidden" : "ambiguous_target",
+        audience: inner.audience || null,
+        missionId: inner.mission_id || value.mission_id || null,
+        reasonCode,
+        // 没有问题时**不编一句** —— 界面显示 reason_code 让操作者判断。
+        question,
+        matchedText: value.matched_text || null,
+        // `scene_binding` 的返回里带 `objective`（原始那句话）。带出来是为了让
+        // 界面能**预填**，否则操作者得重新手打一遍原句，而句子里往往正是
+        // 需要保留的上下文（"最高的那栋楼旁边"）。
+        objective: nonEmptyString(value.objective) ? value.objective : null,
+        conflictingFields,
+        resolution: inner.resolution || null,
+        candidates,
+      },
+    };
+  }
+
+  /**
+   * 构建重提交请求。只带 objective 与 mission_id，**不带 tasks**。
+   *
+   * 带 `tasks` 时**拒绝**而不是丢弃：静默丢弃会让操作者以为自己提交的内容被接受了，
+   * 而实际被扔掉 —— 那正是本项目一直在防的那类"看起来成功"。
+   */
+  function buildClarificationResubmission(args) {
+    const a = args || {};
+    const violations = [];
+
+    if (!nonEmptyString(a.missionId)) {
+      violations.push({ code: "mission_id_required", field: "mission_id",
+        hint: "缺少 mission_id，重提交无法关联回原任务。" });
+    }
+    if (!nonEmptyString(a.objective)) {
+      violations.push({ code: "objective_required", field: "objective",
+        hint: "需要新的任务目标。任务清单将由目标派生，因此不必给。" });
+    }
+    if (a.tasks !== undefined && a.tasks !== null) {
+      violations.push({ code: "tasks_forbidden", field: "tasks",
+        hint: "重提交不能带 tasks：算法侧要求任务清单由目标派生，带 tasks 会再次触发"
+          + " EXTERNAL_TASKS_FORBIDDEN —— 那会让操作者陷入「提交→被拒→再提交」的循环。" });
+    }
+    if (a.resolution !== undefined && a.resolution !== null
+      && !Object.prototype.hasOwnProperty.call(CLARIFICATION_RESOLUTIONS, a.resolution)) {
+      violations.push({ code: "unsupported_resolution", field: "resolution",
+        value: a.resolution, allowed: Object.keys(CLARIFICATION_RESOLUTIONS),
+        hint: "不认识的解析方式 —— 不要按自己的理解执行。" });
+    }
+
+    if (violations.length) return { ok: false, violations };
+
+    return {
+      ok: true,
+      violations: [],
+      request: {
+        mission_id: a.missionId,
+        objective: a.objective,
+      },
+    };
+  }
+
+  /**
+   * 把选定的候选实体拼进 objective。
+   *
+   * **句子里必须出现实体 ID** —— 算法侧按显式标签匹配。拼一句"就是那栋高的"仍然
+   * 会是歧义，操作者会再被拒一次，而且不知道为什么。
+   *
+   * 没选候选时返回原句，**不擅自改写**。
+   */
+  function composeClarifiedObjective(args) {
+    const a = args || {};
+    const original = typeof a.originalObjective === "string" ? a.originalObjective : "";
+    if (!nonEmptyString(a.selectedTargetId)) return original;
+    const suffix = `（目标实体：${a.selectedTargetId}）`;
+    return original ? `${original}${suffix}` : `目标实体：${a.selectedTargetId}`;
+  }
+
   return {
     mergeFleet,
     findVehicle,
@@ -645,5 +814,10 @@
     REVIEW_OUTCOMES,
     validateObservationReview,
     buildObservationReview,
+    // 澄清请求：与算法侧 clarification_request / scene_binding 对照
+    CLARIFICATION_RESOLUTIONS,
+    normalizeClarification,
+    buildClarificationResubmission,
+    composeClarifiedObjective,
   };
 });
