@@ -1,6 +1,9 @@
 """Read-only Gazebo clock, pose and managed server identity evidence."""
 from __future__ import annotations
 
+import json
+import logging
+import signal
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -99,13 +102,76 @@ def server_identity(state: dict[str, Any], *, identity_reader=None) -> dict[str,
             "processes": [row.to_dict() for row in decisions]}
 
 
+def _pose_probe_diagnostic(*, topic: str, duration_s: float, started: float,
+                           stdout: str | bytes | None, stderr: str | bytes | None,
+                           returncode: int | None, stage: str) -> dict[str, Any]:
+    """Keep bounded evidence even when the CLI exits without stderr."""
+    def output(value: str | bytes | None) -> tuple[int, str]:
+        raw = value.encode("utf-8") if isinstance(value, str) else (value or b"")
+        return len(raw), raw[-512:].decode("utf-8", errors="replace")
+
+    stdout_bytes, stdout_tail = output(stdout)
+    stderr_bytes, stderr_tail = output(stderr)
+    signal_name = None
+    if returncode is not None and returncode < 0:
+        try:
+            signal_name = signal.Signals(-returncode).name
+        except ValueError:
+            signal_name = f"signal_{-returncode}"
+    return {"diagnostic_version": "1.0", "stage": stage, "topic": topic,
+            "duration_s": duration_s, "timeout_s": duration_s + 5,
+            "source_timestamp": datetime.now(timezone.utc).isoformat(),
+            "wall_elapsed_s": round(time.monotonic() - started, 6),
+            "returncode": returncode, "signal": signal_name,
+            "stdout_bytes": stdout_bytes, "stderr_bytes": stderr_bytes,
+            "stdout_tail": stdout_tail, "stderr_tail": stderr_tail}
+
+
 def capture_poses(world: str, duration_s: float) -> list[dict[str, Any]]:
-    try:
-        result = subprocess.run(["gz", "topic", "-e", "-t", f"/world/{world}/dynamic_pose/info",
-                                 "-d", str(duration_s), "--json-output"],
-                                capture_output=True, text=True, timeout=duration_s + 5, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("gazebo_pose_probe_timeout") from exc
-    if result.returncode:
-        raise ValueError(f"gazebo_pose_probe_failed:{result.stderr}")
-    return json_messages(result.stdout)
+    """Discard a crashed CLI's output; retry SIGSEGV once within the same budget.
+
+    This does not retry malformed evidence, timeouts or calibration/context
+    failures. Both the failure and recovery remain visible in the stderr log.
+    """
+    topic = f"/world/{world}/dynamic_pose/info"
+    started = time.monotonic()
+    deadline = started + duration_s + 5
+    previous_failures = []
+
+    def diagnostic(stage, stdout=None, stderr=None, returncode=None):
+        row = _pose_probe_diagnostic(
+            topic=topic, duration_s=duration_s, started=started,
+            stdout=stdout, stderr=stderr, returncode=returncode, stage=stage)
+        row.update(attempt=attempt, previous_failures=list(previous_failures))
+        return json.dumps(row, ensure_ascii=True, sort_keys=True)
+
+    for attempt in (1, 2):
+        try:
+            result = subprocess.run(["gz", "topic", "-e", "-t", topic,
+                                     "-d", str(duration_s), "--json-output"],
+                                    capture_output=True, text=True,
+                                    timeout=max(.001, deadline - time.monotonic()), check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("gazebo_pose_probe_timeout:" + diagnostic(
+                "timeout", exc.stdout, exc.stderr)) from exc
+        except OSError as exc:
+            raise OSError("gazebo_pose_probe_start_failed:" + diagnostic(
+                "start", stderr=str(exc))) from exc
+        if result.returncode:
+            failure = diagnostic("exit", result.stdout, result.stderr, result.returncode)
+            if (attempt == 1 and result.returncode == -int(signal.SIGSEGV)
+                    and deadline - time.monotonic() > duration_s):
+                logging.getLogger(__name__).warning("gazebo_pose_probe_retry:%s", failure)
+                previous_failures.append(json.loads(failure))
+                continue
+            raise ValueError("gazebo_pose_probe_failed:" + failure)
+        try:
+            messages = json_messages(result.stdout)
+        except ValueError as exc:
+            raise ValueError("gazebo_pose_probe_parse_failed:" + diagnostic(
+                "parse", result.stdout, result.stderr, result.returncode) + f":{exc}") from exc
+        if previous_failures:
+            logging.getLogger(__name__).warning(
+                "gazebo_pose_probe_recovered:topic=%s attempts=%s messages=%s", topic, attempt, len(messages))
+        return messages
+    raise AssertionError("unreachable_pose_probe_attempt")
