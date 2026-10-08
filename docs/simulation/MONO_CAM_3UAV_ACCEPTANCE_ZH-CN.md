@@ -94,3 +94,30 @@ bash simulation/px4_gazebo/scripts/stop_three_uav.sh
 完整验收还需逐机飞行、持续图像采集与安全停止，最后由 Runtime 独占 session
 进行 integrated 验收。任何一步失败都不能把
 `CAPTURE` 或 `OBSERVE` 标为执行成功。
+
+## 2026-10-07 位姿探测 CLI 崩溃排查
+
+集成线从主仓库 `e52e7d7` 重跑三机巡逻：先前 `gz topic` 多对象 JSON 解析问题
+没有再出现；health ready，RTF 0.793～0.811。UAV-01 到达两个入场点，
+UAV-02 到达第一个入场点，但 UAV-03 在入场点 1 收到
+`calibration_invalid:gazebo_pose_probe_failed:`，当时错误字符串中的 stderr 为空。
+三台均安全落地、disarm；这轮巡逻仍为 **FAIL**。
+
+我们保留该世界，先校验同一 run_id 的 3 个 PX4 和 1 个 Gazebo PID 身份，
+均为 `match`；然后只读采样 `/world/simple_recon_v0_1/dynamic_pose/info`，
+不占 MAVLink endpoint。5 次串行采样全成功；4 路并发 240 次中，
+第 124 次 `gz topic` 以 `SIGSEGV`（退出码 `-11`）退出，stderr 0 字节，
+stdout 已有 48,384 字节，耗时 2.853 秒。这里确认的是 **CLI 自身崩溃**，
+没有证据证明并发是唯一成因。原始只读报告保存在主仓库本机 ignored
+`.runtime/px4_gazebo/pose_probe_diagnostic_20261007.json`；可提交摘要见
+[`fixtures/pose-probe-sigsegv-20261007.json`](fixtures/pose-probe-sigsegv-20261007.json)。
+
+`capture_poses` 现在在 CLI 失败时记录 topic、退出码/信号、耗时、stdout 和
+stderr 的总字节数及末尾 512 字节。只对已实测的 `SIGSEGV` 做至多一次重新
+采样，沿用原 `duration+5 秒` 总超时，不使用崩溃进程的部分输出；日志中保留
+`gazebo_pose_probe_retry` 和 `gazebo_pose_probe_recovered`。连续崩溃、超时、
+JSON 截断、模型 ID 更换、PX4 原点/进程变化继续失败并阻断飞行。
+修复后另做 4 路并发 240 次只读采样：0 次失败、0 次触发重试，进程身份
+仍匹配。因此本轮验证了诊断与采样成功路径，**未以真实崩溃验证恢复路径**；
+恢复与失败判据由 mock 单元测试覆盖。尚未重跑三机飞行，不能据此宣布
+`CAPTURE` 可用或 integrated 验收通过。
