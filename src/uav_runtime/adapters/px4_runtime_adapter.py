@@ -45,6 +45,8 @@ class Px4RuntimeActionAdapter:
             raw = self.backend.execute_land_action(
                 command_timeout_ms=arguments.get("command_timeout_ms"),
                 observe_timeout_ms=arguments.get("observe_timeout_ms"),
+                landing_site=arguments.get("landing_site"),
+                translation_scene_ned_m=arguments.get("translation_scene_ned_m"),
                 cancel_event=arguments.get("_cancel_event"),
             )
         elif action == "goto":
@@ -83,6 +85,11 @@ class Px4RuntimeActionAdapter:
                     )
                 ),
                 min_progress_m=float(arguments.get("min_progress_m", 5.0)),
+                home_local_north_m=float(arguments["home_local_north_m"]),
+                home_local_east_m=float(arguments["home_local_east_m"]),
+                home_tolerance_m=float(arguments["home_tolerance_m"]),
+                stable_duration_s=float(arguments["stable_duration_s"]),
+                landing_site_id=str(arguments["landing_site_id"]),
                 cancel_event=arguments.get("_cancel_event"),
             )
         else:

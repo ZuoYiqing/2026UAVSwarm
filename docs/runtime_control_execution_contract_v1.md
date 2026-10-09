@@ -68,17 +68,63 @@ the same node. The old action is terminal `failed` with code
 cannot overwrite that terminal result. A second LAND remains a normal busy
 conflict rather than creating two commands.
 
-LAND success requires an accepted LAND command plus fresh post-command
-`EXTENDED_SYS_STATE` reporting `ON_GROUND` and a fresh HEARTBEAT reporting
-disarmed. ACK acceptance alone is not success. Missing landed/armed evidence is
-reported as `unknown`, `incomplete`, or `stale` in completion evidence and ends as
-`timed_out` when the observation deadline expires. No path implements
-"stop task" as an in-air forced disarm.
+LAND remains an available controlled-recovery command even without landing-site
+evidence. Operational task success, however, now requires an accepted LAND
+command, fresh post-command `EXTENDED_SYS_STATE` reporting `ON_GROUND`, a fresh
+HEARTBEAT reporting disarmed, a fresh post-command local-position sample, and a
+position sampled after the landed/disarmed evidence and on a validated scene
+landing site after applying the current node
+calibration. ACK acceptance or `ON_GROUND`/disarmed away from that site is not
+task success. Missing site evidence ends with `landing_site_unavailable` even
+if physical landed/disarmed telemetry arrives. A roof landing outside the site
+ends with `landing_outside_allowed_site`; missing position with
+`landing_position_unknown`. Missing landed/armed evidence remains
+`unknown`/`incomplete`/`stale` and times out. No path implements "stop task" as
+an in-air forced disarm.
 
 After sending LAND, Runtime requests the landed-state stream as best-effort
 completion instrumentation. A stream-setup exception is retained as evidence but
 does not suppress or delay the LAND command. The action still cannot succeed
 unless fresh landed and disarmed samples arrive.
+
+### `POST /api/actions/return-home`
+
+Runtime requires a validated, unexpired landing site for the selected node and
+a matching, calibrated `scene_ned` transform *before* requesting PX4 RTL. With
+either missing, the action fails `landing_site_unavailable` and **no RTL command
+is sent**. A validated site center is converted once into the vehicle's local
+NED frame. The effective horizontal tolerance is the smaller of the requested
+`home_tolerance_m` (default 0.75 m) and the site's validated tolerance.
+`stable_duration_ms` defaults to 1000 ms (range 300–10000 ms); at least three
+fresh post-command position samples must remain within tolerance for this
+duration. `min_progress_m` is only diagnostic. Changing to AUTO_RTL or reducing
+the distance by 5 m never completes return-home by itself. A timed observation
+with progress but no arrival yields `return_home_in_progress`, not success.
+Arrival at the pad is not itself a landing: a subsequent LAND still needs its
+own completion evidence. The PX4 RTL mode's autonomous behavior is not treated
+as a promise to stay at the pad.
+
+### Landing-site evidence v1.0 (producer blocked)
+
+This change reserves an internal, node-specific evidence shape separate from
+the dynamic coordinate calibration: `scene_id`, `map_version`, `world_sha256`,
+`node_id`, `object_id`, `center_scene_ned_m`, horizontal/vertical tolerances,
+`ground_down_m`, `collision_surface`, `source_timestamp`, `valid_for_ms`,
+`status`, and `validation`. A render-only pad and a fresh EKF translation do not
+prove a safe landing surface. The current scene's pad visual has no collision;
+the physical support is `ground_plane`. Simulation has proposed a conservative
+0.75 m center tolerance but has **not** validated it with an integrated flight.
+
+There is currently **no trusted landing-site publisher** in the Runtime HTTP
+bridge. In particular, an unauthenticated caller's `status: validated` or
+claimed run ID cannot grant flight authority. The store rejects such evidence
+with `trusted_landing_site_producer_unavailable`; no public landing-site write
+route is exposed. Consequently operational return-home cannot pass the guard,
+and operational LAND can send for recovery but cannot report task success in
+the current deployment. A future version must define an authenticated or
+otherwise trusted Simulation producer, binding world identity and a real
+landing validation to an expiring site record. Do not use this fixture or
+calibration publishing as a workaround.
 
 ### Compatibility smoke route
 
@@ -202,12 +248,13 @@ not bind ports 14540-14542. `evidence_fresh`, `evidence_age_ms`, and
 - Simulation: publish fixture-compatible health and calibration evidence with a
   TTL; do not create another MAVLink receiver.
 
-## Deferred spatial execution
+## Spatial execution status
 
-`GOTO`, `HOLD`, and `RETURN_HOME` are proposal-only. The route named in the
-fixture is not implemented or allowlisted. A later version must keep Agent plan
-generation separate from an executor that passes each command through Runtime,
-Policy, node admission, the persistent session, and telemetry completion.
+`GOTO`, `HOLD`, and `RETURN_HOME` have operational routes through Runtime,
+Policy, node admission, and the persistent session. `RETURN_HOME` is currently
+fail-closed for lack of a trusted landing-site producer, as described above.
+`POST /api/planner/plan-mission` remains plan-only; this does not imply an
+autonomous multi-waypoint executor.
 
 ## Verification boundary
 

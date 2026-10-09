@@ -547,6 +547,33 @@ def test_fresh_landed_without_disarm_is_incomplete_not_success() -> None:
     session.close()
 
 
+def test_land_site_position_must_follow_landed_and_disarmed_evidence() -> None:
+    session = MavlinkBackendSession(
+        backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"
+    )
+    session.connection = _FakeSequenceConnection([])
+    session.connected = True
+    cursor = session.observation_cursor()
+    session.dispatch_message(_FakeLocalPositionMsg(0.0))
+    session.dispatch_message(_FakeExtendedStateMsg(1))
+    session.dispatch_message(_FakeHeartbeatMsg(armed=False))
+
+    early = session.observe_landed_and_disarmed(
+        timeout_s=0.02, after_sequence=cursor, require_local_position=True
+    )
+    assert early["position_fresh"] is True
+    assert early["position_after_landing"] is False
+    assert early["completion_reached"] is False
+
+    session.dispatch_message(_FakeLocalPositionMsg(0.0))
+    complete = session.observe_landed_and_disarmed(
+        timeout_s=0.02, after_sequence=cursor, require_local_position=True
+    )
+    assert complete["position_after_landing"] is True
+    assert complete["completion_reached"] is True
+    session.close()
+
+
 def test_land_completion_rejects_post_command_but_expired_samples() -> None:
     session = MavlinkBackendSession(
         backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:1"

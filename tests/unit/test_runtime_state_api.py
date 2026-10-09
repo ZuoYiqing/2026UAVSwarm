@@ -166,6 +166,16 @@ def test_active_actions_only_contains_running_actions(store: RuntimeStateStore) 
     assert store.runtime_snapshot()["active_actions"] == []
 
 
+def test_record_action_result_replaces_duplicate_action_id(store: RuntimeStateStore) -> None:
+    store.record_action_result({"action_id": "act-one", "status": "executing"}, limit=2)
+    store.record_action_result({"action_id": "act-one", "status": "failed"}, limit=2)
+    store.record_action_result({"action_id": "act-two", "status": "succeeded"}, limit=2)
+
+    assert [(row["action_id"], row["status"]) for row in store.recent_actions()] == [
+        ("act-one", "failed"), ("act-two", "succeeded")
+    ]
+
+
 def test_vehicle_snapshot_matches_supplied_cesium_contract_shape(store: RuntimeStateStore) -> None:
     store.update_telemetry(populated_snapshot())
 

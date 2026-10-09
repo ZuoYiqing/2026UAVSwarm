@@ -141,6 +141,7 @@ class RuntimeStateStore:
         self._simulation_evidence: dict[str, Any] | None = None
         self._simulation_evidence_received_at: float | None = None
         self._coordinate_calibrations: dict[str, dict[str, Any]] = {}
+        self._landing_sites: dict[str, dict[str, Any]] = {}
 
     def mark_collector_started(self, *, endpoint: str) -> None:
         with self._lock:
@@ -221,7 +222,11 @@ class RuntimeStateStore:
 
     def record_action_result(self, action: dict[str, Any], *, limit: int = 50) -> None:
         with self._lock:
-            self._actions = (self._actions + [finite_json(action)])[-limit:]
+            view = finite_json(action)
+            action_id = view.get("action_id")
+            if action_id:
+                self._actions = [row for row in self._actions if row.get("action_id") != action_id]
+            self._actions = (self._actions + [view])[-limit:]
 
     def request_action(
         self,
@@ -586,6 +591,71 @@ class RuntimeStateStore:
         "unavailable"（从未发布）或 "stale"（过期），此时 translation 不可信。
         """
         return self._coordinate_calibration(node_id)
+
+    def update_landing_site_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
+        """Store a Simulation-owned, node-specific landing site independently of EKF calibration."""
+        if evidence.get("contract_version") != "1.0":
+            raise ValueError("unsupported_landing_site_version")
+        required = (
+            "scene_id", "map_version", "world_sha256", "node_id", "object_id",
+            "center_scene_ned_m", "horizontal_tolerance_m", "ground_down_m",
+            "vertical_tolerance_m", "collision_surface", "source_timestamp",
+            "valid_for_ms", "status", "validation",
+        )
+        missing = [key for key in required if evidence.get(key) in (None, "")]
+        if missing:
+            raise ValueError(f"landing_site_missing:{','.join(missing)}")
+        node_id = str(evidence["node_id"])
+        if self.vehicle_registry is not None:
+            self.vehicle_registry.get_vehicle(node_id)
+            if evidence["scene_id"] != self.vehicle_registry.scene_id:
+                raise ValueError("landing_site_scene_mismatch")
+        center = evidence["center_scene_ned_m"]
+        if not isinstance(center, dict) or not all(
+            isinstance(center.get(axis), (int, float))
+            and not isinstance(center[axis], bool)
+            and math.isfinite(float(center[axis]))
+            for axis in ("north", "east", "down")
+        ):
+            raise ValueError("landing_site_center_invalid")
+        for key in ("horizontal_tolerance_m", "vertical_tolerance_m", "ground_down_m"):
+            value = evidence[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                raise ValueError(f"landing_site_{key}_invalid")
+        if not 0 < float(evidence["horizontal_tolerance_m"]) <= 0.75:
+            raise ValueError("landing_site_horizontal_tolerance_invalid")
+        if not 0 < float(evidence["vertical_tolerance_m"]) <= 0.3:
+            raise ValueError("landing_site_vertical_tolerance_invalid")
+        if not isinstance(evidence["collision_surface"], dict) or not evidence["collision_surface"].get("object_id"):
+            raise ValueError("landing_site_collision_surface_invalid")
+        validation = evidence["validation"]
+        if not isinstance(validation, dict):
+            raise ValueError("landing_site_validation_invalid")
+        try:
+            valid_for_ms = int(evidence["valid_for_ms"])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("landing_site_validity_invalid") from exc
+        if not 100 <= valid_for_ms <= 86_400_000:
+            raise ValueError("landing_site_validity_invalid")
+        # The current HTTP bridge has no authenticated Simulation publisher.
+        # A caller-supplied run_id/real_landing flag cannot grant flight authority.
+        if evidence["status"] == "validated":
+            raise ValueError("trusted_landing_site_producer_unavailable")
+        public = finite_json({**evidence, "status": "candidate"})
+        with self._lock:
+            self._landing_sites[node_id] = {**public, "received_monotonic": self._monotonic()}
+        return copy.deepcopy(public)
+
+    def landing_site(self, node_id: str) -> tuple[dict[str, Any] | None, str]:
+        with self._lock:
+            site = copy.deepcopy(self._landing_sites.get(node_id))
+        if site is None:
+            return None, "unavailable"
+        age_ms = max(0, int(round((self._monotonic() - site.pop("received_monotonic")) * 1000)))
+        site["evidence_age_ms"] = age_ms
+        if age_ms > int(site["valid_for_ms"]):
+            return site, "stale"
+        return site, str(site["status"])
 
     def simulation_status(self) -> dict[str, Any]:
         telemetry = self.telemetry_latest()

@@ -233,8 +233,8 @@ def test_hold_position_requires_connection() -> None:
 # =========================================================================
 
 
-def test_return_home_succeeds_only_when_distance_to_home_shrinks() -> None:
-    """看到到 home 的距离在缩小：应成功，并报告收敛证据。"""
+def test_return_home_progress_does_not_complete_before_pad_arrival() -> None:
+    """The incident's 5 m progress must remain in_progress at 23 m from home."""
     session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
     _feed(session, x=50.0, y=0.0, z=-30.0)
 
@@ -246,17 +246,38 @@ def test_return_home_succeeds_only_when_distance_to_home_shrinks() -> None:
         repeats=12, stop=stop,
     )
     try:
-        result = session.return_home(timeout_s=6.0, min_progress_m=1.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=1.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
 
-    assert result["returning"] is True, f"距离在缩小，应判成功：{result}"
-    assert result["reason"] == "converging_on_home"
+    assert result["returning"] is True
+    assert result["reason"] == "in_progress"
     assert result["initial_distance_m"] == pytest.approx(50.0, abs=1.0)
     assert result["final_distance_m"] < result["initial_distance_m"]
     assert result["distance_reduction_m"] >= 1.0
+    assert result["failure_reason"] == "return_home_in_progress"
+
+
+def test_return_home_completes_only_after_fresh_stable_site_arrival() -> None:
+    session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
+    _feed(session, x=25.0, y=0.0, z=-6.0)
+    stop = threading.Event()
+    feeder = _feed_plan(session, positions=[(25.0, 0.0, -6.0), (4.0, 0.0, -6.0),
+                                             (0.2, 0.1, -3.0)], repeats=20, stop=stop)
+    try:
+        result = session.return_home(timeout_s=3.0, min_progress_m=5.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
+    finally:
+        stop.set()
+        feeder.join(timeout=1.0)
+    assert result["reason"] == "arrived_at_home_site"
     assert result["failure_reason"] is None
+    assert result["arrival_samples"] >= 3
+    assert result["final_distance_m"] <= 0.75
 
 
 def test_return_home_fails_when_it_only_switches_mode() -> None:
@@ -277,7 +298,9 @@ def test_return_home_fails_when_it_only_switches_mode() -> None:
         repeats=20, stop=stop,
     )
     try:
-        result = session.return_home(timeout_s=2.0, min_progress_m=5.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=5.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
@@ -298,7 +321,9 @@ def test_return_home_fails_when_mode_is_not_rtl() -> None:
     feeder = _feed_plan(session, positions=[(40.0, 0.0, -20.0), (30.0, 0.0, -10.0)],
                         repeats=15, stop=stop)
     try:
-        result = session.return_home(timeout_s=2.0, min_progress_m=1.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=1.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
@@ -314,4 +339,6 @@ def test_return_home_requires_connection() -> None:
     session, _ = make_goto_session(mode_plan=[])
     session.connection = None
     with pytest.raises(RuntimeError, match="connection_required"):
-        session.return_home(timeout_s=1.0)
+        session.return_home(timeout_s=1.0, home_local_north_m=0.0,
+                            home_local_east_m=0.0, home_tolerance_m=0.75,
+                            stable_duration_s=0.2)

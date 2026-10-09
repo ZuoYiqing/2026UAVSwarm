@@ -451,6 +451,8 @@ class Px4SitlBackend:
         *,
         command_timeout_ms: int | None = None,
         observe_timeout_ms: int | None = None,
+        landing_site: dict[str, Any] | None = None,
+        translation_scene_ned_m: dict[str, float] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         rejected = self._ensure_sitl_action_allowed("land")
@@ -462,7 +464,7 @@ class Px4SitlBackend:
         command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
         observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
         result = self._base_action_result("land")
-        result["completion_mode"] = "landed_and_disarmed"
+        result["completion_mode"] = "landed_disarmed_on_site" if landing_site is not None else "landed_and_disarmed"
         try:
             result["heartbeat_connected"] = True
             result["gcs_heartbeat_started"] = True
@@ -494,20 +496,60 @@ class Px4SitlBackend:
                 }
             result["landing_state_stream_ack"] = stream_ack
             result["ack_evidence"].append({"stage": "landing_state_stream", **stream_ack})
-            observation = self.session.observe_landed_and_disarmed(
-                timeout_s=observe_timeout_s,
-                after_sequence=int(result["land_ack"]["observation_cursor"]),
-                cancel_event=cancel_event,
-            )
+            observation_args: dict[str, Any] = {
+                "timeout_s": observe_timeout_s,
+                "after_sequence": int(result["land_ack"]["observation_cursor"]),
+                "cancel_event": cancel_event,
+            }
+            if landing_site:
+                observation_args["require_local_position"] = True
+            observation = self.session.observe_landed_and_disarmed(**observation_args)
             result["completion_evidence"] = observation
             result["completion_state"] = str(observation.get("status") or "unknown")
             if observation.get("completion_reached"):
-                result["result"] = "pass"
+                if landing_site is None:
+                    # Legacy low-level physical LAND result; operator and Agent
+                    # routes always pass explicit site context.
+                    result["result"] = "pass"
+                elif not landing_site:
+                    result["failure_reason"] = "landing_site_unavailable"
+                    result["completion_state"] = "unknown"
+                else:
+                    local = observation.get("position_vehicle_local_ned_m")
+                    offset = translation_scene_ned_m or {}
+                    if not observation.get("position_fresh") or not isinstance(local, dict) or not all(
+                        isinstance(local.get(axis), (int, float)) and isinstance(offset.get(axis), (int, float))
+                        and math.isfinite(float(local[axis])) and math.isfinite(float(offset[axis]))
+                        for axis in ("north", "east", "down")
+                    ):
+                        result["failure_reason"] = "landing_position_unknown"
+                        result["completion_state"] = "unknown"
+                    else:
+                        scene = {axis: float(local[axis]) + float(offset[axis]) for axis in ("north", "east", "down")}
+                        center = landing_site["center_scene_ned_m"]
+                        horizontal_error = math.hypot(scene["north"] - float(center["north"]), scene["east"] - float(center["east"]))
+                        vertical_error = abs(scene["down"] - float(landing_site["ground_down_m"]))
+                        on_site = (horizontal_error <= float(landing_site["horizontal_tolerance_m"])
+                                   and vertical_error <= float(landing_site["vertical_tolerance_m"]))
+                        observation["landing_site_check"] = {
+                            "site_id": landing_site["object_id"], "scene_position_ned_m": scene,
+                            "horizontal_error_m": horizontal_error, "vertical_error_m": vertical_error,
+                            "horizontal_tolerance_m": landing_site["horizontal_tolerance_m"],
+                            "vertical_tolerance_m": landing_site["vertical_tolerance_m"], "on_allowed_site": on_site,
+                        }
+                        if on_site:
+                            result["result"] = "pass"
+                        else:
+                            result["failure_reason"] = "landing_outside_allowed_site"
+                            result["completion_state"] = "failed"
             else:
-                result["failure_reason"] = "landing_completion_timeout"
-                # 实测中最容易误判的一处：飞机可能**已经落地**，只是没 disarm
-                # （或飞控在坠机姿态下不再报告 on_ground）。分类让这两种可区分。
-                self._classify_completion_timeout(result, "land")
+                if (landing_site and observation.get("landed_state") == 1
+                        and observation.get("armed") is False and not observation.get("position_fresh")):
+                    result["failure_reason"] = "landing_position_unknown"
+                    result["completion_state"] = "unknown"
+                else:
+                    result["failure_reason"] = "landing_completion_timeout"
+                    self._classify_completion_timeout(result, "land")
             return self._finish_smoke_result(result)
         except Exception as exc:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
@@ -711,21 +753,14 @@ class Px4SitlBackend:
         *,
         timeout_s: float | None = None,
         min_progress_m: float = 5.0,
+        home_local_north_m: float,
+        home_local_east_m: float,
+        home_tolerance_m: float,
+        stable_duration_s: float,
+        landing_site_id: str | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """让载具自主返航（RETURN_HOME / ``AUTO + RTL``），并验证它真的在收敛。
-
-        ⚠️ 与那次事故的区别
-        -------------------
-        2026-09-28 的事故形状是：收尾阶段把"任意非 OFFBOARD 模式"当作安全悬停，
-        于是 **AUTO_RTL 被当成安全状态接受** —— 飞机开始自主返航，而动作报 pass。
-
-        这里做的是**完全相反**的事：RTL 是被**显式请求**的动作，而且**只有看到
-        到 home 的距离确实缩小**才算成功。模式切换本身不算成功。
-
-        RTL 仍然不在 ``mavlink_backend_session.PINNED_MODES`` 里 —— 那个集合的
-        语义是"确认安全、可作为回退目标"，RTL 是自主机动，不应被当作静止状态接受。
-        """
+        """Request RTL and require stable arrival at the validated local pad target."""
         rejected = self._ensure_sitl_action_allowed("return_home")
         if rejected is not None:
             return rejected
@@ -734,7 +769,7 @@ class Px4SitlBackend:
             return rejected
 
         result = self._base_action_result("return_home")
-        result["completion_mode"] = "auto_rtl_convergence"
+        result["completion_mode"] = "auto_rtl_verified_site_arrival"
 
         effective_timeout_s = (
             float(timeout_s)
@@ -745,6 +780,10 @@ class Px4SitlBackend:
             outcome = self.session.return_home(
                 timeout_s=effective_timeout_s,
                 min_progress_m=float(min_progress_m),
+                home_local_north_m=float(home_local_north_m),
+                home_local_east_m=float(home_local_east_m),
+                home_tolerance_m=float(home_tolerance_m),
+                stable_duration_s=float(stable_duration_s),
                 cancel_event=cancel_event,
             )
         except Exception as exc:  # noqa: BLE001
@@ -759,6 +798,7 @@ class Px4SitlBackend:
         result["initial_distance_m"] = outcome.get("initial_distance_m")
         result["final_distance_m"] = outcome.get("final_distance_m")
         result["distance_reduction_m"] = outcome.get("distance_reduction_m")
+        result["landing_site_id"] = landing_site_id
         result["completion_evidence"] = {
             "returning": outcome.get("returning"),
             "reason": outcome.get("reason"),
@@ -768,6 +808,11 @@ class Px4SitlBackend:
             # 收敛要求同样要暴露 —— 分类与说明文案都读它。
             "min_progress_m": outcome.get("min_progress_m"),
             "samples": outcome.get("samples"),
+            "home_local_north_m": home_local_north_m,
+            "home_local_east_m": home_local_east_m,
+            "home_tolerance_m": home_tolerance_m,
+            "stable_duration_s": stable_duration_s,
+            "landing_site_id": landing_site_id,
         }
         result["completion_state"] = str(outcome.get("reason") or "unknown")
 
@@ -776,6 +821,9 @@ class Px4SitlBackend:
             self._classify_completion_timeout(result, "return_home")
             return self._finish_smoke_result(result)
 
+        if outcome.get("reason") != "arrived_at_home_site":
+            result["failure_reason"] = "return_home_in_progress"
+            return self._finish_smoke_result(result)
         result["result"] = "pass"
         return self._finish_smoke_result(result)
 

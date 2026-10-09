@@ -1354,6 +1354,7 @@ class MavlinkBackendSession:
         timeout_s: float,
         after_sequence: int,
         freshness_window_s: float = 2.0,
+        require_local_position: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Require fresh ON_GROUND and disarmed evidence after the LAND command cursor."""
@@ -1370,6 +1371,10 @@ class MavlinkBackendSession:
         landed_timestamp: str | None = None
         armed_received_at: float | None = None
         landed_received_at: float | None = None
+        position: dict[str, float] | None = None
+        position_sequence: int | None = None
+        position_timestamp: str | None = None
+        position_received_at: float | None = None
         cancelled = False
         on_ground = self._mavlink_const("MAV_LANDED_STATE_ON_GROUND", 1)
         with self._rx_condition:
@@ -1389,6 +1394,12 @@ class MavlinkBackendSession:
                         landed_sequence = sequence
                         landed_timestamp = received_timestamp
                         landed_received_at = received_at
+                for sequence, north, east, down, received_at, received_timestamp in self._local_positions:
+                    if sequence > after_sequence and (position_sequence is None or sequence > position_sequence):
+                        position = {"north": north, "east": east, "down": down}
+                        position_sequence = sequence
+                        position_timestamp = received_timestamp
+                        position_received_at = received_at
                 newest = [value for value in (armed_sequence, landed_sequence) if value is not None]
                 if newest:
                     seen_sequence = max(seen_sequence, *newest)
@@ -1399,7 +1410,17 @@ class MavlinkBackendSession:
                     and now - armed_received_at <= max(freshness_window_s, 0.0)
                     and now - landed_received_at <= max(freshness_window_s, 0.0)
                 )
-                if armed is False and landed_state == on_ground and samples_fresh:
+                position_fresh = (
+                    position_received_at is not None
+                    and now - position_received_at <= max(freshness_window_s, 0.0)
+                )
+                position_after_landing = (
+                    position_sequence is not None and armed_sequence is not None
+                    and landed_sequence is not None
+                    and position_sequence > max(armed_sequence, landed_sequence)
+                )
+                if (armed is False and landed_state == on_ground and samples_fresh
+                        and (not require_local_position or (position_fresh and position_after_landing))):
                     break
                 if not self.connected and self.last_receive_error:
                     break
@@ -1415,6 +1436,10 @@ class MavlinkBackendSession:
             if landed_received_at is not None
             else None
         )
+        position_age_ms = (
+            max(0, int(round((completed_at - position_received_at) * 1000)))
+            if position_received_at is not None else None
+        )
         freshness_window_ms = int(round(max(freshness_window_s, 0.0) * 1000))
         samples_fresh = (
             armed_age_ms is not None
@@ -1422,7 +1447,14 @@ class MavlinkBackendSession:
             and armed_age_ms <= freshness_window_ms
             and landed_age_ms <= freshness_window_ms
         )
-        complete = armed is False and landed_state == on_ground and samples_fresh
+        position_fresh = position_age_ms is not None and position_age_ms <= freshness_window_ms
+        position_after_landing = (
+            position_sequence is not None and armed_sequence is not None
+            and landed_sequence is not None
+            and position_sequence > max(armed_sequence, landed_sequence)
+        )
+        complete = (armed is False and landed_state == on_ground and samples_fresh
+                    and (not require_local_position or (position_fresh and position_after_landing)))
         evidence_count = int(armed is not None) + int(landed_state is not None)
         any_sample_stale = (
             (armed_age_ms is not None and armed_age_ms > freshness_window_ms)
@@ -1451,6 +1483,12 @@ class MavlinkBackendSession:
             "landed_sample_timestamp": landed_timestamp,
             "armed_sample_age_ms": armed_age_ms,
             "landed_sample_age_ms": landed_age_ms,
+            "position_vehicle_local_ned_m": position,
+            "position_sequence": position_sequence,
+            "position_sample_timestamp": position_timestamp,
+            "position_sample_age_ms": position_age_ms,
+            "position_fresh": position_fresh,
+            "position_after_landing": position_after_landing,
             "freshness_window_ms": freshness_window_ms,
             "completion_reached": complete,
             "cancelled": cancelled,
@@ -1617,39 +1655,28 @@ class MavlinkBackendSession:
         *,
         timeout_s: float = 60.0,
         min_progress_m: float = 5.0,
+        home_local_north_m: float,
+        home_local_east_m: float,
+        home_tolerance_m: float,
+        stable_duration_s: float,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """让载具自主返航（``AUTO + RTL``），并**验证它真的在朝 home 收敛**。
+        """Request RTL and wait for fresh, stable horizontal arrival at a verified local target.
 
-        ⚠️ 判据为什么是位置而不是模式
-        -----------------------------
-        本方法最容易写错的地方就是"``set_mode`` 成功 → 报成功"。飞控接受 RTL
-        不等于飞机在返航：可能被拒绝执行、被其它模式抢占、或 home 点未定义。
-        那次事故正是这个形状 —— 接受了一个"正在返航"的模式并报 pass。
-
-        因此这里要求到 home 的**三维距离确实缩小 min_progress_m** 才判成功。
-        用"最大距离 − 最终距离"而不是"逐样本单调下降"：RTL 会先爬升到安全高度
-        再平飞，三维距离在早期可能不降反升，要求单调会把正常返航误判成失败。
-
-        ⚠️ RTL 与 PINNED_MODES
-        ----------------------
-        RTL **不在** ``PINNED_MODES`` 里，而且不应被加进去。那个集合的语义是
-        "确认安全、可作为回退目标"，而 RTL 是自主机动。本方法是对 RTL 的
-        **显式请求**，与"当成安全回退接受"是两件不同的事。
-
-        Returns:
-            含 ``returning``、``reason``、``initial_distance_m``、
-            ``final_distance_m``、``distance_reduction_m``、``mode``、
-            ``failure_reason`` 的证据字典。
-
-        Raises:
-            RuntimeError: 连接未建立。
+        The target comes from a validated scene landing site minus the current
+        per-vehicle calibration. Progress alone is reported as in_progress and
+        never as completion.
         """
         if self.connection is None:
             raise RuntimeError("connection_required")
+        if not all(math.isfinite(value) for value in (home_local_north_m, home_local_east_m,
+                                                     home_tolerance_m, stable_duration_s)):
+            raise ValueError("return_home_target_invalid")
+        if home_tolerance_m <= 0 or stable_duration_s <= 0:
+            raise ValueError("return_home_target_invalid")
 
         self.start_gcs_heartbeat()
-
+        start_sequence = self.local_position_cursor()
         mode_result = self.set_mode(
             main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
             sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
@@ -1672,11 +1699,7 @@ class MavlinkBackendSession:
                 "failure_reason": "return_home_mode_not_confirmed",
             }
 
-        # home 在 PX4 里是 EKF 原点，也就是本机 local NED 的原点。
-        # goto() 用的也是这套坐标（见其文档字符串），因此这里直接用 (0, 0, z)。
-        # 高度分量用首个样本的 z：RTL 的目标不是回到 z=0（那会撞地），
-        # 而是回到 home 上方并降落，所以水平收敛才是判据，高度只作参考。
-        start_sequence = self.local_position_cursor()
+        # The PX4 EKF origin is not assumed to be the physical home pad.
         deadline = time.monotonic() + max(float(timeout_s), 0.1)
 
         first_distance: float | None = None
@@ -1684,6 +1707,9 @@ class MavlinkBackendSession:
         last_distance: float | None = None
         last_down: float | None = None
         samples = 0
+        arrival_started_at: float | None = None
+        arrival_samples = 0
+        last_sample_sequence = start_sequence
 
         def finish(evidence: dict[str, Any]) -> dict[str, Any]:
             """统一出口：先留证据，再返回（理由同 hold_position.finish）。"""
@@ -1701,20 +1727,28 @@ class MavlinkBackendSession:
             with self._rx_condition:
                 fresh = [row for row in self._local_positions if row[0] > start_sequence]
             if fresh:
-                _, x, y, z, _, _ = fresh[-1]
+                sequence, x, y, z, received_at, _ = fresh[-1]
                 samples = len(fresh)
-                distance = math.sqrt(float(x) ** 2 + float(y) ** 2)
+                distance = math.hypot(float(x) - home_local_north_m, float(y) - home_local_east_m)
                 last_down = float(z)
                 if first_distance is None:
                     first_distance = distance
                     max_distance = distance
                 max_distance = max(max_distance or distance, distance)
                 last_distance = distance
-                # 用"最远时刻 − 当前"衡量进展：RTL 可能先爬升再平飞，
-                # 用逐样本单调下降会把正常返航误判为失败。
-                if (max_distance - distance) >= max(float(min_progress_m), 0.0):
+                if sequence > last_sample_sequence:
+                    last_sample_sequence = sequence
+                    if distance <= home_tolerance_m and time.monotonic() - received_at <= 2.0:
+                        arrival_started_at = arrival_started_at or received_at
+                        arrival_samples += 1
+                    else:
+                        arrival_started_at = None
+                        arrival_samples = 0
+                if (arrival_started_at is not None and arrival_samples >= 3
+                        and received_at - arrival_started_at >= stable_duration_s
+                        and time.monotonic() - received_at <= 2.0):
                     return finish({
-                        "returning": True, "reason": "converging_on_home",
+                        "returning": False, "reason": "arrived_at_home_site",
                         "samples": samples,
                         "initial_distance_m": first_distance,
                         "max_distance_m": max_distance,
@@ -1722,14 +1756,19 @@ class MavlinkBackendSession:
                         "distance_reduction_m": max_distance - distance,
                         "min_progress_m": float(min_progress_m),
                         "last_down_m": last_down,
+                        "arrival_samples": arrival_samples,
+                        "home_tolerance_m": home_tolerance_m,
+                        "stable_duration_s": stable_duration_s,
                         "mode": mode_evidence,
                         "failure_reason": None,
                     })
             time.sleep(0.05)
 
+        progressed = (max_distance is not None and last_distance is not None
+                      and max_distance - last_distance >= max(float(min_progress_m), 0.0))
         return finish({
-            "returning": False,
-            "reason": "no_convergence",
+            "returning": bool(progressed),
+            "reason": "in_progress" if progressed else "no_convergence",
             "samples": samples,
             "initial_distance_m": first_distance,
             "max_distance_m": max_distance,
@@ -1742,8 +1781,11 @@ class MavlinkBackendSession:
             # 实际执行的那一份是同一个值。
             "min_progress_m": float(min_progress_m),
             "last_down_m": last_down,
+            "arrival_samples": arrival_samples,
+            "home_tolerance_m": home_tolerance_m,
+            "stable_duration_s": stable_duration_s,
             "mode": mode_evidence,
-            "failure_reason": "return_home_not_converging",
+            "failure_reason": "return_home_in_progress" if progressed else "return_home_not_converging",
         })
 
     def observe_arrival(

@@ -298,6 +298,46 @@ def test_takeoff_and_land_actions_never_stop_persistent_heartbeat(monkeypatch) -
     assert session.heartbeat_thread_alive() is True
 
 
+def test_operator_land_without_trusted_site_is_not_task_success(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, _FakePx4ActionSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_land_action(landing_site={}, translation_scene_ned_m={})
+
+    assert result["land_ack"]["result"] == 0
+    assert result["completion_evidence"]["completion_reached"] is True
+    assert result["result"] == "fail"
+    assert result["failure_reason"] == "landing_site_unavailable"
+
+
+def test_operator_land_on_roof_is_not_pad_success(monkeypatch) -> None:
+    class RoofSession(_FakePx4ActionSession):
+        def observe_landed_and_disarmed(self, *, require_local_position=False, **kwargs) -> dict:
+            assert require_local_position is True
+            return {
+                "status": "succeeded", "telemetry_state": "fresh", "landed_state": 1,
+                "landed_state_name": "on_ground", "armed": False,
+                "completion_reached": True, "position_fresh": True,
+                "position_vehicle_local_ned_m": {"north": 15.6, "east": -0.7, "down": -9.98},
+            }
+
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, RoofSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+    site = {"object_id": "landing-pad-UAV-01", "center_scene_ned_m": {"north": 0.0, "east": 0.0, "down": 0.0},
+            "horizontal_tolerance_m": 0.75, "ground_down_m": 0.0, "vertical_tolerance_m": 0.3}
+
+    result = backend.execute_land_action(landing_site=site,
+                                         translation_scene_ned_m={"north": 0.0, "east": 0.0, "down": 0.0})
+
+    assert result["land_ack"]["result"] == 0
+    assert result["completion_evidence"]["landed_state"] == 1
+    assert result["result"] == "fail"
+    assert result["failure_reason"] == "landing_outside_allowed_site"
+    assert result["completion_evidence"]["landing_site_check"]["on_allowed_site"] is False
+
+
 def test_operational_takeoff_ack_is_not_success_without_stable_altitude(monkeypatch) -> None:
     class IncompleteTakeoffSession(_FakePx4ActionSession):
         def observe_takeoff_completion(self, **kwargs) -> dict:

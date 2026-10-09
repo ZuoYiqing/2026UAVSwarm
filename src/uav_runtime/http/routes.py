@@ -47,7 +47,7 @@ from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
-from uav_runtime.runtime.replay import replay_last
+from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
@@ -210,6 +210,21 @@ def _idempotent_response(action: dict[str, Any]) -> dict[str, Any]:
         "idempotent_replay": True,
         "_http_status": 202 if action.get("status") in {"requested", "accepted", "executing"} else 200,
     }
+
+
+def _validated_landing_context(node_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Use a pad only when both independent evidence sources are fresh and matched."""
+    calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(node_id)
+    site, site_status = RUNTIME_STATE_STORE.landing_site(node_id)
+    if calibration_status != "calibrated" or site_status != "validated" or not calibration or not site:
+        return None
+    if (site.get("scene_id") != calibration.get("scene_id")
+            or site.get("map_version") != calibration.get("map_version")
+            or site.get("node_id") != node_id
+            or calibration.get("axis_alignment") != "ned_aligned"
+            or calibration.get("origin_continuity") != "verified"):
+        return None
+    return calibration, site
 
 
 def _finalize_action(
@@ -435,6 +450,7 @@ def _execute_flight_action(
             RUNTIME_STATE_STORE.record_event(event)
     cancel_event = admission["cancel_event"]
     RUNTIME_STATE_STORE.transition_action(action_id, "executing")
+    landing_context: tuple[dict[str, Any], dict[str, Any]] | None = None
     try:
         backend = Px4SitlBackend(cfg, handle.session)
         rt.gateway.register(Px4RuntimeActionAdapter(backend))
@@ -529,10 +545,37 @@ def _execute_flight_action(
             }
         elif action == "return_home":
             assert isinstance(req, ReturnHomeRequest)
-            # 同理不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
+            landing_context = _validated_landing_context(handle.config.node_id)
+            if landing_context is None:
+                out = {**identity, "action": action, "result": "fail", "accepted": False,
+                       "execution_admitted": False, "failure_reason": "landing_site_unavailable",
+                       "code": "landing_site_unavailable", "completion_state": "unknown",
+                       "policy_decision": policy_event, "ack_evidence": [], "completion_evidence": None}
+                return _finalize_action(action_id=action_id, out=out, handle=handle,
+                                        rt=rt, cfg=cfg, event_type="http_return_home")
+            calibration, site = landing_context
+            center = site["center_scene_ned_m"]
+            offset = calibration["translation_scene_ned_m"]
             action_req.params = {
                 "timeout_s": req.timeout_s,
                 "min_progress_m": req.min_progress_m,
+                "home_local_north_m": float(center["north"]) - float(offset["north"]),
+                "home_local_east_m": float(center["east"]) - float(offset["east"]),
+                "home_tolerance_m": min(req.home_tolerance_m, float(site["horizontal_tolerance_m"])),
+                "stable_duration_s": req.stable_duration_ms / 1000.0,
+                "landing_site_id": site["object_id"],
+                "_cancel_event": cancel_event,
+            }
+        elif action == "land":
+            # LAND remains available as a controlled recovery command. Missing
+            # site evidence must not prevent sending it, but cannot yield task success.
+            landing_context = _validated_landing_context(handle.config.node_id)
+            calibration, site = landing_context if landing_context is not None else ({}, {})
+            action_req.params = {
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "landing_site": site,
+                "translation_scene_ned_m": calibration.get("translation_scene_ned_m", {}),
                 "_cancel_event": cancel_event,
             }
         else:
@@ -555,6 +598,15 @@ def _execute_flight_action(
         out.update(identity)
         out["execution_admitted"] = True
         out["policy_decision"] = policy_event
+        if action in {"land", "return_home"} and out.get("result") == "pass":
+            current_context = _validated_landing_context(handle.config.node_id)
+            if (landing_context is None or current_context is None
+                    or current_context[0].get("calibration_version") != landing_context[0].get("calibration_version")
+                    or current_context[1].get("world_sha256") != landing_context[1].get("world_sha256")
+                    or current_context[1].get("object_id") != landing_context[1].get("object_id")):
+                reason = "landing_site_unavailable" if landing_context is None else "landing_site_evidence_stale"
+                out.update(result="fail", accepted=False, failure_reason=reason,
+                           code=reason, completion_state="unknown")
         result_event = {
             **_adapter_event("adapter_execution_result", handle, action, result=out),
             "action_id": action_id,
@@ -636,14 +688,7 @@ def hold_position(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def return_home(payload: dict[str, Any]) -> dict[str, Any]:
-    """自主返航（RETURN_HOME / AUTO+RTL），并验证它真的在朝 home 收敛。
-
-    不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
-
-    ⚠️ 判据是**到 home 的距离确实缩小**，不是"模式变成了 RTL"。
-    本项目出过一次事故：收尾阶段把 AUTO_RTL 当成安全悬停接受，飞机自主返航
-    而动作报 pass。这个端点的实现刻意与之相反。
-    """
+    """Request RTL only with a validated pad and complete at stable pad arrival."""
     return _execute_flight_action(
         ReturnHomeRequest.from_json(payload), action="return_home"
     )
@@ -958,9 +1003,8 @@ def actions_recent(query: str = "") -> list[dict[str, Any]]:
     """Read-only recent action views derived from audit/replay events."""
     values = parse_qs(query, keep_blank_values=True)
     n = _query_int(values, "n", 20)
-    raw_events = replay_last(AUDIT_PATH, n=max(n * 5, n))
-    action_events = [event for event in raw_events if _is_action_result_event(event)]
-    return [event_to_action_result_view(event, index=i).to_dict() for i, event in enumerate(action_events[-n:])]
+    events = replay_recent_unique_actions(AUDIT_PATH, n, is_action_result=_is_action_result_event)
+    return [event_to_action_result_view(event, index=i).to_dict() for i, event in enumerate(events)]
 
 
 def policy_decisions(query: str = "") -> list[dict[str, Any]]:
