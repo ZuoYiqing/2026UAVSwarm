@@ -1,5 +1,40 @@
 # 交接：`return-home` 之后接 `land`，飞机停在约 10 m 且 `armed=False`
 
+> ## ⚠️ 本文件的诊断已被推翻 —— 结论见下方更正
+>
+> **2026-10-09 查明**：飞机**不是悬停在空中**，而是**落在了 building-001 的
+> 10 m 屋顶上**。
+>
+> 完整物理证据（ULog + world SDF）：
+> [`docs/simulation/RETURN_HOME_LAND_ROOFTOP_20261009_ZH-CN.md`](../docs/simulation/RETURN_HOME_LAND_ROOFTOP_20261009_ZH-CN.md)
+>
+> **本文件以下内容保留原样**（它记录了当时的观察与我的推测，交接历史有价值），
+> 但**两处判断是错的**，读的时候必须带上：
+>
+> | 我写的 | 实际 |
+> | --- | --- |
+> | "飞机停在离地约 10 m … 不是下降，是停住" | **是屋顶着陆**。PX4 `dist_bottom ≈ 0.01 m` 与 `building-001` 的 10 m 屋顶碰撞体接触相符 |
+> | "推测：`return-home` 进入 `RTL`，与 `land` 冲突" | **冲突不存在**。`LAND` 正常执行：PX4 Commander 的 `VEHICLE_CMD_NAV_LAND` 强制请求 `AUTO_LAND` 并记录 `Landing at current position` —— 在**当前位置正下方**降落 |
+>
+> **我为什么会误判**：只看了"相对原点高度约 10 m"这一个数，没有对照
+> `dist_bottom` 与场景碰撞体。**相对高度单独一个数，不足以判断"在空中"
+> 还是"在某个东西上面"。**
+>
+> **真正的问题在两个别的地方**（都不是本文件原先指的方向）：
+>
+> 1. **Runtime 的 `return_home` 完成语义过松**（⚠️ 未修）：审计里的
+>    `5.039 m` 进度取自"途中 `max_distance` − `final_distance`"，
+>    **不是** `28.625 − 23.704`（= 4.922）。它只证明"开始向 home 收敛"，
+>    不能证明已到 home。于是 Runtime 在距离刚开始缩短时就报成功，
+>    随后的 `LAND` 变成"在当前位置降落"。
+> 2. **仿真 standalone 巡逻**把屋顶 `landed` 当成场景地面着陆成功
+>    —— 已在 PR #87（`af1136b`）修复：现在要求公共 `scene_ned` 高度
+>    在地面 ±0.3 m 内，屋顶会报 `scene_ground_not_reached`。
+>
+> **另外**：`landing-pad-UAV-0x` 在 world 里只有**视觉**对象（无 collision），
+> 承重面是 `ground_plane`。所以"视觉半径 1.5 m"不能当成已验证的安全半径；
+> 起降点证据仍需逐机真实着陆验证后才能发布给 Runtime。
+
 **日期**：2026-10-09
 **环境**：主仓库 `2475e27`（WORKTREE 无关，仿真从主仓库起）
 **仿真**：相机版 `three_uav_mono_cam_sitl.json`，`x500_mono_cam_0/1/2`，RTF 0.82

@@ -224,23 +224,74 @@ pgrep -af 'gz sim'
 要做端到端感知验收，必须先决定相机证据怎么进 Runtime
 （现成通道是 `/api/simulation/evidence`，`evidence_source` 可标 `simulation_*`）。
 
-### 5.2 `return-home` 之后接 `land`，飞机停在约 10 m
+### 5.2 `return-home` 之后接 `land`，飞机落在 **10 m 屋顶**（2026-10-09 查明）
 
-**现象**（完整交接文档见 `_ops/HANDOFF_return_home_then_land.md`）：
+> **本节原先记的现象与推测是错的，已按根因重写。** 原记录称"飞机停在约 10 m
+> 空中悬停"并推测"`RTL` 与 `land` 冲突"——**两者都不对**。
+> 完整物理证据见
+> [`docs/simulation/RETURN_HOME_LAND_ROOFTOP_20261009_ZH-CN.md`](../simulation/RETURN_HOME_LAND_ROOFTOP_20261009_ZH-CN.md)。
+
+**真实过程**（ULog + world SDF 证据）：
 
 ```
-takeoff / goto / hold-position / return-home / land  全部返回 succeeded
-但随后直连采样 12 秒：UAV-01 停在离地约 10 m、水平静止、armed=False、mode=LOITER
-高度平均变化 -0.005 m/s —— 不是下降，是停住
+LAND 正常执行了。PX4 Commander 的 VEHICLE_CMD_NAV_LAND 分支强制请求 AUTO_LAND，
+并记录 "Landing at current position"；ULog 显示 nav_state 从 RTL(5) 切到 AUTO.LAND(18)，
+随后下降。
+
+它在**当前位置的正下方**降落 —— 而正下方是 building-001 的 10 m 屋顶。
+  world 中 building-001 是实际碰撞体：ENU 中心 (E=0, N=15, U=5)，箱体 6×6×10 m
+  该机停在 N≈15.6, E≈-0.7 —— 正在屋顶覆盖范围内（N=[12,18], E=[-3,3]）
+  PX4 dist_bottom ≈ 0.01 m 与碰撞体接触相符 → 报 landed 并 disarm
 ```
 
-**对照实验**：同样的序列**去掉 `return-home`** → 干净落地（0.00 m）。
+**所以"离地 10 m 且 armed=False"是屋顶着陆，不是悬停。** 飞控的行为与物理相符。
 
-**推测（未确证）**：`return-home` 进入 `RTL`，而 `RTL` 自带"返航 + 自动降落"，
-我在它执行到一半时插入了一发 `land`。
+**原先为什么会误判**：只看了"相对原点高度约 10 m"，没有对照 `dist_bottom`
+与场景碰撞体。**相对高度单独一个数不足以判断"在空中"还是"在东西上面"。**
 
-**现状**：`return_home` 应记为 **实现 ✅ / 判据通过 ✅ / 与 `land` 的衔接 ⚠️ 待查**，
-不宜记为"完全通过"。
+#### 两个必须分清的问题
+
+| 问题 | 归属 | 状态 |
+| --- | --- | --- |
+| **① `return_home` 的完成语义过松** | **Runtime** | ⚠️ **未修** |
+| ② standalone 巡逻把屋顶 `landed` 当成场景地面着陆成功 | 仿真 | ✅ 已修（PR #87） |
+
+**① 的具体内容**（Runtime 审计记录）：
+
+```
+return-home 当时: initial_distance_m = 28.625,  final_distance_m = 23.704
+审计里的 5.039 m "进度" = 途中 max_distance − final_distance
+                          **不是** 28.625 − 23.704（= 4.922）
+
+→ 它只证明"开始向 home 收敛"，**不能证明已到 home**。
+→ 于是 Runtime 在距离刚开始缩短时就把 return-home 报成成功，
+  随后发出的 LAND 变成"在当前位置降落"。
+```
+
+**这条判据过松是本次事故的直接原因之一。** Runtime 侧的正式动作判据、
+逐机起降点证据及真实联调**仍待完成**。
+
+**② 的修法**（仿真侧，已合并 `af1136b`）：standalone 巡逻现在要求
+`landed` + disarmed + **公共 `scene_ned` 高度在地面 ±0.3 m 内** + 至少 3 个
+新位姿样本并保持 0.5 秒；屋顶的 `landed=True` 会报 `scene_ground_not_reached`，
+已上锁但没有地面证据时恢复流程不会重复发送 LAND。
+
+> ⚠️ 该判据**不**使 Runtime 的 `land` 动作自动变安全，也**不是**新场景
+> 任意高度地面/屋顶的通用规则。
+
+#### 起降点本身还没有证据
+
+```
+landing-pad-UAV-01/02/03: 公共坐标中心 (N,E,D) = (0,0,0) / (0,+8,0) / (0,-8,0)
+  在 world 中是半径 1.5 m 的圆柱**视觉对象**，顶面 U=0.05 m
+  **没有 collision** —— 承重面是 ground_plane 的 U=0 碰撞平面
+```
+
+**所以不能把"视觉半径 1.5 m"当成已验证的安全半径。** 仿真侧的建议是：
+先提案中心到位容差 ≤0.75 m，**需逐机真实着陆验证后**再标 `valid=true`，
+并以单独版本化的站点证据向 Runtime 发布；**无证据时 Runtime 应拒绝
+"已在指定起降点"这一任务完成声明**。
+
 
 ### 5.3 降落后可能停在 `LAND` 模式，此后无法再起飞
 
@@ -323,22 +374,46 @@ git checkout <tag>
 
 # 确认工作区干净后
 python3 scripts/check_environment.py
-python -m pytest -q                          # 期望 757 passed / 6 skipped
+python -m pytest -q                          # tag 处期望 757 passed / 6 skipped
 cd frontend/swarm-console && npm test        # 期望 108
 cd frontend/swarm-console/simulation-3d && npm test   # 期望 80
 ```
 
+> **测试数会随 main 前进而变，别把它当固定值。** tag `bfa75e8` 处是
+> **757 passed / 6 skipped**；其后仿真侧合并 PR #87（`af1136b`）后是
+> **760 passed / 6 skipped**。
+> **判断标准是"全绿"，不是"等于某个数"** —— 数字对不上时先看 diff，
+> 而不是先怀疑环境。
+
 ---
 
-## 7. 迁移时的三条最要紧的话
+## 7. 迁移时的四条最要紧的话
 
 1. **不要只看"起来了"。** 本项目的坑几乎都是"看起来完全正常"：
    起的是默认版却以为在跑相机版、检查的配置不是在跑的、标定读的是过期证据。
    **每一项都要用独立信号确认。**
 
-2. **动作返回成功 ≠ 事情做成了。** `land` 返回 `succeeded` 而飞机停在 10 m 就是实例。
-   判"飞机在哪"只能读遥测。
+2. **动作返回成功 ≠ 事情做成了。** `land` 返回 `succeeded` 而飞机落在屋顶上
+   就是实例（见 §5.2）。判"飞机在哪"只能读遥测 —— **而且要看对字段**。
 
-3. **读不到不等于否定。** 遥测 `None`、`/proc/net/udp` 空、脚本退出码非零 ——
-   这些都要报 `unknown` 并人工确认，**不能判成失败，也不能判成通过**。
-   本次冻结过程中，我自己在三个地方犯过这个错（见 `39607bd` 的提交信息）。
+3. **一个数不足以判断状态，要问"它相对于什么"。**
+   这是 §5.2 那次误判的根因，值得单独列出来：
+
+   | 我当时看到的 | 我据此判断 | 实际 |
+   | --- | --- | --- |
+   | "相对原点高度约 10 m、水平不动" | 飞机**悬停在空中** | 它**落在 10 m 屋顶上** |
+   | `armed=False` 却在 10 m | 状态自相矛盾 | 完全正常：屋顶着陆后 disarm |
+
+   **缺的那一项是 `dist_bottom`（离下方表面的距离）**，它是 `0.01 m` ——
+   一眼就能看出"脚下有东西"。
+
+   **同类的坑**：`return_home` 的进度取自"途中 `max_distance` − `final_distance`"
+   而不是"起点 − 终点"，于是"距离确实在缩短"被当成了"回到 home 了"。
+   **问一句"这个数是从哪儿到哪儿"，就能避免。**
+
+4. **读不到不等于否定，算错了也不等于对。** 遥测 `None`、`/proc/net/udp` 空、
+   脚本退出码非零 —— 这些都要报 `unknown` 并人工确认，**不能判成失败，
+   也不能判成通过**。而反过来，**数值算得对、口径不对**同样会给出错误的结论
+   （§5.2 的 5.039 m 就是"算得对但口径不是它声称的那个意思"）。
+   本次冻结过程中，我自己在三个地方犯过"把缺失当结论"的错
+   （见 `39607bd` 的提交信息）。
