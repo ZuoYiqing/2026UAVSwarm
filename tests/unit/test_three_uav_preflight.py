@@ -264,3 +264,145 @@ def test_preflight_subcommand_exits_zero_when_clean(tmp_path: Path) -> None:
         ]
     )
     assert exit_code == 0
+
+
+# --- 第三个错位：检查的配置 ≠ 实际在跑的配置 -------------------------------
+#
+# 实测教训（2026-10-09）：调用方拿**相机** manifest 跑 preflight，
+# 而实际在跑的是**默认** manifest。preflight 报了 `camera.present=True`、
+# `ok: True` —— 因为**它只回答"你给我的这份有没有相机"**，
+# 不回答"现在实际跑的是哪一份"。于是它把一个真实错位放过去了：
+# 世界里是 x500_0/1/2（无相机），而调用方以为在跑相机版。
+#
+# 这是"两个流程错位"的第三种形态，也是最难发现的一种 —— 因为
+# 前面两种会让你看到显眼的警告，这一种只会让你**以为一切正常**。
+
+
+def _write_state(repo: Path, manifest_path: str) -> None:
+    runtime = repo / ".runtime" / "px4_gazebo"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "harness_state.json").write_text(
+        json.dumps({"manifest_path": manifest_path, "run_id": "run-x"}),
+        encoding="utf-8",
+    )
+
+
+def test_preflight_detects_running_manifest_different_from_checked_one(
+    tmp_path: Path,
+) -> None:
+    """实际在跑默认 manifest，而检查的是相机 manifest → 必须报错。
+
+    这是本组测试的核心：这种错位**不会自己暴露**，只能靠显式比对。
+    """
+    fake_repo = tmp_path / "main"
+    _write_state(fake_repo, str(fake_repo / "simulation/px4_gazebo/config/three_uav_sitl.json"))
+
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST),
+        repo_root=fake_repo,
+        manifest_path=fake_repo / "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json",
+    )
+    findings = {f["code"]: f for f in report["findings"]}
+    assert "running_manifest_mismatch" in findings, (
+        "应报出「检查的配置与实际在跑的不是同一份」，实际 findings: "
+        f"{[f['code'] for f in report['findings']]}"
+    )
+    assert findings["running_manifest_mismatch"]["severity"] == "error"
+    assert report["ok"] is False
+
+
+def test_mismatch_finding_names_both_manifests(tmp_path: Path) -> None:
+    """必须同时给出**两份**路径 —— 只说"不一致"等于没说。"""
+    fake_repo = tmp_path / "main"
+    running = fake_repo / "simulation/px4_gazebo/config/three_uav_sitl.json"
+    checked = fake_repo / "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json"
+    _write_state(fake_repo, str(running))
+
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST),
+        repo_root=fake_repo,
+        manifest_path=checked,
+    )
+    finding = next(f for f in report["findings"] if f["code"] == "running_manifest_mismatch")
+    text = json.dumps(finding, ensure_ascii=False)
+    assert "three_uav_sitl.json" in text, "要指出实际在跑的那份"
+    assert "three_uav_mono_cam_sitl.json" in text, "要指出被检查的那份"
+
+
+def test_preflight_reports_agreeing_manifest_as_positive_fact(tmp_path: Path) -> None:
+    """两份一致时要给出**肯定**结论，而不是"没有警告"。
+
+    操作者需要看到"检查的就是在跑的"，而不是靠"没报错"去推断 ——
+    后者在警告被漏看时会误导。
+    """
+    fake_repo = tmp_path / "main"
+    same = fake_repo / "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json"
+    _write_state(fake_repo, str(same))
+
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST),
+        repo_root=fake_repo,
+        manifest_path=same,
+    )
+    assert "running_manifest_mismatch" not in _codes(report)
+    assert report["running_manifest"]["matches_checked"] is True
+    assert report["running_manifest"]["path"]
+
+
+def test_no_running_state_is_not_a_mismatch(tmp_path: Path) -> None:
+    """没有 harness state（仿真没跑）时不该报 mismatch。
+
+    那说明"还没起仿真"，是另一种情况，不该混为"配置不一致" ——
+    把两者混起来会让操作者去改配置，而实际问题是他还没启动。
+    """
+    fake_repo = tmp_path / "main"
+    fake_repo.mkdir()
+
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST),
+        repo_root=fake_repo,
+        manifest_path=fake_repo / "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json",
+    )
+    assert "running_manifest_mismatch" not in _codes(report)
+    assert report["running_manifest"]["matches_checked"] is None, "没有在跑的 → 未知，不是 False"
+
+
+def test_equivalent_paths_by_filename_are_treated_as_matching(tmp_path: Path) -> None:
+    """路径写法不同但指向同一份配置时，不该报 mismatch。
+
+    实测中一侧是绝对路径、另一侧是相对路径 —— 直接字符串比较会误报。
+    """
+    fake_repo = tmp_path / "main"
+    same = fake_repo / "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json"
+    same.parent.mkdir(parents=True)
+    same.write_text(CAMERA_MANIFEST.read_text(encoding="utf-8"), encoding="utf-8")
+    # state 里存的是相对路径的形式
+    _write_state(fake_repo, "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json")
+
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST),
+        repo_root=fake_repo,
+        manifest_path=same,
+    )
+    assert "running_manifest_mismatch" not in _codes(report), (
+        f"同一份配置的两种路径写法不该报不一致：{report['running_manifest']}"
+    )
+
+
+def test_cli_reports_mismatch_with_nonzero_exit(tmp_path: Path) -> None:
+    """CLI 也必须以非零退出码表达这个错位 —— 否则脚本消费不到。"""
+    fake_repo = tmp_path / "main"
+    _write_state(fake_repo, str(fake_repo / "simulation/px4_gazebo/config/three_uav_sitl.json"))
+
+    exit_code = harness.main(
+        [
+            "preflight",
+            "--config",
+            str(CAMERA_MANIFEST),
+            "--repo-root",
+            str(fake_repo),
+            "--worktrees-root",
+            str(tmp_path / "nonexistent"),
+        ]
+    )
+    assert exit_code != 0

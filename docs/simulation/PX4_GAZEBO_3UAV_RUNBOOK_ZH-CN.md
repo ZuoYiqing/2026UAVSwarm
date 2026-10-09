@@ -166,6 +166,42 @@ GUI：
 bash simulation/px4_gazebo/scripts/start_three_uav.sh --gui
 ```
 
+### 相机版（`x500_mono_cam`）
+
+上面两条用的是**默认 manifest** `three_uav_sitl.json`，模型是 `x500_0/1/2` ——
+**没有成像相机**。需要相机的验收要用另一份 manifest，并显式指定 GPU 适配器：
+
+```bash
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+  bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless \
+    --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+```
+
+**`MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` 不能省。** 不加它 WSL 会挑到集显，
+实时因子从 **0.839 掉到 0.175**（实测，见
+[`MONO_CAM_3UAV_ACCEPTANCE_ZH-CN.md`](MONO_CAM_3UAV_ACCEPTANCE_ZH-CN.md)）。
+该变量只作用于本次进程，不改系统设置。
+
+| 配置 | 模型 | 相机 |
+| --- | --- | --- |
+| `three_uav_sitl.json`（默认） | `x500_0/1/2` | ❌ |
+| `three_uav_mono_cam_sitl.json` | `x500_mono_cam_0/1/2` | ✅ 1280×960 RGB |
+
+> **⚠️ `--config` 只在启动时生效**，不能热改。已经用默认版起来了就必须先停再起。
+> 混淆的后果见第 14 节「`running_manifest_mismatch`」。
+
+### 启动前自检
+
+```bash
+python3 simulation/px4_gazebo/harness.py preflight \
+  --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+```
+
+它会报告：① 这份配置有没有相机；② harness state 是否写在**别的仓库**
+（`harness.py` 的 `REPO_ROOT` 是它所在目录的上两级，因此状态与标定证据跟着
+跑仿真的那个仓库走，而 Runtime 只认本仓库的 `.runtime/`）；
+③ **当前实际在跑的是不是被检查的这一份**。错位时退出码非 0。
+
 启动前 Harness 会拒绝：
 
 - 非 Linux / WSL 环境；
@@ -539,6 +575,54 @@ bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh cleanup
 gz topic -l | grep simple_recon_v0_1
 ss -lunp | grep -E '14540|14541|14542|14580|14581|14582'
 ```
+
+### `running_manifest_mismatch`（起的是默认版却以为在跑相机版）
+
+`preflight` 报：
+
+```
+[error] running_manifest_mismatch
+  本检查针对的是 …/three_uav_mono_cam_sitl.json，
+  但当前实际在跑的是 …/three_uav_sitl.json
+```
+
+**含义**：世界里的模型是 `x500_0/1/2`（**无相机**），而调用方以为在跑相机版。
+
+**为什么危险**：那个状态**表面完全正常** —— 端口对、`health` 可能 ready、
+**飞机能飞**（TAKEOFF/GOTO/LAND 全正常）。**只有相机动作会失败**，所以它不会自己暴露。
+
+**三个独立信号**（任一个命中即确认）：
+
+```bash
+gz model --list | grep x500        # 无相机: x500_0/1/2；相机版: x500_mono_cam_0/1/2
+python3 simulation/px4_gazebo/harness.py preflight --config <相机 manifest>
+# health 报 gazebo_models_missing
+```
+
+**解法**：`--config` 只在启动时生效，**必须先停再起**：
+
+```bash
+bash simulation/px4_gazebo/scripts/stop_three_uav.sh
+for p in 14540 14541 14542; do ss -lunp | grep -q ":$p " && echo "$p 仍占用" || echo "$p 空闲"; done
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+  bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless \
+    --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+```
+
+> 这条检查最初**只回答"你给我的这份配置有没有相机"**，不回答"现在实际跑的是哪一份"，
+> 于是对一次无相机的运行会乐观地报 `camera.present=True`。现在它读 harness state 里的
+> `manifest_path` 做显式比对 —— **不靠模型名反推**。
+
+### `state_in_other_worktree`（标定读到过期证据）
+
+`preflight` 报本仓库没有 harness state、而某个 worktree 里有。含义是仿真跑在了
+**别的仓库**下（`harness.py` 的 `REPO_ROOT` 是它所在目录的上两级），而 Runtime 只认
+`<repo>/.runtime/px4_gazebo/`。
+
+**症状**：前端**能连上飞机**，但标定 `stale`、三维视图不显示载具、`goto` 被拒
+（`coordinate_calibration_unavailable`）。
+
+**解法**：从本仓库启动仿真；或让调用方把仓库根指向那个 worktree。
 
 ## 15. 测试
 

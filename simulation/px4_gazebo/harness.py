@@ -1313,6 +1313,39 @@ def camera_models(manifest: dict[str, Any]) -> list[str]:
     return names
 
 
+def _normalized_path_text(path: Path | str) -> str:
+    """把一个路径归一化成可比较的字符串。
+
+    为什么需要：实测中"同一份配置"会以不同写法出现在两侧 ——
+    一侧绝对路径、一侧相对路径；Windows 用反斜杠、WSL 用正斜杠。
+    直接字符串比较会**误报"不一致"**，而误报会让这个检查失去可信度。
+    """
+    text = str(path).strip().replace("\\", "/")
+    # 折叠重复斜杠（除开头的双斜杠，如 UNC）
+    while "//" in text[1:]:
+        text = text.replace("//", "/")
+    return text.rstrip("/")
+
+
+def _same_manifest(a: Path | str | None, b: Path | str | None) -> bool | None:
+    """两份路径是否指向同一份配置。任一侧缺失时返回 None（未知）。
+
+    比较**文件名 + 归一化路径的后缀**：文件名相同且其中一个路径是另一个的后缀，
+    即视为同一份。这样 `/mnt/d/repo/x/a.json` 与 `D:/repo/x/a.json`
+    在文件名一致时也判为同一份 —— 跨 WSL/Windows 的路径本来就无法逐字符比较。
+    """
+    if a is None or b is None:
+        return None
+    left, right = _normalized_path_text(a), _normalized_path_text(b)
+    if left == right:
+        return True
+    left_name, right_name = left.rsplit("/", 1)[-1], right.rsplit("/", 1)[-1]
+    if left_name != right_name:
+        return False
+    # 文件名相同：再看一方是否是另一方的路径后缀（容忍挂载点/盘符写法不同）
+    return left.endswith(right) or right.endswith(left)
+
+
 def preflight_manifest(
     manifest: dict[str, Any],
     *,
@@ -1320,7 +1353,7 @@ def preflight_manifest(
     worktrees_root: Path | None = None,
     manifest_path: Path | None = None,
 ) -> dict[str, Any]:
-    """启动前的自检：把两种"看起来正常、实际不可用"的状态主动报出来。
+    """启动前的自检：把三种"看起来正常、实际不可用"的状态主动报出来。
 
     检查项
     ------
@@ -1330,8 +1363,16 @@ def preflight_manifest(
     ② **harness state 是否在别的仓库。** `REPO_ROOT` 是本文件所在目录的上两级，
        因此状态与标定证据写在**跑仿真的那个仓库**下。而 Runtime 只认
        `repo_root/.runtime/`。若状态只存在于别的 worktree，标定必然读到过期证据
-       （表现为"前端能连上飞机，但标定 stale、三维视图不显示、`goto` 被拒"）。
+       （表现为"前端能连上飞机，但标定 stale、三维视图不显示、`goto` 被拒`）。
        这一条是**错误**，因为光看运行状态发现不了。
+    ③ **当前实际在跑的是不是被检查的这一份。** 这一条是 2026-10-09 补的，
+       起因是一次实测：调用方拿**相机** manifest 跑本检查，而实际在跑的是
+       **默认** manifest，结果报了 `camera.present=True`、`ok: True` ——
+       因为检查①只回答"你给我的这份有没有相机"，**不回答"现在跑的是哪一份"**。
+       于是世界里的 `x500_0/1/2`（无相机）被当成了相机版。
+
+    判据读 harness state 里的 `manifest_path`，**不靠模型名反推** ——
+    状态里直接记着"用的是哪一份配置"，推断是多余的且会错。
 
     Returns:
         可 ``json.dumps`` 的报告。``ok`` 为 False 表示存在 error 级发现。
@@ -1384,12 +1425,43 @@ def preflight_manifest(
             "paths": [str(p) for p in other_states],
         })
 
+    # --- ③ 实际在跑的是不是被检查的这一份 ---------------------------------
+    running_path: str | None = None
+    if local_state.is_file():
+        try:
+            state = load_json(local_state)
+            if isinstance(state, dict):
+                running_path = str(state.get("manifest_path") or "") or None
+        except (OSError, json.JSONDecodeError, HarnessError):
+            running_path = None
+
+    matches = _same_manifest(running_path, manifest_path)
+    if matches is False:
+        findings.append({
+            "code": "running_manifest_mismatch",
+            "severity": "error",
+            "checked": str(manifest_path),
+            "running": running_path,
+            "detail": (
+                f"本检查针对的是 {manifest_path}，但**当前实际在跑的是 {running_path}**。"
+                "这两份配置不是同一份 —— 例如一份带相机、一份不带。"
+                "结论（含「有没有相机」）只对**被检查的那份**成立，"
+                "不能据此认为正在运行的仿真具备该能力。"
+                " 要么用同一份配置重启仿真，要么用实际在跑的那份跑本检查。"
+            ),
+        })
+
     return {
         "ok": not any(f["severity"] == "error" for f in findings),
         "camera": {"present": has_camera, "models": models},
         "manifest": {
             "path": str(manifest_path) if manifest_path is not None else None,
             "vehicle_count": len([v for v in (manifest.get("vehicles") or []) if isinstance(v, dict)]),
+        },
+        # 给出**肯定**的比对结论，而不是让人靠"没有警告"推断。
+        "running_manifest": {
+            "path": running_path,
+            "matches_checked": matches,
         },
         "repo_root": str(repo_root),
         "findings": findings,
