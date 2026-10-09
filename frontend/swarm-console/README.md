@@ -157,7 +157,18 @@ npm test
 `console-model.js` 是可独立测试的数据映射层，负责合并多机快照、判断动作权限和构造带
 MAVLink identity 的请求。浏览器页面不直接连接 MAVLink、Gazebo Transport 或 DDS。
 
-正式 `HOLD` 尚无 Runtime route。页面仅在非 Smoke TAKEOFF 的 `completion_evidence` 确认稳定高度后显示“起飞时曾确认高度稳定”，不是持续保持证明；当前飞行状态以实时遥测为准。正式 `GOTO/HOLD/RETURN_HOME` 要等 Runtime 契约和真实验收后再开放。
+Runtime 已实现 `takeoff / goto / land / hold_position / return_home` 五种动作，并注册 `/api/actions/takeoff`（另有独立的 `/api/actions/smoke-takeoff`）、`/api/actions/goto`、`/api/actions/land`、`/api/actions/hold-position`、`/api/actions/return-home` 路由。
+
+真实验证状态按项目负责人提供的记录分层列出（截至 2026-10-09；不含 fixture 测试）：
+
+| 动作 | 真实验证状态 |
+| --- | --- |
+| `takeoff / land` | 三机巡逻验证通过 |
+| `goto` | 已实测 |
+| `hold_position`（别名 `hold`） | 已实测：`max_drift_m=0.054 m`，容差 `2.0 m`，`completion_state=stable_within_tolerance` |
+| `return_home` | 后端已实现，尚未完成有效真飞验证；本次垂直起飞未离开 home，无法检验“距离缩小 ≥5 m”的判据 |
+
+主控台本轮不新增 `GOTO/HOLD/RETURN_HOME` 按钮：`goto / hold_position` 已有实测记录，前端操作入口尚未接入；`return_home` 等有效真飞验收后再开放。页面仅在非 Smoke TAKEOFF 的 `completion_evidence` 确认稳定高度后显示“起飞时曾确认高度稳定”，不是持续保持证明，也不是当前所选节点已执行 HOLD 的证明；当前飞行状态以实时遥测为准。
 
 本轮动作功能依赖 Runtime PR #76 的 lifecycle 1.1 契约；基线旧服务缺少该接口时禁用正式动作。
 主控制台不修改坐标，校验三维子应用既有快照契约后原样转发。Runtime/Simulation 的场景标识即使一致，Cesium 实际加载地图仍需独立确认。
