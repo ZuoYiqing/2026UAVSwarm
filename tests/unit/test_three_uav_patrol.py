@@ -482,3 +482,74 @@ def test_run_patrol_timeout_produces_failure_and_recovery_report() -> None:
     assert report["status"] == "FAIL"
     assert "UAV-02 waypoint 1 timeout" in report["error"]
     assert all("recovery_land_ack" in row for row in report["vehicles"])
+
+
+def _land_observer(*, scene_z_m: float):
+    controller = patrol.MavlinkPatrolController.__new__(patrol.MavlinkPatrolController)
+    controller._condition = threading.Condition()
+    controller._position_sequence = 1
+    controller._land_position_sequence = 0
+    controller._scene_position = patrol.PositionNED(15.6, -0.7, scene_z_m)
+    controller._vehicle_local_position = patrol.PositionNED(15.6, -0.7, scene_z_m)
+    now = time.monotonic()
+    controller._last_telemetry_at = now
+    controller._land_sent_at = now - 1
+    controller._landed_state = 1
+    controller._armed = False
+    controller._landed_at = now
+    controller._heartbeat_at = now
+    return controller
+
+
+def test_landed_and_disarmed_on_building_roof_fails_scene_ground_acceptance() -> None:
+    # building-001's roof is z_up=10 at scene N=15.6/E=-0.7.
+    controller = _land_observer(scene_z_m=-10.0)
+    observation = controller.wait_landed_disarmed(timeout_s=.05)
+    assert observation["landed"] is False
+    assert observation["disarmed"] is True
+    assert observation["landed_state"] == 1
+    assert observation["scene_ground_confirmed"] is False
+    assert observation["reason"] == "scene_ground_not_reached"
+    assert observation["scene_position"]["z_m"] == -10.0
+    assert observation["scene_ground_z_down_m"] == 0.0
+
+
+def test_landed_and_disarmed_at_scene_ground_requires_stable_fresh_samples() -> None:
+    controller = _land_observer(scene_z_m=-.013)
+    controller._position_sequence = 0
+
+    def publish_samples() -> None:
+        for _ in range(3):
+            time.sleep(.2)
+            with controller._condition:
+                controller._position_sequence += 1
+                controller._last_telemetry_at = time.monotonic()
+                controller._landed_at = controller._last_telemetry_at
+                controller._heartbeat_at = controller._last_telemetry_at
+                controller._condition.notify_all()
+
+    observer = threading.Thread(target=publish_samples)
+    observer.start()
+    try:
+        observation = controller.wait_landed_disarmed(timeout_s=2.0)
+    finally:
+        observer.join(timeout=2)
+    assert observation["landed"] is True
+    assert observation["disarmed"] is True
+    assert observation["scene_ground_confirmed"] is True
+    assert observation["scene_ground_stable_s"] >= .5
+
+
+def test_disarmed_above_scene_ground_does_not_repeat_land_in_recovery() -> None:
+    manifest, scene, _ = _inputs()
+    plan = patrol.load_patrol_plan(PATROL_PATH, manifest=manifest, scene=scene)
+    controllers = _fake_controllers(manifest)
+    roof = controllers[0]
+    roof.armed = False
+    roof.wait_landed_disarmed = lambda **kwargs: {
+        "landed": False, "disarmed": True, "reason": "scene_ground_not_reached"
+    }
+    report = patrol.run_patrol(plan, controllers, sleep=lambda delay: None)
+    assert report["status"] == "FAIL"
+    assert report["vehicles"][0]["recovery"] == "disarmed_without_verified_scene_ground"
+    assert roof.recovery_land_calls == 1  # Original LAND only; no recovery repeat.
