@@ -4,10 +4,12 @@
 >
 > **用它之前先选 tag**（见 §6）：
 >
-> | tag | 提交 | 什么时候用 |
-> | --- | --- | --- |
-> | **`v0.1.1-rooftop-landing-corrected`** | `e317a22` | **默认选这个** —— 文档结论已更正、含仿真侧 PR #87 |
-> | `v0.1-four-module-integrated-pass` | `bfa75e8` | 只在需要复现"当时以为通过"的状态时用。**它的 §5.2 内容是错的** |
+> | tag | 什么时候用 |
+> | --- | --- |
+> | **`v0.1.1-rooftop-landing-corrected`** | **默认选这个** —— 文档结论已更正、含仿真侧 PR #87 |
+> | `v0.1-four-module-integrated-pass` | 只在需要复现"当时以为通过"的状态时用。**它的 §5.2 内容是错的** |
+>
+> （**不写提交哈希**：文档自己一改，哈希就变了 —— 用 tag 名引用，它是稳定的。）
 >
 > 迁移后**第一件事**是跑环境自检，不要靠人工核对清单：
 >
@@ -24,7 +26,7 @@
 
 | | |
 | --- | --- |
-| **提交** | `e317a22`（tag 见 §6；不带 tag 时以 `origin/main` 为准） |
+| **提交** | 以 tag `v0.1.1-rooftop-landing-corrected` 或 `origin/main` 为准（§6） |
 | **测试** | Python **760 passed / 6 skipped**；主控台 **108**；三维视图 **80**；算法侧 **45** |
 | **已验证的集成** | 五个飞行动作真飞**跑通**（HTTP → Policy Gate → MAVLink → PX4）—— ⚠️ 但 `return-home` 的**完成语义过松**，见 §5.2 |
 | **相机** | 三路 1280×960、约 30 fps、首帧哈希互不相同、图像有效 |
@@ -380,11 +382,11 @@ terminate called after throwing an instance of 'std::runtime_error'
 
 ```bash
 # 【推荐】带更正的版本
-git checkout v0.1.1-rooftop-landing-corrected      # → e317a22
+git checkout v0.1.1-rooftop-landing-corrected
 git log --oneline -1 v0.1.1-rooftop-landing-corrected
 
 # 【仅用于复现历史】"当时以为通过"的状态
-git checkout v0.1-four-module-integrated-pass      # → bfa75e8
+git checkout v0.1-four-module-integrated-pass
 #   ⚠️ 这个提交处的 §5.2 说"飞机停在 10 m 空中、推测 RTL 与 land 冲突"，
 #      两条都是错的。看它的时候请对照 §5.2 的更正说明。
 
@@ -397,10 +399,10 @@ cd frontend/swarm-console/simulation-3d && npm test   # 期望 80
 
 > **测试数会随 main 前进而变，别把它当固定值。**
 >
-> | 提交 | Python |
+> | tag | Python |
 > | --- | --- |
-> | `bfa75e8`（tag `v0.1-four-module-integrated-pass`） | 757 passed / 6 skipped |
-> | `e317a22`（tag `v0.1.1-rooftop-landing-corrected`） | **760 passed / 6 skipped** |
+> | `v0.1-four-module-integrated-pass` | 757 passed / 6 skipped |
+> | `v0.1.1-rooftop-landing-corrected` | **760 passed / 6 skipped** |
 >
 > **判断标准是"全绿"，不是"等于某个数"** —— 数字对不上时先看 diff，
 > 而不是先怀疑环境。
