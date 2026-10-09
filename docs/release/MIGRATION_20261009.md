@@ -1,6 +1,13 @@
-# 迁移手册（2026-10-09 冻结）
+# 迁移手册（2026-10-09 冻结，含 10-09 屋顶着陆更正）
 
 > **这份文档说清三件事**：迁移到新机器要做什么、当前**验过什么**、以及**哪些坑还在**。
+>
+> **用它之前先选 tag**（见 §6）：
+>
+> | tag | 提交 | 什么时候用 |
+> | --- | --- | --- |
+> | **`v0.1.1-rooftop-landing-corrected`** | `e317a22` | **默认选这个** —— 文档结论已更正、含仿真侧 PR #87 |
+> | `v0.1-four-module-integrated-pass` | `bfa75e8` | 只在需要复现"当时以为通过"的状态时用。**它的 §5.2 内容是错的** |
 >
 > 迁移后**第一件事**是跑环境自检，不要靠人工核对清单：
 >
@@ -17,11 +24,15 @@
 
 | | |
 | --- | --- |
-| **提交** | `39607bd`（tag 见 §6） |
-| **测试** | Python **757 passed / 6 skipped**；主控台 **108**；三维视图 **80**；算法侧 **45** |
-| **已验证的集成** | 五个飞行动作真飞通过（HTTP → Policy Gate → MAVLink → PX4） |
+| **提交** | `e317a22`（tag 见 §6；不带 tag 时以 `origin/main` 为准） |
+| **测试** | Python **760 passed / 6 skipped**；主控台 **108**；三维视图 **80**；算法侧 **45** |
+| **已验证的集成** | 五个飞行动作真飞**跑通**（HTTP → Policy Gate → MAVLink → PX4）—— ⚠️ 但 `return-home` 的**完成语义过松**，见 §5.2 |
 | **相机** | 三路 1280×960、约 30 fps、首帧哈希互不相同、图像有效 |
 | **仿真证据通道** | 已打通（`/api/simulation/evidence`，之前一直是空的） |
+
+> ⚠️ **"五个动作跑通"不等于"动作链通过验收"。** `return-home` 曾在距离刚开始
+> 缩短时就报成功，随后 `LAND` 变成"在当前位置降落"，飞机落在了 10 m 屋顶上。
+> **细节见 §5.2 —— 迁移前请务必读那一节。**
 
 **环境的已实测数字**（用于迁移后对照）：
 
@@ -365,23 +376,32 @@ terminate called after throwing an instance of 'std::runtime_error'
 
 ## 6. 冻结与回滚
 
-```bash
-# 查看这个冻结
-git log --oneline -1 39607bd
+**两个 tag，用途不同：**
 
-# 回到这个状态
-git checkout <tag>
+```bash
+# 【推荐】带更正的版本
+git checkout v0.1.1-rooftop-landing-corrected      # → e317a22
+git log --oneline -1 v0.1.1-rooftop-landing-corrected
+
+# 【仅用于复现历史】"当时以为通过"的状态
+git checkout v0.1-four-module-integrated-pass      # → bfa75e8
+#   ⚠️ 这个提交处的 §5.2 说"飞机停在 10 m 空中、推测 RTL 与 land 冲突"，
+#      两条都是错的。看它的时候请对照 §5.2 的更正说明。
 
 # 确认工作区干净后
 python3 scripts/check_environment.py
-python -m pytest -q                          # tag 处期望 757 passed / 6 skipped
+python -m pytest -q                          # 期望 760 passed / 6 skipped
 cd frontend/swarm-console && npm test        # 期望 108
 cd frontend/swarm-console/simulation-3d && npm test   # 期望 80
 ```
 
-> **测试数会随 main 前进而变，别把它当固定值。** tag `bfa75e8` 处是
-> **757 passed / 6 skipped**；其后仿真侧合并 PR #87（`af1136b`）后是
-> **760 passed / 6 skipped**。
+> **测试数会随 main 前进而变，别把它当固定值。**
+>
+> | 提交 | Python |
+> | --- | --- |
+> | `bfa75e8`（tag `v0.1-four-module-integrated-pass`） | 757 passed / 6 skipped |
+> | `e317a22`（tag `v0.1.1-rooftop-landing-corrected`） | **760 passed / 6 skipped** |
+>
 > **判断标准是"全绿"，不是"等于某个数"** —— 数字对不上时先看 diff，
 > 而不是先怀疑环境。
 
