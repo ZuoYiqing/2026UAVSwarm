@@ -464,7 +464,7 @@ class Px4SitlBackend:
         command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
         observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
         result = self._base_action_result("land")
-        result["completion_mode"] = "landed_disarmed_on_site" if landing_site is not None else "landed_and_disarmed"
+        result["completion_mode"] = "landed_disarmed_on_site"
         try:
             result["heartbeat_connected"] = True
             result["gcs_heartbeat_started"] = True
@@ -507,11 +507,7 @@ class Px4SitlBackend:
             result["completion_evidence"] = observation
             result["completion_state"] = str(observation.get("status") or "unknown")
             if observation.get("completion_reached"):
-                if landing_site is None:
-                    # Legacy low-level physical LAND result; operator and Agent
-                    # routes always pass explicit site context.
-                    result["result"] = "pass"
-                elif not landing_site:
+                if not landing_site:
                     result["failure_reason"] = "landing_site_unavailable"
                     result["completion_state"] = "unknown"
                 else:
@@ -1001,7 +997,14 @@ class Px4SitlBackend:
                 threshold_ratio=float(args.get("threshold_ratio", 0.70) or 0.70),
             )
         if bool(args.get("__real_sitl_action")) and action == "land":
-            return self.execute_land_action(command_timeout_ms=int(args.get("command_timeout_ms", self.config.command_timeout_ms) or self.config.command_timeout_ms))
+            return self.execute_land_action(
+                command_timeout_ms=int(
+                    args.get("command_timeout_ms", self.config.command_timeout_ms)
+                    or self.config.command_timeout_ms
+                ),
+                landing_site=args.get("landing_site"),
+                translation_scene_ned_m=args.get("translation_scene_ned_m"),
+            )
 
         probe = self.connect_probe()
         code = str(probe.get("code", "backend_probe_failed"))

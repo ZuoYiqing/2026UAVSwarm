@@ -291,7 +291,10 @@ def test_takeoff_and_land_actions_never_stop_persistent_heartbeat(monkeypatch) -
     takeoff = backend.execute_takeoff_smoke(altitude_m=2.0, auto_land=False)
     landed = backend.execute_land_action()
 
-    assert takeoff["result"] == landed["result"] == "pass"
+    assert takeoff["result"] == "pass"
+    assert landed["result"] == "fail"
+    assert landed["failure_reason"] == "landing_site_unavailable"
+    assert landed["land_ack"]["result"] == 0
     assert session.stopped is False
     assert session.connected is True
     assert session.receive_thread_alive() is True
@@ -309,6 +312,56 @@ def test_operator_land_without_trusted_site_is_not_task_success(monkeypatch) -> 
     assert result["completion_evidence"]["completion_reached"] is True
     assert result["result"] == "fail"
     assert result["failure_reason"] == "landing_site_unavailable"
+
+
+def test_direct_land_without_site_fails_closed_after_physical_completion(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, _FakePx4ActionSession())
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    result = backend.execute_land_action()
+
+    assert result["land_ack"]["result"] == 0
+    assert result["completion_evidence"]["completion_reached"] is True
+    assert result["result"] == "fail"
+    assert result["failure_reason"] == "landing_site_unavailable"
+
+
+def test_mapped_land_forwards_site_context(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    backend = Px4SitlBackend(cfg, _FakePx4ActionSession())
+    observed: dict = {}
+
+    def capture_land(**kwargs) -> dict:
+        observed.update(kwargs)
+        return {"result": "fail", "failure_reason": "landing_site_unavailable"}
+
+    monkeypatch.setattr(backend, "execute_land_action", capture_land)
+    site = {"object_id": "landing-pad-UAV-02"}
+    offset = {"north": 0.0, "east": 8.0, "down": 0.0}
+    backend.execute_mapped_action("land", {}, {
+        "__real_sitl_action": True, "command_timeout_ms": 1234,
+        "landing_site": site, "translation_scene_ned_m": offset,
+    })
+    assert observed == {"command_timeout_ms": 1234, "landing_site": site,
+                        "translation_scene_ned_m": offset}
+
+
+def test_mapped_land_cannot_succeed_without_persistent_session(monkeypatch) -> None:
+    cfg = MavlinkBackendConfig(backend_mode="sitl", backend_enabled=True, transport_endpoint="udp:2")
+    session = _FakePx4ActionSession()
+    session.connected = False
+    backend = Px4SitlBackend(cfg, session)
+    monkeypatch.setattr(Px4SitlBackend, "_is_pymavlink_available", staticmethod(lambda: True))
+
+    def forbid_land(**kwargs) -> dict:
+        del kwargs
+        raise AssertionError("LAND must not send")
+
+    monkeypatch.setattr(session, "land", forbid_land)
+    rejected = backend.execute_mapped_action("land", {}, {"__real_sitl_action": True})
+    assert rejected["accepted"] is False
+    assert rejected["failure_reason"] == "persistent_vehicle_session_not_connected"
 
 
 def test_operator_land_on_roof_is_not_pad_success(monkeypatch) -> None:
@@ -418,5 +471,6 @@ def test_operational_land_is_sent_when_landing_stream_setup_raises(monkeypatch) 
     result = backend.execute_land_action()
 
     assert session.order == ["land", "stream"]
-    assert result["result"] == "pass"
+    assert result["result"] == "fail"
+    assert result["failure_reason"] == "landing_site_unavailable"
     assert result["landing_state_stream_ack"]["code"] == "landing_state_stream_exception"

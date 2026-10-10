@@ -82,6 +82,11 @@ ends with `landing_outside_allowed_site`; missing position with
 `unknown`/`incomplete`/`stale` and times out. No path implements "stop task" as
 an in-air forced disarm.
 
+The low-level PX4 backend also defaults to fail-closed when no landing site is
+provided; internal mapped actions forward site and translation explicitly.
+A disconnected persistent MAVLink session is rejected before any LAND command
+is sent, independently of whether site evidence is present.
+
 After sending LAND, Runtime requests the landed-state stream as best-effort
 completion instrumentation. A stream-setup exception is retained as evidence but
 does not suppress or delay the LAND command. The action still cannot succeed
