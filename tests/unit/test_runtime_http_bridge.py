@@ -261,6 +261,7 @@ def test_actions_recent_counts_each_action_id_once(monkeypatch, tmp_path: Path) 
         {"type": "http_return_home", "action_id": "act-one", "action": "return_home", "result": "pass"},
         {"type": "action_result", "action_id": "act-one", "action": "return_home", "result": "fail",
          "failure_reason": "return_home_in_progress"},
+        {"type": "adapter_execution_result", "action_id": "act-one", "action": "return_home", "result": "pass"},
         {"type": "action_result", "action_id": "act-two", "action": "land", "result": "pass"},
     ])
 

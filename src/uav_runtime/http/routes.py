@@ -198,6 +198,16 @@ def _request_fingerprint(req: BackendRequest, *, action: str, smoke: bool) -> di
         "stable_duration_ms",
         "command_timeout_ms",
         "observe_timeout_ms",
+        "timeout_s",
+        "min_progress_m",
+        "home_tolerance_m",
+        "north_m",
+        "east_m",
+        "down_m",
+        "arrival_tolerance_m",
+        "tolerance_m",
+        "hold_s",
+        "duration_s",
     ):
         if hasattr(req, name):
             fields[name] = getattr(req, name)
@@ -210,21 +220,6 @@ def _idempotent_response(action: dict[str, Any]) -> dict[str, Any]:
         "idempotent_replay": True,
         "_http_status": 202 if action.get("status") in {"requested", "accepted", "executing"} else 200,
     }
-
-
-def _validated_landing_context(node_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Use a pad only when both independent evidence sources are fresh and matched."""
-    calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(node_id)
-    site, site_status = RUNTIME_STATE_STORE.landing_site(node_id)
-    if calibration_status != "calibrated" or site_status != "validated" or not calibration or not site:
-        return None
-    if (site.get("scene_id") != calibration.get("scene_id")
-            or site.get("map_version") != calibration.get("map_version")
-            or site.get("node_id") != node_id
-            or calibration.get("axis_alignment") != "ned_aligned"
-            or calibration.get("origin_continuity") != "verified"):
-        return None
-    return calibration, site
 
 
 def _finalize_action(
@@ -282,6 +277,11 @@ def _finalize_action(
     if lifecycle_status != "succeeded" and out.get("code") in {None, "", "px4_sitl_action_failed"}:
         out["code"] = failure_reason or "action_failed"
     RUNTIME_STATE_STORE.finish_action(action_id, out)
+    if out.get("autonomous_execution_may_continue") is True:
+        VEHICLE_REGISTRY.retain_autonomous_action(
+            handle.config.node_id, action_id, str(out.get("action") or ""),
+            after_sequence=out.get("autonomous_execution_after_sequence"),
+        )
     VEHICLE_REGISTRY.release_action(
         handle.config.node_id,
         action_id,
@@ -451,6 +451,8 @@ def _execute_flight_action(
     cancel_event = admission["cancel_event"]
     RUNTIME_STATE_STORE.transition_action(action_id, "executing")
     landing_context: tuple[dict[str, Any], dict[str, Any]] | None = None
+    execution_cursor: int | None = None
+    execution_started = False
     try:
         backend = Px4SitlBackend(cfg, handle.session)
         rt.gateway.register(Px4RuntimeActionAdapter(backend))
@@ -545,36 +547,21 @@ def _execute_flight_action(
             }
         elif action == "return_home":
             assert isinstance(req, ReturnHomeRequest)
-            landing_context = _validated_landing_context(handle.config.node_id)
-            if landing_context is None:
-                out = {**identity, "action": action, "result": "fail", "accepted": False,
-                       "execution_admitted": False, "failure_reason": "landing_site_unavailable",
-                       "code": "landing_site_unavailable", "completion_state": "unknown",
-                       "policy_decision": policy_event, "ack_evidence": [], "completion_evidence": None}
-                return _finalize_action(action_id=action_id, out=out, handle=handle,
-                                        rt=rt, cfg=cfg, event_type="http_return_home")
-            calibration, site = landing_context
-            center = site["center_scene_ned_m"]
-            offset = calibration["translation_scene_ned_m"]
             action_req.params = {
                 "timeout_s": req.timeout_s,
                 "min_progress_m": req.min_progress_m,
-                "home_local_north_m": float(center["north"]) - float(offset["north"]),
-                "home_local_east_m": float(center["east"]) - float(offset["east"]),
-                "home_tolerance_m": min(req.home_tolerance_m, float(site["horizontal_tolerance_m"])),
+                "home_tolerance_m": req.home_tolerance_m,
                 "stable_duration_s": req.stable_duration_ms / 1000.0,
-                "landing_site_id": site["object_id"],
                 "_cancel_event": cancel_event,
             }
         elif action == "land":
-            # LAND remains available as a controlled recovery command. Missing
-            # site evidence must not prevent sending it, but cannot yield task success.
-            landing_context = _validated_landing_context(handle.config.node_id)
-            calibration, site = landing_context if landing_context is not None else ({}, {})
+            # Ordinary LAND confirms the stated scene ground, not a named pad.
+            landing_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
+            calibration, reference = landing_context if landing_context is not None else ({}, {})
             action_req.params = {
                 "command_timeout_ms": req.command_timeout_ms,
                 "observe_timeout_ms": req.observe_timeout_ms,
-                "landing_site": site,
+                "ground_reference": reference,
                 "translation_scene_ned_m": calibration.get("translation_scene_ned_m", {}),
                 "_cancel_event": cancel_event,
             }
@@ -584,6 +571,9 @@ def _execute_flight_action(
                 "observe_timeout_ms": req.observe_timeout_ms,
                 "_cancel_event": cancel_event,
             }
+        cursor_getter = getattr(handle.session, "observation_cursor", None)
+        execution_cursor = cursor_getter() if callable(cursor_getter) else None
+        execution_started = True
         gateway_result = rt.gateway.execute("mavlink", action_req)
         out = dict(gateway_result.get("raw_result") or {
             "action": action,
@@ -595,16 +585,19 @@ def _execute_flight_action(
         })
         out.setdefault("accepted", gateway_result.get("accepted", False))
         out.setdefault("code", gateway_result.get("code"))
+        if action in {"land", "return_home"} and gateway_result.get("code") == "adapter_execution_exception":
+            out["autonomous_execution_may_continue"] = True
+            out["autonomous_execution_after_sequence"] = execution_cursor
         out.update(identity)
         out["execution_admitted"] = True
         out["policy_decision"] = policy_event
-        if action in {"land", "return_home"} and out.get("result") == "pass":
-            current_context = _validated_landing_context(handle.config.node_id)
+        if action == "land" and out.get("result") == "pass":
+            current_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
             if (landing_context is None or current_context is None
                     or current_context[0].get("calibration_version") != landing_context[0].get("calibration_version")
                     or current_context[1].get("world_sha256") != landing_context[1].get("world_sha256")
-                    or current_context[1].get("object_id") != landing_context[1].get("object_id")):
-                reason = "landing_site_unavailable" if landing_context is None else "landing_site_evidence_stale"
+                    or current_context[1] != landing_context[1]):
+                reason = "ground_reference_unavailable" if landing_context is None else "ground_reference_changed_or_stale"
                 out.update(result="fail", accepted=False, failure_reason=reason,
                            code=reason, completion_state="unknown")
         result_event = {
@@ -631,6 +624,11 @@ def _execute_flight_action(
             "ack_evidence": [],
             "completion_evidence": None,
         }
+        if execution_started and action in {"land", "return_home"}:
+            out["autonomous_execution_may_continue"] = True
+            out["autonomous_execution_after_sequence"] = execution_cursor
+            VEHICLE_REGISTRY.retain_autonomous_action(handle.config.node_id, action_id, action,
+                                                     after_sequence=out["autonomous_execution_after_sequence"])
         RUNTIME_STATE_STORE.finish_action(action_id, out)
         VEHICLE_REGISTRY.release_action(
             handle.config.node_id,

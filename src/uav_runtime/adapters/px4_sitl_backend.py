@@ -452,6 +452,7 @@ class Px4SitlBackend:
         command_timeout_ms: int | None = None,
         observe_timeout_ms: int | None = None,
         landing_site: dict[str, Any] | None = None,
+        ground_reference: dict[str, Any] | None = None,
         translation_scene_ned_m: dict[str, float] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
@@ -464,18 +465,26 @@ class Px4SitlBackend:
         command_timeout_s = float(command_timeout_ms or self.config.command_timeout_ms) / 1000.0
         observe_timeout_s = float(observe_timeout_ms or self.config.observe_timeout_ms) / 1000.0
         result = self._base_action_result("land")
-        result["completion_mode"] = "landed_disarmed_on_site"
+        result["completion_contract_version"] = "1.1"
+        result["completion_mode"] = "scene_ground_landed_disarmed"
+        result["site_completion"] = {"state": "not_requested" if not landing_site else "unknown"}
         try:
             result["heartbeat_connected"] = True
             result["gcs_heartbeat_started"] = True
             # LAND has safety priority: send it before any best-effort request
             # that could consume the command timeout budget.
+            result["autonomous_execution_may_continue"] = True
+            cursor_getter = getattr(self.session, "observation_cursor", None)
+            result["autonomous_execution_after_sequence"] = cursor_getter() if callable(cursor_getter) else None
             result["land_ack"] = self.session.land(timeout_s=command_timeout_s)
+            result["autonomous_execution_after_sequence"] = result["land_ack"].get("observation_cursor")
             result["ack_evidence"].append({"stage": "land", **result["land_ack"]})
             if not self._ack_accepted(result["land_ack"]):
+                result["autonomous_execution_may_continue"] = bool(result["land_ack"].get("timeout"))
                 result["failure_reason"] = "land_rejected_or_timeout"
                 result["completion_state"] = "timed_out" if result["land_ack"].get("timeout") else "failed"
                 return self._finish_smoke_result(result)
+            result["autonomous_execution_may_continue"] = True
             try:
                 stream_ack = self.session.request_landing_state_stream(
                     rate_hz=5.0,
@@ -496,56 +505,51 @@ class Px4SitlBackend:
                 }
             result["landing_state_stream_ack"] = stream_ack
             result["ack_evidence"].append({"stage": "landing_state_stream", **stream_ack})
+            if ground_reference and translation_scene_ned_m:
+                try:
+                    position_ack = self.session.request_local_position_stream(rate_hz=10.0, timeout_s=command_timeout_s)
+                except Exception as exc:
+                    position_ack = {"command": 511, "result": None, "code": "local_position_stream_exception", "error_class": type(exc).__name__}
+                result["ack_evidence"].append({"stage": "local_position_stream", **position_ack})
+                observation = self.session.observe_ground_landing(
+                    timeout_s=observe_timeout_s, after_sequence=int(result["land_ack"]["observation_cursor"]),
+                    ground_reference=ground_reference, translation_scene_ned_m=translation_scene_ned_m,
+                    expected_position_epoch=result["land_ack"].get("position_epoch"),
+                    cancel_event=cancel_event,
+                )
+                result["completion_evidence"] = observation
+                result["completion_state"] = str(observation.get("status") or "unknown")
+                result["autonomous_execution_may_continue"] = not observation.get("physical_landed_disarmed", False)
+                if observation.get("completion_reached"):
+                    result["result"] = "pass"
+                    if landing_site:
+                        scene = observation["ground_check"]["scene_position_ned_m"]
+                        center = landing_site["center_scene_ned_m"]
+                        error = math.hypot(scene["north"] - center["north"], scene["east"] - center["east"])
+                        on_site = error <= landing_site["horizontal_tolerance_m"]
+                        result["site_completion"] = {"state": "succeeded" if on_site else "failed", "horizontal_error_m": error}
+                        if not on_site:
+                            result.update(result="fail", failure_reason="landing_outside_allowed_site", completion_state="failed")
+                else:
+                    result["failure_reason"] = observation.get("failure_reason") or "landing_completion_timeout"
+                return self._finish_smoke_result(result)
             observation_args: dict[str, Any] = {
                 "timeout_s": observe_timeout_s,
                 "after_sequence": int(result["land_ack"]["observation_cursor"]),
                 "cancel_event": cancel_event,
             }
-            if landing_site:
-                observation_args["require_local_position"] = True
             observation = self.session.observe_landed_and_disarmed(**observation_args)
             result["completion_evidence"] = observation
-            result["completion_state"] = str(observation.get("status") or "unknown")
-            if observation.get("completion_reached"):
-                if not landing_site:
-                    result["failure_reason"] = "landing_site_unavailable"
-                    result["completion_state"] = "unknown"
-                else:
-                    local = observation.get("position_vehicle_local_ned_m")
-                    offset = translation_scene_ned_m or {}
-                    if not observation.get("position_fresh") or not isinstance(local, dict) or not all(
-                        isinstance(local.get(axis), (int, float)) and isinstance(offset.get(axis), (int, float))
-                        and math.isfinite(float(local[axis])) and math.isfinite(float(offset[axis]))
-                        for axis in ("north", "east", "down")
-                    ):
-                        result["failure_reason"] = "landing_position_unknown"
-                        result["completion_state"] = "unknown"
-                    else:
-                        scene = {axis: float(local[axis]) + float(offset[axis]) for axis in ("north", "east", "down")}
-                        center = landing_site["center_scene_ned_m"]
-                        horizontal_error = math.hypot(scene["north"] - float(center["north"]), scene["east"] - float(center["east"]))
-                        vertical_error = abs(scene["down"] - float(landing_site["ground_down_m"]))
-                        on_site = (horizontal_error <= float(landing_site["horizontal_tolerance_m"])
-                                   and vertical_error <= float(landing_site["vertical_tolerance_m"]))
-                        observation["landing_site_check"] = {
-                            "site_id": landing_site["object_id"], "scene_position_ned_m": scene,
-                            "horizontal_error_m": horizontal_error, "vertical_error_m": vertical_error,
-                            "horizontal_tolerance_m": landing_site["horizontal_tolerance_m"],
-                            "vertical_tolerance_m": landing_site["vertical_tolerance_m"], "on_allowed_site": on_site,
-                        }
-                        if on_site:
-                            result["result"] = "pass"
-                        else:
-                            result["failure_reason"] = "landing_outside_allowed_site"
-                            result["completion_state"] = "failed"
-            else:
-                if (landing_site and observation.get("landed_state") == 1
-                        and observation.get("armed") is False and not observation.get("position_fresh")):
-                    result["failure_reason"] = "landing_position_unknown"
-                    result["completion_state"] = "unknown"
-                else:
-                    result["failure_reason"] = "landing_completion_timeout"
-                    self._classify_completion_timeout(result, "land")
+            result["autonomous_execution_may_continue"] = not observation.get("completion_reached", False)
+            result["completion_state"] = "unknown"
+            result["failure_reason"] = "ground_reference_unavailable"
+            # Physical contact is separate evidence, never the operational ground goal.
+            observation["physical_landed_disarmed"] = bool(observation.get("completion_reached"))
+            observation["completion_reached"] = False
+            if not observation["physical_landed_disarmed"]:
+                result["completion_state"] = str(observation.get("status") or "unknown")
+                result["failure_reason"] = "landing_completion_timeout"
+                self._classify_completion_timeout(result, "land")
             return self._finish_smoke_result(result)
         except Exception as exc:
             result["failure_reason"] = f"px4_land_exception:{type(exc).__name__}"
@@ -749,14 +753,14 @@ class Px4SitlBackend:
         *,
         timeout_s: float | None = None,
         min_progress_m: float = 5.0,
-        home_local_north_m: float,
-        home_local_east_m: float,
-        home_tolerance_m: float,
-        stable_duration_s: float,
+        home_local_north_m: float | None = None,
+        home_local_east_m: float | None = None,
+        home_tolerance_m: float = 0.75,
+        stable_duration_s: float = 1.0,
         landing_site_id: str | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """Request RTL and require stable arrival at the validated local pad target."""
+        """Require real PX4 home arrival; site identity is an independent goal."""
         rejected = self._ensure_sitl_action_allowed("return_home")
         if rejected is not None:
             return rejected
@@ -765,7 +769,10 @@ class Px4SitlBackend:
             return rejected
 
         result = self._base_action_result("return_home")
-        result["completion_mode"] = "auto_rtl_verified_site_arrival"
+        result["completion_contract_version"] = "1.1"
+        result["completion_mode"] = "auto_rtl_px4_home_arrival"
+        cursor_getter = getattr(self.session, "observation_cursor", None)
+        result["autonomous_execution_after_sequence"] = cursor_getter() if callable(cursor_getter) else None
 
         effective_timeout_s = (
             float(timeout_s)
@@ -776,8 +783,8 @@ class Px4SitlBackend:
             outcome = self.session.return_home(
                 timeout_s=effective_timeout_s,
                 min_progress_m=float(min_progress_m),
-                home_local_north_m=float(home_local_north_m),
-                home_local_east_m=float(home_local_east_m),
+                home_local_north_m=home_local_north_m,
+                home_local_east_m=home_local_east_m,
                 home_tolerance_m=float(home_tolerance_m),
                 stable_duration_s=float(stable_duration_s),
                 cancel_event=cancel_event,
@@ -785,6 +792,7 @@ class Px4SitlBackend:
         except Exception as exc:  # noqa: BLE001
             result["failure_reason"] = f"px4_return_home_exception:{type(exc).__name__}"
             result["completion_state"] = "failed"
+            result["autonomous_execution_may_continue"] = True
             return self._finish_smoke_result(result)
 
         result["mode"] = outcome.get("mode")
@@ -795,7 +803,13 @@ class Px4SitlBackend:
         result["final_distance_m"] = outcome.get("final_distance_m")
         result["distance_reduction_m"] = outcome.get("distance_reduction_m")
         result["landing_site_id"] = landing_site_id
-        result["completion_evidence"] = {
+        result["autonomous_execution_may_continue"] = bool(outcome.get("autonomous_execution_may_continue"))
+        result["autonomous_execution_after_sequence"] = outcome.get("autonomous_execution_after_sequence")
+        result["home_evidence"] = outcome.get("home_evidence")
+        result["ack_evidence"] = [{"stage": "home_request", **outcome["home_evidence"]["request_ack"]}] if (outcome.get("home_evidence") or {}).get("request_ack") else []
+        if (outcome.get("mode") or {}).get("ack"):
+            result["ack_evidence"].append({"stage": "rtl_mode", **outcome["mode"]["ack"]})
+        result["completion_evidence"] = {**outcome,
             "returning": outcome.get("returning"),
             "reason": outcome.get("reason"),
             "initial_distance_m": outcome.get("initial_distance_m"),
@@ -804,20 +818,20 @@ class Px4SitlBackend:
             # 收敛要求同样要暴露 —— 分类与说明文案都读它。
             "min_progress_m": outcome.get("min_progress_m"),
             "samples": outcome.get("samples"),
-            "home_local_north_m": home_local_north_m,
-            "home_local_east_m": home_local_east_m,
+            "home_local_north_m": (outcome.get("home_evidence") or {}).get("x"),
+            "home_local_east_m": (outcome.get("home_evidence") or {}).get("y"),
             "home_tolerance_m": home_tolerance_m,
             "stable_duration_s": stable_duration_s,
             "landing_site_id": landing_site_id,
         }
-        result["completion_state"] = str(outcome.get("reason") or "unknown")
+        result["completion_state"] = "timed_out" if outcome.get("reason") in {"in_progress", "no_convergence"} else str(outcome.get("reason") or "unknown")
 
         if outcome.get("failure_reason"):
             result["failure_reason"] = str(outcome["failure_reason"])
             self._classify_completion_timeout(result, "return_home")
             return self._finish_smoke_result(result)
 
-        if outcome.get("reason") != "arrived_at_home_site":
+        if outcome.get("reason") != "arrived_at_home":
             result["failure_reason"] = "return_home_in_progress"
             return self._finish_smoke_result(result)
         result["result"] = "pass"
@@ -1003,6 +1017,7 @@ class Px4SitlBackend:
                     or self.config.command_timeout_ms
                 ),
                 landing_site=args.get("landing_site"),
+                ground_reference=args.get("ground_reference"),
                 translation_scene_ned_m=args.get("translation_scene_ned_m"),
             )
 

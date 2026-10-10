@@ -443,7 +443,7 @@ def test_vehicle_lifecycle_owns_heartbeat_across_takeoff_and_land(
 
     landed = backend.execute_land_action()
     assert landed["result"] == "fail"
-    assert landed["failure_reason"] == "landing_site_unavailable"
+    assert landed["failure_reason"] == "ground_reference_unavailable"
     assert landed["land_ack"]["result"] == 0
     assert handle.session.connected is True
     assert handle.session.receive_thread_alive() is True

@@ -1,4 +1,4 @@
-"""Fail-closed task completion while pad evidence has no trusted producer."""
+"""Ordinary actions do not require a validated named landing pad."""
 from __future__ import annotations
 
 import json
@@ -13,21 +13,30 @@ from tests.unit.test_runtime_action_lifecycle import action_body, install_regist
 FIXTURE = Path(__file__).resolve().parents[2] / "docs" / "fixtures" / "runtime_landing_site_candidate_v1.json"
 
 
-def test_return_home_does_not_enter_rtl_without_validated_site(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_return_home_checks_actual_home_without_validated_site(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     registry, store = install_registry(monkeypatch)
     monkeypatch.setattr(routes, "AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+
+    def home_unverified(backend, **kwargs):
+        backend.session.calls.append("return_home")
+        assert "landing_site_id" not in kwargs
+        return {"result": "fail", "failure_reason": "home_position_unverified",
+                "completion_state": "unknown", "autonomous_execution_may_continue": False}
+
+    monkeypatch.setattr(routes.Px4SitlBackend, "execute_return_home_action", home_unverified)
 
     status, result = routes.dispatch("POST", "/api/actions/return-home",
                                      body=action_body("UAV-01", key="return-without-site"))
 
     assert status == 200
     assert result["status"] == "failed"
-    assert result["failure_reason"] == "landing_site_unavailable"
-    assert registry.get_vehicle("UAV-01").session.calls == []
+    assert result["failure_reason"] == "home_position_unverified"
+    assert result["execution_admitted"] is True
+    assert registry.get_vehicle("UAV-01").session.calls == ["return_home"]
     assert store.runtime_snapshot()["active_actions"] == []
 
 
-def test_operator_land_sends_command_but_cannot_claim_pad_without_site(
+def test_operator_land_sends_command_but_cannot_claim_ground_without_reference(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     registry, store = install_registry(monkeypatch)
@@ -40,7 +49,7 @@ def test_operator_land_sends_command_but_cannot_claim_pad_without_site(
     assert status == 200
     assert registry.get_vehicle("UAV-01").session.calls == ["land"]
     assert result["status"] == "failed"
-    assert result["failure_reason"] == "landing_site_unavailable"
+    assert result["failure_reason"] == "ground_reference_unavailable"
     assert store.runtime_snapshot()["active_actions"] == []
 
 

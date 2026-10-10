@@ -288,11 +288,10 @@ class HoldPositionRequest(BackendRequest):
 
 @dataclass(slots=True)
 class ReturnHomeRequest(BackendRequest):
-    """自主返航（RETURN_HOME / ``AUTO + RTL``）。
+    """Observe fresh stable arrival at the actual PX4 home through RTL.
 
-    Runtime derives the per-node local target from a validated scene landing
-    site and current calibration. Progress is diagnostic; only stable arrival
-    inside the site tolerance can complete the action.
+    This is not a promise that RTL will stop or land at a designated site.
+    ``min_progress_m`` remains a diagnostic field only.
     """
 
     timeout_s: float = 60.0
