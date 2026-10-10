@@ -116,8 +116,10 @@ to run the initial standard-library bundle. Current artifact is experimental onl
 | [DINO-WM](https://github.com/gaoyuezhou/dino_wm) | Latent world modeling on frozen visual features | Related comparison, not interchangeable with all JEPA implementations |
 | [SkyJEPA](https://github.com/arplaboratory/SkyJEPA) | Quadrotor state dynamics | Official code/checkpoints still marked pending; do not claim official replication |
 
-This is a task-oriented candidate map, not an exhaustive list. No upstream source
-or checkpoint has been copied into this module. Verify each code/weight license
+This is a task-oriented candidate map, not an exhaustive list. The state prototype
+does not copy upstream models. A separate visual load experiment pins official
+LeWorldModel code and weights in ignored artifacts; see [LEWM_OFFLINE.md](LEWM_OFFLINE.md).
+No upstream weights are tracked in Git. Verify each code/weight license
 separately before redistribution. The image's [AGX Orin specification](https://www.nvidia.com/content/dam/en-zz/Solutions/gtcf21/jetson-orin/nvidia-jetson-agx-orin-technical-brief.pdf)
 defines target hardware, not acceptance results. No upstream research benchmark
 score is presented as an experiment run on our machine.
