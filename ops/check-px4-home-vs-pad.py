@@ -38,9 +38,24 @@ MANIFEST = Path("/mnt/d/2026UAVSwarm/simulation/px4_gazebo/config/three_uav_mono
 def read_home(conn) -> dict:
     """读 HOME_POSITION 与当前位置。
 
-    HOME_POSITION (msg 242) 字段：
-        latitude/longitude (deg*1e7), altitude (mm, AMSL), local_x/y/z (m, NED)
-    local_x/y/z 是我们关心的 —— 它就是 RTL 要回去的点（相对 EKF 原点）。
+    ⚠️ **字段名以 MAVLink 定义为准：`x` / `y` / `z`，不是 `local_x/y/z`。**
+
+    本函数第一版写的是 `getattr(home, "local_x", None)` —— 那是个**不存在的字段**，
+    于是读到 `None`。而我把它当成"**PX4 没填本地坐标**"并写进注释，
+    成了一个假事实。（Runtime 负责人指出后核对
+    `MAVLink_home_position_message.fieldnames` 确认。）
+
+    真实字段：
+        latitude, longitude, altitude, **x, y, z**, q,
+        approach_x, approach_y, approach_z, time_usec
+
+    `x/y/z` 是相对 **EKF 原点**的本地 NED 坐标（米）—— 正是 RTL 要回去的点。
+
+    **教训**：`getattr(obj, "name", None)` 拿到 `None` 有两种可能 ——
+    字段真是空值，或**字段名根本不存在**。两者必须区分，
+    否则会把"我读错了"当成"系统没提供"。
+
+    另：**只读，不抢 Runtime 的 14540-14542**（那些端口由 Runtime 持有）。
     """
     home = None
     pos = None
@@ -59,9 +74,9 @@ def read_home(conn) -> dict:
     out = {}
     if home is not None:
         out["home"] = {
-            "local_north_m": getattr(home, "local_x", None),
-            "local_east_m": getattr(home, "local_y", None),
-            "local_down_m": getattr(home, "local_z", None),
+            "local_north_m": getattr(home, "x", None),
+            "local_east_m": getattr(home, "y", None),
+            "local_down_m": getattr(home, "z", None),
             "lat_deg": (getattr(home, "latitude", 0) or 0) / 1e7,
             "lon_deg": (getattr(home, "longitude", 0) or 0) / 1e7,
             "alt_mm": getattr(home, "altitude", None),
