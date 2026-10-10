@@ -38,6 +38,4 @@ def replay_recent_unique_actions(
                 continue
             actions.pop(key, None)
             actions[key] = event
-            if len(actions) > n:
-                actions.popitem(last=False)
-    return list(actions.values())
+    return list(actions.values())[-n:]
