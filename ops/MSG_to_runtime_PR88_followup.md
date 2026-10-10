@@ -1,5 +1,32 @@
 # 给 runtime 负责人：PR #88 的两处收尾 + 拆分建议（B+C）
 
+> ## ⚠️ 更正（本文发出后，Runtime 侧指出的）
+>
+> **§一 里"`not_connected` 时 `land` 会落到 `landing_site is None` → `pass`"
+> 这个判断是错的。**
+>
+> Runtime 侧核实后指出：`execute_land_action` 会先调
+> `_ensure_persistent_session_ready()`，会话未连接时直接返回
+> `persistent_vehicle_session_not_connected` —— **不会发送 LAND，也不会报成功**。
+> 我复核确认他是对的：
+>
+> ```python
+> # px4_sitl_backend.py:247
+> def _ensure_persistent_session_ready(self, action):
+>     if self.session.status() != "connected":
+>         return self._preflight_rejection(action, "persistent_vehicle_session_not_connected")
+> ```
+>
+> **真正的边界是「已连接的内部 LAND 调用漏传站点」**，不是"未连接会话误报成功"。
+> 即：`landing_site is None → pass` 那条路径**不是**通过"没有会话"到达的，
+> 而是通过**已经连上、但内部调用没把站点传下去**到达的。
+>
+> **§二 给出的修法（先补转发、再收紧默认）不变**，Runtime 侧已照此修完
+> （`591953d` 删掉了 `None → pass`，`4701405` 补上了内部转发）。
+>
+> **§一 的推理过程保留在下方**，作为"当时为什么会这么判断"的记录；
+> 读的时候请带上这条更正。
+
 **集成侧，2026-10-09。** 你上一条核查把残留风险锁定到了具体行，我据此又追了一步，
 发现**修法不是"把 line 510 改成 fail 就完了"** —— 会有副作用。下面是一次说清。
 
@@ -84,6 +111,11 @@ if landing_site is None:
 * 若**没有** → 改动 2 直接做，这是修一个虚假成功。
 * 若**有** → 那条工作流本身需要重新定义（它现在的"成功"没有物理依据），
   请说明它的用途，我再配合调整。
+
+> **✅ 这一节已由 Runtime 侧的实际修复解决（`4701405`）。** 他们按"先补转发、
+> 再收紧默认"的顺序做完了，并新增测试锁定两种情形。按 §一的更正，"没有会话"
+> 本来就走不到那里；**实际受影响的是「已连接但内部调用漏传站点」** ——
+> 那现在报 `landing_site_unavailable`，不再报任务成功。**这是想要的结果。**
 
 ---
 
