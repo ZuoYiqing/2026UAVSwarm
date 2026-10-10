@@ -434,17 +434,6 @@ async function syncRuntimeState(options = {}) {
   }
 }
 
-const capabilities = [
-  ["起飞", "takeoff", "中风险", "PX4 MAVLink", "98.7%"],
-  ["前往航点", "goto", "中风险", "PX4 MAVLink", "97.2%"],
-  ["悬停", "hover", "低风险", "fake / mavlink", "99.1%"],
-  ["降落", "land", "中风险", "PX4 MAVLink", "98.3%"],
-  ["返航", "return_home", "低风险", "PX4 MAVLink", "96.4%"],
-  ["拍照", "camera_capture", "低风险", "payload", "99.0%"],
-  ["云台角度", "gimbal_set_angle", "中风险", "payload", "97.9%"],
-  ["喊话播放", "speaker_play_message", "中风险", "payload", "94.6%"],
-];
-
 const app = document.getElementById("app");
 
 function esc(value) {
@@ -689,15 +678,10 @@ function selectVehicle(nodeId, { fromSimulation = false } = {}) {
   if (state.selectedUav === nodeId) return;
   state.selectedUav = nodeId;
   updateSelectedTelemetry();
-  // 这里**不再调用 render()**。
-  //
-  // render() 会整树替换 app.innerHTML，而三维视图是其中的 <iframe>，于是每次
-  // 选中载具都会销毁并重建 iframe —— 表现为"点一下右边的无人机，左边地图整个
-  // 重新加载"。updateSelectedTelemetry() 已经做了需要的局部更新，
-  // render() 在这里既是多余的，也是那次重载的直接原因。
-  //
-  // iframe 在 render() 中的保活由 render() 自己处理（见该函数），
-  // 所以即便别处触发整树重建，三维视图也不会被重新加载。
+  // updateSelectedTelemetry() 只更新状态；显示也必须立即跟随请求目标。
+  // 复用 renderRegions()/updatePageInPlace()：twin 局部更新保留 iframe，
+  // 其它页面重绘 endpoint、MAVLink identity 和所选节点的动作证据。
+  render();
   if (!fromSimulation) syncSelectionToSimulation(nodeId);
 }
 
@@ -1032,7 +1016,7 @@ function backendPage() {
     && liveAction.status === "succeeded"
     && liveAction.completion_evidence?.completion_reached === true
       ? "起飞时曾确认高度稳定；当前飞行状态见实时遥测"
-      : "无独立 HOLD 接口；等待起飞稳定证据";
+      : "HOLD 后端已实现并完成实测；主控台暂未接入保持操作，当前状态见实时遥测";
   return `<div class="page action-page">
     ${pageTitle("飞行控制与 Runtime", "指定节点 · Policy · MAVLink ACK · 遥测完成证据")}
     <div class="grid api-toolbar">

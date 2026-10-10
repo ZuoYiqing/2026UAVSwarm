@@ -796,6 +796,8 @@ class MavlinkPatrolController:
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         self._land_sent_at = time.monotonic()
+        with self._condition:
+            self._land_position_sequence = self._position_sequence
         ack = self.session.land(timeout_s=timeout_s)
         if ack_accepted(ack):
             self.stop_setpoints()
@@ -804,9 +806,11 @@ class MavlinkPatrolController:
         return ack
 
     def wait_landed_disarmed(self, *, timeout_s: float) -> dict[str, Any]:
+        """Accept the simple_recon ground plane, not a roof with landed=True."""
         deadline = time.monotonic() + timeout_s
         low_samples = 0
-        seen_sequence = -1
+        low_started_at: float | None = None
+        seen_sequence = getattr(self, "_land_position_sequence", self._position_sequence)
         reason = "landing_timeout"
         with self._condition:
             while time.monotonic() < deadline:
@@ -820,24 +824,34 @@ class MavlinkPatrolController:
                 if self._position_sequence > seen_sequence:
                     seen_sequence = self._position_sequence
                     if (
-                        self._vehicle_local_position is not None
-                        and self._vehicle_local_position.altitude_m <= 0.3
+                        self._scene_position is not None
+                        and math.isfinite(self._scene_position.z_m)
+                        and abs(self._scene_position.z_m) <= 0.3
                     ):
                         low_samples += 1
+                        if low_started_at is None:
+                            low_started_at = self._last_telemetry_at
                     else:
                         low_samples = 0
+                        low_started_at = None
                 now = time.monotonic()
                 after = self._land_sent_at or 0.0
                 if (self._landed_state == 1 and self._armed is False
                         and self._landed_at is not None and self._heartbeat_at is not None
                         and self._landed_at >= after and self._heartbeat_at >= after
-                        and now - self._landed_at <= 2 and now - self._heartbeat_at <= 2):
+                        and now - self._landed_at <= 2 and now - self._heartbeat_at <= 2
+                        and low_samples >= 3 and low_started_at is not None
+                        and now - low_started_at >= 0.5):
                     return {
                         "landed": True,
                         "disarmed": True,
                         "landed_state": self._landed_state,
                         "landed_age_s": now - self._landed_at,
                         "heartbeat_age_s": now - self._heartbeat_at,
+                        "scene_ground_confirmed": True,
+                        "scene_ground_z_down_m": 0.0,
+                        "scene_ground_tolerance_m": 0.3,
+                        "scene_ground_stable_s": now - low_started_at,
                         **framed_position_report(
                             scene_position=self._scene_position,
                             vehicle_local_position=self._vehicle_local_position,
@@ -845,9 +859,19 @@ class MavlinkPatrolController:
                     }
                 self._condition.wait(timeout=max(min(deadline - time.monotonic(), 0.5), 0.01))
         scene_position, vehicle_local_position = self._positions()
+        if self._landed_state == 1 and self._armed is False:
+            reason = (
+                "scene_position_unavailable" if scene_position is None
+                else "scene_ground_not_reached"
+            )
         return {
             "landed": False,
             "disarmed": self._armed is False,
+            "landed_state": self._landed_state,
+            "scene_ground_confirmed": False,
+            "scene_ground_z_down_m": 0.0,
+            "scene_ground_tolerance_m": 0.3,
+            "scene_ground_low_samples": low_samples,
             **framed_position_report(
                 scene_position=scene_position,
                 vehicle_local_position=vehicle_local_position,
@@ -1092,13 +1116,13 @@ def run_patrol(
             controller = by_node[node_id]
             if not controller.connected:
                 continue
-            vehicle_local_position = controller.vehicle_local_position()
-            if (
-                getattr(controller, "armed", None) is False
-                and vehicle_local_position is not None
-                and vehicle_local_position.altitude_m <= 0.3
-            ):
-                results[node_id]["recovery"] = "already_grounded_disarmed"
+            if getattr(controller, "armed", None) is False:
+                scene_position = controller.position()
+                results[node_id]["recovery"] = (
+                    "already_grounded_disarmed"
+                    if scene_position is not None and abs(scene_position.z_m) <= 0.3
+                    else "disarmed_without_verified_scene_ground"
+                )
                 continue
             try:
                 results[node_id]["recovery_land_ack"] = controller.land(

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,42 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKTREES = REPO_ROOT.parent / "2026UAVSwarm-worktrees"
+
+
+def _find_worktrees_root(repo_root: Path) -> Path:
+    """定位 `2026UAVSwarm-worktrees` 目录。
+
+    ⚠️ **不能假设它是 `repo_root.parent / "2026UAVSwarm-worktrees"`。**
+
+    那个假设只在"从主仓库运行"时成立：
+
+        主仓库   D:\\2026UAVSwarm                      → parent = D:\\
+        期望     D:\\2026UAVSwarm-worktrees            ✅
+
+        某个 worktree  D:\\2026UAVSwarm-worktrees\\runtime-action-lifecycle
+                       → parent = D:\\2026UAVSwarm-worktrees
+        那个假设给出   D:\\2026UAVSwarm-worktrees\\2026UAVSwarm-worktrees  ❌ 多了一层
+
+    实测后果：**同一条测试从主仓库通过、从 worktree 必失败**，
+    而失败信息里的路径看起来像"文件丢了"，实际是路径算错了 ——
+    两者要查的方向完全不同。于是有人会把它 deselect 掉而不是修它。
+
+    这里改为**向上逐级查找**，两种布局都能命中。仍可用
+    `UAV_WORKTREES_ROOT` 显式覆盖。
+    """
+    override = os.environ.get("UAV_WORKTREES_ROOT")
+    if override:
+        return Path(override)
+    for candidate in (repo_root.parent, *repo_root.parents):
+        guess = candidate / "2026UAVSwarm-worktrees"
+        if guess.is_dir():
+            return guess
+    # 找不到就退回原假设 —— 让下游的 skipif 去处理"文件不存在"，
+    # 而不是在这里抛异常（本模块只负责定位，不负责判定环境是否就绪）。
+    return repo_root.parent / "2026UAVSwarm-worktrees"
+
+
+WORKTREES = _find_worktrees_root(REPO_ROOT)
 ALGO_EXAMPLES = (
     WORKTREES / "algorithm-lab-local-llm-poc" / "algorithm_lab"
     / "mission_llm_poc" / "examples" / "flight_validation_only.json"

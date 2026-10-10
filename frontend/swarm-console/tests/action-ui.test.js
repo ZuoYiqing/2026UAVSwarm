@@ -91,6 +91,54 @@ test("empty action page renders with usable selectors", () => {
   assert.doesNotMatch(html, /undefined/);
 });
 
+test("selecting a vehicle immediately refreshes backend identity and ACK evidence", () => {
+  const h = harness();
+  // 沿用无 dataset 的极简 DOM 桩，检查 render 写入的内容而非直接调用页面函数。
+  const content = { innerHTML: "", addEventListener() {} };
+  h.context.document.getElementById = (id) => id === "app" ? h.app
+    : id === "slot-content" ? content : null;
+  h.run(`state.page = 'backend'; state.selectedUav = 'UAV-01';
+    state.actionRecords = [1,2].map(n => ({node_id:'UAV-0'+n,
+      action_id:'fixture-action-'+n, action_type:'takeoff', status:'succeeded',
+      ack_evidence:[{stage:'fixture-ack-UAV-0'+n, result:0}]}));
+    updateSelectedTelemetry(); render()`);
+  assert.match(content.innerHTML, /<dt>node_id<\/dt><dd>UAV-01<\/dd>/);
+  assert.match(content.innerHTML, /udpin:127\.0\.0\.1:14540/);
+  assert.match(content.innerHTML, /<label>MAVLink Identity<\/label><input value="1\/1"/);
+  assert.match(content.innerHTML, /fixture-ack-UAV-01/);
+
+  h.run("selectVehicle('UAV-02')");
+  assert.match(content.innerHTML, /<dt>node_id<\/dt><dd>UAV-02<\/dd>/);
+  assert.match(content.innerHTML, /udpin:127\.0\.0\.1:14541/);
+  assert.match(content.innerHTML, /<label>MAVLink Identity<\/label><input value="2\/1"/);
+  assert.match(content.innerHTML, /fixture-action-2/);
+  assert.match(content.innerHTML, /fixture-ack-UAV-02/);
+  assert.doesNotMatch(content.innerHTML, /14540|fixture-action-1|fixture-ack-UAV-01/);
+
+  // 来自三维视图的选择也立即刷新当前非 twin 页，不回推选择消息。
+  h.run("selectVehicle('UAV-01', {fromSimulation:true})");
+  assert.match(content.innerHTML, /<dt>node_id<\/dt><dd>UAV-01<\/dd>/);
+  assert.match(content.innerHTML, /fixture-ack-UAV-01/);
+  assert.doesNotMatch(content.innerHTML, /14541|fixture-action-2|fixture-ack-UAV-02/);
+});
+
+test("selecting a vehicle refreshes vehicle detail identity and telemetry state", () => {
+  const h = harness();
+  const content = { innerHTML: "", addEventListener() {} };
+  h.context.document.getElementById = (id) => id === "app" ? h.app
+    : id === "slot-content" ? content : null;
+  h.run(`state.page='vehicle'; state.selectedUav='UAV-01';
+    state.fleet[0].zDownM=-3; state.fleet[1].zDownM=-7;
+    state.actionRecords=[{node_id:'UAV-02',action_type:'land',status:'executing'}];
+    updateSelectedTelemetry(); render()`);
+  assert.match(content.innerHTML, /单机详情 \/ UAV-01/);
+  h.run("selectVehicle('UAV-02')");
+  assert.match(content.innerHTML, /单机详情 \/ UAV-02/);
+  assert.match(content.innerHTML, /MAVLink Identity<\/div><h2[^>]*>2\/1<\/h2>/);
+  assert.match(content.innerHTML, /LAND \/ EXECUTING/);
+  assert.equal(h.run("state.lastZ"), -7);
+});
+
 test("double click posts once and response remains UAV-02 after selecting UAV-03", async () => {
   const h = harness();
   const bodies = [];
