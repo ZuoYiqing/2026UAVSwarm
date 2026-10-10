@@ -17,7 +17,6 @@
     "object_id": "ground_plane"
   },
   "source_timestamp": "2026-10-09T00:00:00Z",
-  "valid_for_ms": 60000,
   "status": "candidate",
   "validation": {
     "real_landing": false,

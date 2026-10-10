@@ -593,14 +593,16 @@ class RuntimeStateStore:
         return self._coordinate_calibration(node_id)
 
     def update_landing_site_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
-        """Store a Simulation-owned, node-specific landing site independently of EKF calibration."""
+        """Store static, version-keyed site geometry independently of dynamic EKF calibration."""
         if evidence.get("contract_version") != "1.0":
             raise ValueError("unsupported_landing_site_version")
+        if "valid_for_ms" in evidence:
+            raise ValueError("landing_site_ttl_not_supported")
         required = (
             "scene_id", "map_version", "world_sha256", "node_id", "object_id",
             "center_scene_ned_m", "horizontal_tolerance_m", "ground_down_m",
             "vertical_tolerance_m", "collision_surface", "source_timestamp",
-            "valid_for_ms", "status", "validation",
+            "status", "validation",
         )
         missing = [key for key in required if evidence.get(key) in (None, "")]
         if missing:
@@ -631,19 +633,13 @@ class RuntimeStateStore:
         validation = evidence["validation"]
         if not isinstance(validation, dict):
             raise ValueError("landing_site_validation_invalid")
-        try:
-            valid_for_ms = int(evidence["valid_for_ms"])
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("landing_site_validity_invalid") from exc
-        if not 100 <= valid_for_ms <= 86_400_000:
-            raise ValueError("landing_site_validity_invalid")
         # The current HTTP bridge has no authenticated Simulation publisher.
         # A caller-supplied run_id/real_landing flag cannot grant flight authority.
         if evidence["status"] == "validated":
             raise ValueError("trusted_landing_site_producer_unavailable")
         public = finite_json({**evidence, "status": "candidate"})
         with self._lock:
-            self._landing_sites[node_id] = {**public, "received_monotonic": self._monotonic()}
+            self._landing_sites[node_id] = public
         return copy.deepcopy(public)
 
     def landing_site(self, node_id: str) -> tuple[dict[str, Any] | None, str]:
@@ -651,10 +647,6 @@ class RuntimeStateStore:
             site = copy.deepcopy(self._landing_sites.get(node_id))
         if site is None:
             return None, "unavailable"
-        age_ms = max(0, int(round((self._monotonic() - site.pop("received_monotonic")) * 1000)))
-        site["evidence_age_ms"] = age_ms
-        if age_ms > int(site["valid_for_ms"]):
-            return site, "stale"
         return site, str(site["status"])
 
     def simulation_status(self) -> dict[str, Any]:

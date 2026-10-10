@@ -114,11 +114,19 @@ as a promise to stay at the pad.
 This change reserves an internal, node-specific evidence shape separate from
 the dynamic coordinate calibration: `scene_id`, `map_version`, `world_sha256`,
 `node_id`, `object_id`, `center_scene_ned_m`, horizontal/vertical tolerances,
-`ground_down_m`, `collision_surface`, `source_timestamp`, `valid_for_ms`,
+`ground_down_m`, `collision_surface`, `source_timestamp`,
 `status`, and `validation`. A render-only pad and a fresh EKF translation do not
 prove a safe landing surface. The current scene's pad visual has no collision;
 the physical support is `ground_plane`. Simulation has proposed a conservative
 0.75 m center tolerance but has **not** validated it with an integrated flight.
+
+Landing-site geometry does not expire by elapsed time: it is tied to
+`scene_id`/`map_version`/world identity. Landing capability must be tied to the
+software version in a future trusted validation record, not a TTL.
+`source_timestamp` is provenance only; `valid_for_ms` is not accepted for this
+static site record. Runtime still decides whether a site may be used for an
+action from live telemetry, dynamic calibration, Policy, and matching versioned
+evidence. Calibration and Simulation-health TTLs below remain unchanged.
 
 There is currently **no trusted landing-site publisher** in the Runtime HTTP
 bridge. In particular, an unauthenticated caller's `status: validated` or

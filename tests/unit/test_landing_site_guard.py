@@ -47,10 +47,16 @@ def test_operator_land_sends_command_but_cannot_claim_pad_without_site(
 def test_self_reported_validation_cannot_make_landing_site_authoritative() -> None:
     from uav_runtime.http.state_store import RuntimeStateStore
 
-    store = RuntimeStateStore()
+    now = [100.0]
+    store = RuntimeStateStore(monotonic=lambda: now[0])
     evidence = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert "valid_for_ms" not in evidence
     assert store.update_landing_site_evidence(evidence)["status"] == "candidate"
     assert store.landing_site("UAV-01")[1] == "candidate"
+    now[0] += 365 * 24 * 60 * 60
+    assert store.landing_site("UAV-01")[1] == "candidate"
+    with pytest.raises(ValueError, match="landing_site_ttl_not_supported"):
+        store.update_landing_site_evidence({**evidence, "valid_for_ms": 60000})
     evidence["status"] = "validated"
     evidence["validation"] = {"real_landing": True, "run_id": "claimed-run"}
 
