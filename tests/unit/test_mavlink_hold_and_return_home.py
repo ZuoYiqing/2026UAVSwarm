@@ -241,6 +241,9 @@ def _verified_home(monkeypatch, session) -> None:
         "latitude": 473977420, "longitude": 85455940, "altitude": 488000,
         "verification_source": "unit_fixture_only",
     })
+    monkeypatch.setattr(type(session), "verify_home_rtl_destination", lambda self, **kwargs: {
+        "verified": True, "verification_source": "unit_fixture_only", "rtl_type": 0, "rally_count": 0,
+    })
 
 
 def test_return_home_progress_does_not_complete_before_home_arrival(monkeypatch) -> None:

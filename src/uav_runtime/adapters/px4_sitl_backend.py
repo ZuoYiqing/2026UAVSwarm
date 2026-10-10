@@ -806,6 +806,7 @@ class Px4SitlBackend:
         result["autonomous_execution_may_continue"] = bool(outcome.get("autonomous_execution_may_continue"))
         result["autonomous_execution_after_sequence"] = outcome.get("autonomous_execution_after_sequence")
         result["home_evidence"] = outcome.get("home_evidence")
+        result["rtl_destination_evidence"] = outcome.get("rtl_destination_evidence")
         result["ack_evidence"] = [{"stage": "home_request", **outcome["home_evidence"]["request_ack"]}] if (outcome.get("home_evidence") or {}).get("request_ack") else []
         if (outcome.get("mode") or {}).get("ack"):
             result["ack_evidence"].append({"stage": "rtl_mode", **outcome["mode"]["ack"]})

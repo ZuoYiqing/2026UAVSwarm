@@ -113,6 +113,15 @@ this local HOME goal. Horizontal `home_tolerance_m` defaults to 0.75 m.
 The measured cross-check discrepancy consumes that tolerance; discrepancy at or
 above it rejects RTL with `home_position_uncertainty_exceeds_tolerance`.
 This is a telemetry-relative check, not a sensor accuracy certification.
+Before sending RTL the same dispatcher must receive fresh replies to
+`PARAM_REQUEST_READ(RTL_TYPE)` and `MISSION_REQUEST_LIST(mission_type=RALLY)`.
+Only actual `RTL_TYPE=0` and zero rally points are supported by this HOME-only
+action. Missing replies fail `rtl_destination_unverified`; any other type or
+nonzero rally count fails `rtl_home_configuration_unsupported`, without sending
+RTL. Evidence is retained as `rtl_destination_evidence`; no parameters or mission
+items are written. This bounded configuration avoids confusing HOME with the
+closest rally or mission landing destination. New HOME/configuration queries
+still use the already-owned MAVLink receiver.
 `stable_duration_ms` defaults to 1000 ms (range 300–10000 ms); at least three
 fresh post-command position samples must remain within tolerance for this
 duration. `min_progress_m` is only diagnostic. Changing to AUTO_RTL or reducing
@@ -120,8 +129,9 @@ the distance by 5 m never completes return-home by itself. A timed observation
 with progress but no arrival yields `return_home_in_progress`, not success.
 The completion goal is `px4_home_horizontal_arrival`, not landing, disarm,
 obstacle clearance, or precision pad occupancy. The configured PX4 RTL
-destination/behavior must be verified in real acceptance: rally/mission RTL may
-not target HOME and will not satisfy this observation goal. Observation expiry
+configuration-read support/behavior must be verified in real acceptance. Rally
+and mission landing return configurations are intentionally not supported by
+this HOME-only route. Observation expiry
 is terminal `timed_out`, with progress retained only as diagnostic evidence.
 
 HTTP completion does not stop autonomous RTL/LAND. The per-node autonomous

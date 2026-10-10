@@ -344,6 +344,8 @@ class MavlinkBackendSession:
     _position_epoch: int = 0
     _position_epoch_changed_timestamp: str | None = None
     _odometry_reset_counter: int | None = None
+    _rtl_type_evidence: dict[str, Any] | None = None
+    _rally_count_evidence: dict[str, Any] | None = None
     _subscribers: dict[int, Callable[[Any], None]] = field(default_factory=dict)
     _next_subscriber_id: int = 1
     _ack_generations: dict[int, int] = field(default_factory=dict)
@@ -604,6 +606,26 @@ class MavlinkBackendSession:
                     "time_boot_ms": getattr(message, "time_boot_ms", None),
                     "lat": getattr(message, "lat", None), "lon": getattr(message, "lon", None),
                 }
+            elif kind == "PARAM_VALUE":
+                param_id = getattr(message, "param_id", "")
+                if isinstance(param_id, bytes):
+                    param_id = param_id.decode("ascii", errors="replace")
+                if isinstance(param_id, str) and param_id.rstrip("\x00") == "RTL_TYPE":
+                    self._rtl_type_evidence = {
+                        "sequence": sequence, "received_monotonic": received_monotonic,
+                        "sample_timestamp": received_timestamp,
+                        "param_id": "RTL_TYPE", "param_value": getattr(message, "param_value", None),
+                        "param_type": getattr(message, "param_type", None),
+                    }
+            elif kind == "MISSION_COUNT" and getattr(message, "mission_type", None) == 2:
+                mav = getattr(self.connection, "mav", None)
+                if (getattr(message, "target_system", None) == getattr(mav, "srcSystem", 255)
+                        and getattr(message, "target_component", None) == getattr(mav, "srcComponent", 0)):
+                    self._rally_count_evidence = {
+                        "sequence": sequence, "received_monotonic": received_monotonic,
+                        "sample_timestamp": received_timestamp,
+                        "mission_type": 2, "count": getattr(message, "count", None),
+                    }
             elif kind == "ODOMETRY":
                 counter = getattr(message, "reset_counter", None)
                 if isinstance(counter, int):
@@ -862,6 +884,43 @@ class MavlinkBackendSession:
                 self._rx_condition.wait(timeout=0.05)
         return {"verified": False, "failure_reason": reason, "request_ack": ack}
 
+    def verify_home_rtl_destination(self, *, timeout_s: float = 3.0,
+                                    cancel_event: threading.Event | None = None) -> dict[str, Any]:
+        """Read-only configuration proof: RTL_TYPE=0 with no rally points.
+
+        Other RTL modes can select a mission landing or rally destination.
+        There is no assumed default, parameter write, or second receiver.
+        """
+        self.start_receive_loop()
+        with self.command_lock:
+            cursor = self.observation_cursor()
+            epoch = self._position_epoch
+            with self.tx_lock:
+                self.connection.mav.param_request_read_send(self.target_system, self.target_component, b"RTL_TYPE", -1)
+                self.connection.mav.mission_request_list_send(self.target_system, self.target_component, 2)
+            deadline = time.monotonic() + max(float(timeout_s), 0.1)
+            with self._rx_condition:
+                while time.monotonic() < deadline:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return {"verified": False, "failure_reason": "cancelled"}
+                    if self._position_epoch != epoch:
+                        return {"verified": False, "failure_reason": "home_reference_changed"}
+                    param, rally = self._rtl_type_evidence, self._rally_count_evidence
+                    if (param and rally and param["sequence"] > cursor and rally["sequence"] > cursor
+                            and time.monotonic() - param["received_monotonic"] <= 2.0
+                            and time.monotonic() - rally["received_monotonic"] <= 2.0):
+                        value, count = param["param_value"], rally["count"]
+                        valid = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                 and math.isfinite(value) and value == 0
+                                 and isinstance(count, int) and not isinstance(count, bool) and count == 0)
+                        if isinstance(count, int) and count == 0:
+                            with self.tx_lock:
+                                self.connection.mav.mission_ack_send(self.target_system, self.target_component, 0, 2)
+                        return {"verified": valid, "rtl_type": dict(param), "rally_points": dict(rally),
+                                "failure_reason": None if valid else "rtl_home_configuration_unsupported"}
+                    self._rx_condition.wait(timeout=0.05)
+        return {"verified": False, "failure_reason": "rtl_destination_unverified"}
+
     def set_mode(
         self,
         *,
@@ -914,7 +973,7 @@ class MavlinkBackendSession:
             timeout_s=confirm_timeout_s,
             after_sequence=mode_cursor,
         )
-        if not ack.get("timeout") and ack.get("result") != 0:
+        if ack.get("timeout") or ack.get("result") != 0:
             confirmed = False
         observed_name = (
             None if observed_main is None
@@ -1916,6 +1975,23 @@ class MavlinkBackendSession:
                 if cancel_event is not None and cancel_event.is_set():
                     return {"returning": False, "reason": "cancelled", "home_evidence": home,
                             "failure_reason": "cancelled", "autonomous_execution_may_continue": False}
+                try:
+                    destination = self.verify_home_rtl_destination(timeout_s=min(float(timeout_s), 3.0), cancel_event=cancel_event)
+                except Exception as exc:
+                    destination = {"verified": False, "failure_reason": "rtl_destination_unverified",
+                                   "error_class": type(exc).__name__}
+                if not destination.get("verified"):
+                    return {"returning": False, "reason": "rtl_destination_unverified", "home_evidence": home,
+                            "rtl_destination_evidence": destination, "failure_reason": destination.get("failure_reason"),
+                            "autonomous_execution_may_continue": False}
+                if (epoch != self._position_epoch or time.monotonic() - home.get("received_monotonic", time.monotonic()) > 2.0):
+                    return {"returning": False, "reason": "home_reference_changed", "home_evidence": home,
+                            "failure_reason": "home_reference_changed", "autonomous_execution_may_continue": False}
+                # The configuration read can be cancelled by LAND too.
+                if cancel_event is not None and cancel_event.is_set():
+                    return {"returning": False, "reason": "cancelled", "failure_reason": "cancelled",
+                            "home_evidence": home, "autonomous_execution_may_continue": False}
+                start_sequence = self.local_position_cursor()
                 mode_result = self.set_mode(
                     main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
                     sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
@@ -1943,6 +2019,7 @@ class MavlinkBackendSession:
                 "samples": 0,
                 "mode": mode_evidence,
                 "home_evidence": home,
+                "rtl_destination_evidence": destination,
                 "autonomous_execution_may_continue": True,
                 "autonomous_execution_after_sequence": start_sequence,
                 "failure_reason": "return_home_mode_not_confirmed",
@@ -1964,6 +2041,7 @@ class MavlinkBackendSession:
         def finish(evidence: dict[str, Any]) -> dict[str, Any]:
             """统一出口：先留证据，再返回（理由同 hold_position.finish）。"""
             evidence["home_evidence"] = home
+            evidence["rtl_destination_evidence"] = destination
             stop = self.autonomous_state()
             evidence["autonomous_execution_may_continue"] = not (
                 stop.get("active") is False and isinstance(stop.get("stop_sequence"), int)

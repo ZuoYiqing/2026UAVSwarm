@@ -52,6 +52,7 @@
     "scene_position_ned_m": "Runtime: fresh LOCAL_POSITION_NED + node calibration exactly once",
     "physical_landed_disarmed": "post-LAND EXTENDED_SYS_STATE and HEARTBEAT",
     "home_evidence": "post-request HOME_POSITION.x/y corroborated by synchronized global/local telemetry",
+    "rtl_destination_evidence": "fresh PARAM_VALUE RTL_TYPE=0 and addressed MISSION_COUNT RALLY count=0 from the same session",
     "autonomous_execution_evidence": "same persistent session dispatcher, never frontend timers"
   },
   "not_implemented": ["unknown_surface_perception", "runtime_model_confidence", "named_pad_authorization", "real_joint_acceptance"]

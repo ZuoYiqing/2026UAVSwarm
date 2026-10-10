@@ -353,3 +353,49 @@ def test_return_home_http_routes_without_pad_and_replays_verified_arrival(monkey
     assert registry.get_vehicle("UAV-02").session.calls == ["return_home"]
     assert registry.get_vehicle("UAV-01").session.calls == []
     assert registry.get_vehicle("UAV-03").session.calls == []
+
+
+@pytest.mark.parametrize("rtl_type,rally_count,verified", [(0., 0, True), (1., 0, False), (0., 1, False), (float("nan"), 0, False)])
+def test_rtl_destination_requires_actual_home_only_configuration(evidence_session, rtl_type, rally_count, verified):
+    session, _ = evidence_session
+    sent = []
+    def parameter(*args):
+        sent.append(("parameter_read", args))
+        session.dispatch_message(message("PARAM_VALUE", param_id=b"RTL_TYPE\x00", param_value=rtl_type, param_type=6))
+    def rally(*args):
+        sent.append(("mission_list", args))
+        session.dispatch_message(message("MISSION_COUNT", mission_type=2, count=rally_count, target_system=255, target_component=0))
+    session.connection = SimpleNamespace(mav=SimpleNamespace(
+        srcSystem=255, srcComponent=0, param_request_read_send=parameter,
+        mission_request_list_send=rally, mission_ack_send=lambda *args: sent.append(("mission_ack", args))))
+    result = session.verify_home_rtl_destination(timeout_s=.1)
+    assert result["verified"] is verified
+    assert sent[0][0] == "parameter_read" and sent[1][0] == "mission_list"
+    if not verified:
+        assert result["failure_reason"] == "rtl_home_configuration_unsupported"
+
+
+def test_old_or_other_gcs_rally_evidence_cannot_verify_current_request(evidence_session):
+    session, _ = evidence_session
+    session._rtl_type_evidence = {"sequence": 0, "param_value": 0., "received_monotonic": 100.}
+    session._rally_count_evidence = {"sequence": 0, "count": 0, "received_monotonic": 100.}
+    session.connection = SimpleNamespace(mav=SimpleNamespace(
+        srcSystem=255, srcComponent=0, param_request_read_send=lambda *args: None,
+        mission_request_list_send=lambda *args: session.dispatch_message(message(
+            "MISSION_COUNT", mission_type=2, count=0, target_system=254, target_component=0))))
+    result = session.verify_home_rtl_destination(timeout_s=.1)
+    assert result["verified"] is False and result["failure_reason"] == "rtl_destination_unverified"
+
+
+def test_unknown_rtl_configuration_does_not_send_mode(evidence_session, monkeypatch):
+    session, _ = evidence_session
+    monkeypatch.setattr(MavlinkBackendSession, "start_gcs_heartbeat", lambda *args, **kw: False)
+    monkeypatch.setattr(MavlinkBackendSession, "request_home_position", lambda *args, **kw: {
+        "verified": True, "x": 0., "y": 0., "latitude": 470000000, "longitude": 80000000})
+    monkeypatch.setattr(MavlinkBackendSession, "verify_home_rtl_destination", lambda *args, **kw: {
+        "verified": False, "failure_reason": "rtl_destination_unverified"})
+    sent = []
+    monkeypatch.setattr(MavlinkBackendSession, "set_mode", lambda *args, **kw: sent.append(kw))
+    result = session.return_home(timeout_s=.1)
+    assert result["failure_reason"] == "rtl_destination_unverified"
+    assert result["autonomous_execution_may_continue"] is False and not sent
