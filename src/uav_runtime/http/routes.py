@@ -47,7 +47,7 @@ from uav_runtime.protocol.enums import AuthorityScope, CommandSource
 from uav_runtime.protocol.schema import ActionRequest
 from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
-from uav_runtime.runtime.replay import replay_last
+from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
@@ -958,9 +958,8 @@ def actions_recent(query: str = "") -> list[dict[str, Any]]:
     """Read-only recent action views derived from audit/replay events."""
     values = parse_qs(query, keep_blank_values=True)
     n = _query_int(values, "n", 20)
-    raw_events = replay_last(AUDIT_PATH, n=max(n * 5, n))
-    action_events = [event for event in raw_events if _is_action_result_event(event)]
-    return [event_to_action_result_view(event, index=i).to_dict() for i, event in enumerate(action_events[-n:])]
+    events = replay_recent_unique_actions(AUDIT_PATH, n, is_action_result=_is_action_result_event)
+    return [event_to_action_result_view(event, index=i).to_dict() for i, event in enumerate(events)]
 
 
 def policy_decisions(query: str = "") -> list[dict[str, Any]]:

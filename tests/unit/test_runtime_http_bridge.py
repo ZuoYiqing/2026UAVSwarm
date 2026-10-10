@@ -253,6 +253,42 @@ def test_actions_recent_returns_action_result_view(monkeypatch, tmp_path: Path) 
     assert payload[0]["observations"]["threshold_reached"] is True
 
 
+def test_actions_recent_counts_each_action_id_once(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    audit_path = tmp_path / "runtime.audit.jsonl"
+    monkeypatch.setattr(routes, "AUDIT_PATH", str(audit_path))
+    _write_audit(audit_path, [
+        {"type": "adapter_execution_result", "action_id": "act-one", "action": "return_home", "result": "pass"},
+        {"type": "http_return_home", "action_id": "act-one", "action": "return_home", "result": "pass"},
+        {"type": "action_result", "action_id": "act-one", "action": "return_home", "result": "fail",
+         "failure_reason": "return_home_in_progress"},
+        {"type": "adapter_execution_result", "action_id": "act-one", "action": "return_home", "result": "pass"},
+        {"type": "action_result", "action_id": "act-two", "action": "land", "result": "pass"},
+    ])
+
+    status, payload = dispatch("GET", "/api/actions/recent", query="n=2")
+
+    assert status == 200
+    assert [row["action_id"] for row in payload] == ["act-one", "act-two"]
+    assert payload[0]["status"] == "failed"
+    assert payload[0]["failure_reason"] == "return_home_in_progress"
+
+
+def test_actions_recent_late_stage_cannot_revive_evicted_terminal_action(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    audit_path = tmp_path / "runtime.audit.jsonl"
+    monkeypatch.setattr(routes, "AUDIT_PATH", str(audit_path))
+    _write_audit(audit_path, [
+        {"type": "action_result", "action_id": "act-one", "action": "land", "result": "fail"},
+        {"type": "action_result", "action_id": "act-two", "action": "land", "result": "pass"},
+        {"type": "action_result", "action_id": "act-three", "action": "land", "result": "pass"},
+        {"type": "adapter_execution_result", "action_id": "act-one", "action": "land", "result": "pass"},
+    ])
+
+    status, payload = dispatch("GET", "/api/actions/recent", query="n=2")
+
+    assert status == 200
+    assert [row["action_id"] for row in payload] == ["act-two", "act-three"]
+
+
 def test_policy_decisions_returns_policy_decision_view(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     audit_path = tmp_path / "runtime.audit.jsonl"
     monkeypatch.setattr(routes, "AUDIT_PATH", str(audit_path))

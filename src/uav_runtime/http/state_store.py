@@ -221,7 +221,11 @@ class RuntimeStateStore:
 
     def record_action_result(self, action: dict[str, Any], *, limit: int = 50) -> None:
         with self._lock:
-            self._actions = (self._actions + [finite_json(action)])[-limit:]
+            view = finite_json(action)
+            action_id = view.get("action_id")
+            if action_id:
+                self._actions = [row for row in self._actions if row.get("action_id") != action_id]
+            self._actions = (self._actions + [view])[-limit:]
 
     def request_action(
         self,
