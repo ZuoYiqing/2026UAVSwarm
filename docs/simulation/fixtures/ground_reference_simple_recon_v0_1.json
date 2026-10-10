@@ -1,0 +1,17 @@
+{
+  "contract_version": "1.0",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "world_sha256": "fa125d95963236b04bdd7b1eecf63083922dd73938b38424ade642b89efd315e",
+  "frame": "scene_ned",
+  "kind": "horizontal_plane",
+  "ground_down_m": 0.0,
+  "source": "world_collision_geometry",
+  "surface_id": "ground_plane",
+  "xy_bounds_m": {
+    "north_min_m": -1000.0,
+    "north_max_m": 1000.0,
+    "east_min_m": -1000.0,
+    "east_max_m": 1000.0
+  }
+}

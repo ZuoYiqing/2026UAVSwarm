@@ -71,6 +71,19 @@ python3 simulation/px4_gazebo/scripts/health_three_uav.py --mode integrated \
 ```
 
 仿真 health 输出版本 1.1；嵌套 `runtime_evidence` 为 Runtime 接受的 1.0 契约。
+对于 `simple_recon_v0_1-map-1`，健康证据可选携带 `ground_reference`。
+它只描述 SDF 中 `ground_plane` 的承重 collision：公共 `scene_ned` 的
+`ground_down_m=0`，有效 XY 范围为北/东各 `[-1000,1000]` 米，
+`kind=horizontal_plane`、`source=world_collision_geometry`。`world_sha256`
+是完整 world 文件内容哈希，harness 启动时记录并在采样时复核；旧 harness
+运行记录无启动哈希、文件已修改、场景/版本不匹配或 world/进程身份不可信时
+省略该字段，不能猜测地面高度。可审查的静态示例见
+`fixtures/ground_reference_simple_recon_v0_1.json`。`ground_reference` 自身
+不设 TTL，外层 health 的 5000 ms TTL 约束本次运行状态与发布时效。
+Gazebo 中运行后动态改动 world 的情形不由文件哈希证明，Runtime 仍须结合
+现场位姿、标定、PX4 landed/disarmed 和 Policy 判定。三个 `landing-pad-UAV-0x`
+仅是视觉标识，承重面为上述 `ground_plane`；本字段既不验证 pad 容差或逐机
+着陆能力，也不允许把屋顶、其他场景或场景真值当作图像识别结果。
 载体可为原子替换的 JSON 文件，亦可显式 POST 既有 `/simulation/evidence`；本线未修改 HTTP route。
 source_timestamp 来自本次 clock 样本，TTL 5000 ms。publisher 保留采样时间并扣除文件已消耗的 TTL，
 拒绝过期、超前时间、重定向和非 loopback API。Runtime 仍应独立检查 source time，不能只看接收时刻。

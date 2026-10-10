@@ -11,10 +11,12 @@ try:
     from . import harness
     from .evidence import freshness, timestamp_seconds
     from .gazebo_evidence import probe_clock, server_identity, capture_poses
+    from .ground_reference import from_managed_world
 except ImportError:  # Direct script execution adds this directory to sys.path.
     import harness  # type: ignore
     from evidence import freshness, timestamp_seconds
     from gazebo_evidence import probe_clock, server_identity, capture_poses
+    from ground_reference import from_managed_world
 
 
 DEFAULT_STABILITY_WINDOW_S = 10.0
@@ -520,10 +522,24 @@ def collect_health(
         "evidence_source": "simulation_integrated_health", "run_id": state.get("run_id"),
         "process_identity_valid": server["process_identity_valid"] and all(row["process_identity_valid"] for row in rows),
     }
+    ground_reference_status = "simulation_not_ready"
+    if simulator_ready and set(worlds) == {expected_world}:
+        try:
+            reference = from_managed_world(manifest, state)
+            runtime_evidence["ground_reference"] = reference
+            runtime_evidence["world_sha256"] = reference["world_sha256"]
+            ground_reference_status = "available"
+        except (OSError, ValueError) as exc:
+            ground_reference_status = f"{type(exc).__name__}:{exc}"
+    elif simulator_ready:
+        ground_reference_status = "world_ambiguous"
     evidence_fresh, evidence_reason, evidence_age = freshness(runtime_evidence)
     if not evidence_fresh:
         ready = simulator_ready = False
         runtime_evidence["world"]["status"] = "unknown"
+        runtime_evidence.pop("ground_reference", None)
+        runtime_evidence.pop("world_sha256", None)
+        ground_reference_status = "health_evidence_stale"
         top_reasons.append(evidence_reason)
     telemetry_unknown = mode == "integrated" and any(
         str(probe_rows[str(v["node_id"])].get("reason", "")).startswith("runtime_telemetry_") for v in vehicles)
@@ -538,6 +554,7 @@ def collect_health(
         "source_timestamp": source_timestamp,
         "valid_for_ms": 5000,
         "runtime_evidence": runtime_evidence,
+        "world_sha256": runtime_evidence.get("world_sha256"),
         "server_running": world_correct,
         "clock_advancing": clock_advancing,
         "world": expected_world,
@@ -556,6 +573,7 @@ def collect_health(
             "gazebo_process": server,
             "evidence_age_ms": evidence_age,
             "evidence_fresh": evidence_fresh,
+            "ground_reference_status": ground_reference_status,
             "telemetry_source": (
                 "runtime" if mode == "integrated" else "direct_mavlink"
             ),

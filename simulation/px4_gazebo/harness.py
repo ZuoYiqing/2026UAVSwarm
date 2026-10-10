@@ -7,6 +7,7 @@ authorize Runtime actions or replace PX4's flight-control implementation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -1041,6 +1042,8 @@ def _cleanup_harness_state(processes: list[dict[str, Any]]) -> None:
 def start_harness(manifest_path: Path, *, headless: bool) -> None:
     manifest = load_manifest(manifest_path)
     environment = preflight(manifest)
+    world_path = Path(environment["world_path"]).resolve()
+    world_digest = hashlib.sha256(world_path.read_bytes()).hexdigest()
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
     state: dict[str, Any] = {
@@ -1052,6 +1055,8 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         "px4_commit": environment["px4_commit"],
         "gazebo_version": environment["gazebo_version"],
         "world_name": manifest["world_name"],
+        "world_path": str(world_path),
+        "world_sha256": world_digest,
         "required_udp_ports": [
             {"host": host, "port": port, "owner": owner}
             for host, port, owner in required_udp_ports(manifest)
