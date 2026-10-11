@@ -1,0 +1,44 @@
+{
+  "example_kind": "offline_fixture_not_real_flight_evidence",
+  "request": {
+    "method": "GET",
+    "path": "/api/preflight",
+    "query": "node_id=UAV-02"
+  },
+  "ready_response_projection": {
+    "contract_version": "1.0",
+    "node_id": "UAV-02",
+    "source": "runtime_persistent_session",
+    "status": "ready",
+    "execution_authorized": false,
+    "flight_command_sent": false,
+    "reason_codes": [],
+    "error_class": null
+  },
+  "not_ready_response_projection": {
+    "contract_version": "1.0",
+    "node_id": "UAV-02",
+    "status": "not_ready",
+    "execution_authorized": false,
+    "flight_command_sent": false
+  },
+  "dynamic_fields": {
+    "preflight_id": "generated diagnostic correlation ID, not an action ID",
+    "timestamp": "Runtime report UTC; not a replacement for evidence source time",
+    "nodes": "per-node same-session fresh heartbeat/disarmed and landed freshness, RX/heartbeat health, busy state",
+    "home_evidence": "post-request HOME_POSITION plus fresh aligned global/local crosscheck; null if not queried",
+    "rtl_destination_evidence": "post-query RTL_TYPE and rally count; null if not queried",
+    "ground_context": "currently fresh accepted producer ground reference and selected node calibration/run binding"
+  },
+  "allowed_diagnostic_messages": [
+    "COMMAND_LONG REQUEST_MESSAGE 512 / HOME_POSITION 242",
+    "PARAM_REQUEST_READ RTL_TYPE",
+    "MISSION_REQUEST_LIST RALLY 2",
+    "MISSION_ACK for zero-count RALLY query",
+    "existing GCS HEARTBEAT"
+  ],
+  "forbidden_effects": [
+    "second_receiver", "temporary_probe", "ARM", "DO_SET_MODE", "LAND",
+    "TAKEOFF", "PARAM_SET", "MISSION_UPLOAD", "flight_setpoint", "action_creation"
+  ]
+}

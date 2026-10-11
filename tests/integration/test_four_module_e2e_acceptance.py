@@ -203,7 +203,10 @@ def test_registry_http_actions_telemetry_and_audit_replay_chain(
             "POST", "/api/actions/land", body=_request(registry, node_id)
         )
         assert status == 200
-        assert landed["result"] == "pass"
+        # The fake adapter supplies no calibrated scene-ground reference.
+        # LAND is still sent for recovery, but task completion must fail closed.
+        assert landed["result"] == "fail"
+        assert landed["failure_reason"] == "ground_reference_unavailable"
         assert landed["resolved_node_id"] == node_id
         assert landed["action_id"].startswith("act_")
         for candidate in ("UAV-01", "UAV-02", "UAV-03"):
@@ -245,4 +248,8 @@ def test_registry_http_actions_telemetry_and_audit_replay_chain(
     for event in action_results:
         assert event["system_id"] in {1, 2, 3}
         assert str(event["action_id"]).startswith("act_")
-        assert event["result"] == "pass"
+        if event["action"] == "land":
+            assert event["result"] == "fail"
+            assert event["failure_reason"] == "ground_reference_unavailable"
+        else:
+            assert event["result"] == "pass"

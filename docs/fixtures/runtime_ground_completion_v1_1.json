@@ -1,0 +1,60 @@
+{
+  "contract_version": "1.1",
+  "example_kind": "offline_fixture_not_real_flight_evidence",
+  "routes": {
+    "land": "/api/actions/land",
+    "return_home": "/api/actions/return-home",
+    "query": "/api/actions/{action_id}",
+    "vehicle_snapshot": "/api/vehicle-snapshot",
+    "health_publish": "/api/simulation/evidence",
+    "calibration_publish": "/api/coordinates/calibration"
+  },
+  "land_request": {
+    "node_id": "UAV-02", "backend_enabled": true,
+    "transport_endpoint": "udpin:127.0.0.1:14541",
+    "request_id": "req-ground-land-02", "trace_id": "trace-ground-land-02",
+    "idempotency_key": "ground-land-02", "command_source": "ground_station"
+  },
+  "return_home_request": {
+    "node_id": "UAV-02", "backend_enabled": true,
+    "transport_endpoint": "udpin:127.0.0.1:14541",
+    "request_id": "req-home-02", "trace_id": "trace-home-02",
+    "idempotency_key": "home-02", "command_source": "ground_station",
+    "timeout_s": 60, "min_progress_m": 5, "home_tolerance_m": 0.75,
+    "stable_duration_ms": 1000
+  },
+  "ground_reference": {
+    "contract_version": "1.0", "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "world_sha256": "9086de5bea22ae0470fe76f6b06cf9e73b6ac9bdf96477c2171ae304a7b575fa",
+    "world_sha256_scheme": "sha256-lf-v1",
+    "frame": "scene_ned", "kind": "horizontal_plane", "ground_down_m": 0.0,
+    "source": "world_collision_geometry", "surface_id": "ground_plane",
+    "xy_bounds_m": {"north_min_m": -1000, "north_max_m": 1000, "east_min_m": -1000, "east_max_m": 1000}
+  },
+  "roof_land_completion_evidence": {
+    "status": "timed_out", "completion_reached": false,
+    "physical_landed_disarmed": true, "armed": false, "landed_state": 1,
+    "position_fresh": true, "failure_reason": "scene_ground_not_reached",
+    "ground_check": {
+      "scene_position_ned_m": {"north": 15.6, "east": -0.7, "down": -9.98},
+      "ground_down_m": 0.0, "vertical_error_m": 9.98,
+      "vertical_tolerance_m": 0.3, "in_reference_bounds": true, "on_scene_ground": false
+    }
+  },
+  "control_observation_expired_example": {
+    "contract_version": "1.1",
+    "autonomous_action": "return_home", "autonomous_action_id": "act-example-rtl-02",
+    "autonomous_execution_may_continue": true,
+    "autonomous_execution_evidence": {"fresh": true, "active": true, "mode": {"main_mode": 4, "sub_mode": 5}}
+  },
+  "field_sources": {
+    "ground_reference": "Simulation integrated health: managed SDF collision geometry",
+    "scene_position_ned_m": "Runtime: fresh LOCAL_POSITION_NED + node calibration exactly once",
+    "physical_landed_disarmed": "post-LAND EXTENDED_SYS_STATE and HEARTBEAT",
+    "home_evidence": "post-request HOME_POSITION.x/y corroborated by synchronized global/local telemetry",
+    "rtl_destination_evidence": "fresh PARAM_VALUE RTL_TYPE=0 and addressed MISSION_COUNT RALLY count=0 from the same session",
+    "autonomous_execution_evidence": "same persistent session dispatcher, never frontend timers"
+  },
+  "not_implemented": ["unknown_surface_perception", "runtime_model_confidence", "named_pad_authorization", "real_joint_acceptance"]
+}

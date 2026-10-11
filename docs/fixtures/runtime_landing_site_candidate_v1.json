@@ -1,0 +1,25 @@
+{
+  "contract_version": "1.0",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "world_sha256": "example-only-not-a-validated-world-hash",
+  "node_id": "UAV-01",
+  "object_id": "landing-pad-UAV-01",
+  "center_scene_ned_m": {
+    "north": 0.0,
+    "east": 0.0,
+    "down": 0.0
+  },
+  "horizontal_tolerance_m": 0.75,
+  "ground_down_m": 0.0,
+  "vertical_tolerance_m": 0.3,
+  "collision_surface": {
+    "object_id": "ground_plane"
+  },
+  "source_timestamp": "2026-10-09T00:00:00Z",
+  "status": "candidate",
+  "validation": {
+    "real_landing": false,
+    "run_id": null
+  }
+}

@@ -338,6 +338,14 @@ class MavlinkBackendSession:
     _local_positions: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     _armed_states: list[tuple[int, bool, float, str]] = field(default_factory=list)
     _landed_states: list[tuple[int, int, float, str]] = field(default_factory=list)
+    _home_position: dict[str, Any] | None = None
+    _global_position: dict[str, Any] | None = None
+    _last_position_boot_ms: int | None = None
+    _position_epoch: int = 0
+    _position_epoch_changed_timestamp: str | None = None
+    _odometry_reset_counter: int | None = None
+    _rtl_type_evidence: dict[str, Any] | None = None
+    _rally_count_evidence: dict[str, Any] | None = None
     _subscribers: dict[int, Callable[[Any], None]] = field(default_factory=dict)
     _next_subscriber_id: int = 1
     _ack_generations: dict[int, int] = field(default_factory=dict)
@@ -562,6 +570,18 @@ class MavlinkBackendSession:
                 if len(self._landed_states) > 1024:
                     del self._landed_states[:-512]
             elif kind == "LOCAL_POSITION_NED":
+                boot_ms = getattr(message, "time_boot_ms", None)
+                if isinstance(boot_ms, int):
+                    if self._last_position_boot_ms is not None and boot_ms < self._last_position_boot_ms:
+                        self._position_epoch += 1
+                        self._position_epoch_changed_timestamp = received_timestamp
+                        self._home_position = None
+                        self._global_position = None
+                        self._local_positions.clear()
+                        self._armed_states.clear()
+                        self._landed_states.clear()
+                        self._last_heartbeat_mode = None
+                    self._last_position_boot_ms = boot_ms
                 self._local_positions.append(
                     (
                         sequence,
@@ -574,6 +594,48 @@ class MavlinkBackendSession:
                 )
                 if len(self._local_positions) > 1024:
                     del self._local_positions[:-512]
+            elif kind == "HOME_POSITION":
+                self._home_position = {
+                    "sequence": sequence, "received_monotonic": received_monotonic,
+                    "sample_timestamp": received_timestamp, "position_epoch": self._position_epoch,
+                    **{name: getattr(message, name, None) for name in ("x", "y", "z", "latitude", "longitude", "altitude")},
+                }
+            elif kind == "GLOBAL_POSITION_INT":
+                self._global_position = {
+                    "received_monotonic": received_monotonic,
+                    "time_boot_ms": getattr(message, "time_boot_ms", None),
+                    "lat": getattr(message, "lat", None), "lon": getattr(message, "lon", None),
+                }
+            elif kind == "PARAM_VALUE":
+                param_id = getattr(message, "param_id", "")
+                if isinstance(param_id, bytes):
+                    param_id = param_id.decode("ascii", errors="replace")
+                if isinstance(param_id, str) and param_id.rstrip("\x00") == "RTL_TYPE":
+                    self._rtl_type_evidence = {
+                        "sequence": sequence, "received_monotonic": received_monotonic,
+                        "sample_timestamp": received_timestamp,
+                        "param_id": "RTL_TYPE", "param_value": getattr(message, "param_value", None),
+                        "param_type": getattr(message, "param_type", None),
+                    }
+            elif kind == "MISSION_COUNT" and getattr(message, "mission_type", None) == 2:
+                mav = getattr(self.connection, "mav", None)
+                if (getattr(message, "target_system", None) == getattr(mav, "srcSystem", 255)
+                        and getattr(message, "target_component", None) == getattr(mav, "srcComponent", 0)):
+                    self._rally_count_evidence = {
+                        "sequence": sequence, "received_monotonic": received_monotonic,
+                        "sample_timestamp": received_timestamp,
+                        "mission_type": 2, "count": getattr(message, "count", None),
+                    }
+            elif kind == "ODOMETRY":
+                counter = getattr(message, "reset_counter", None)
+                if isinstance(counter, int):
+                    if self._odometry_reset_counter is not None and counter != self._odometry_reset_counter:
+                        self._position_epoch += 1
+                        self._position_epoch_changed_timestamp = received_timestamp
+                        self._home_position = None
+                        self._global_position = None
+                        self._local_positions.clear()
+                    self._odometry_reset_counter = counter
             callbacks = list(self._subscribers.values())
             self._rx_condition.notify_all()
         for callback in callbacks:
@@ -755,6 +817,111 @@ class MavlinkBackendSession:
         ack["message_name"] = "EXTENDED_SYS_STATE"
         return ack
 
+    def autonomous_state(self) -> dict[str, Any]:
+        """Current per-node stop evidence; absence/staleness never means stopped."""
+        with self._rx_condition:
+            now = time.monotonic()
+            armed = self._armed_states[-1] if self._armed_states else None
+            landed = self._landed_states[-1] if self._landed_states else None
+            heartbeat_fresh = armed is not None and now - armed[2] <= 2.0
+            landed_fresh = landed is not None and now - landed[2] <= 2.0
+            mode = self._last_heartbeat_mode
+            main = (mode[2] >> 16) & 0xff if mode else None
+            sub = (mode[2] >> 24) & 0xff if mode else None
+            stopped = bool(heartbeat_fresh and (
+                (main, sub) in PINNED_MODES
+                or (landed_fresh and armed[1] is False and landed[1] == 1)
+            ))
+            stop_sequence = (armed[0] if (main, sub) in PINNED_MODES else
+                             min(armed[0], landed[0]) if armed and landed else None)
+            return {"fresh": heartbeat_fresh, "landed_fresh": landed_fresh,
+                    "active": False if stopped else True if heartbeat_fresh else None,
+                    "stop_sequence": stop_sequence,
+                    "mode": {"main_mode": main, "sub_mode": sub},
+                    "armed": armed[1] if armed else None, "landed_state": landed[1] if landed else None}
+
+    def request_home_position(self, *, timeout_s: float = 3.0) -> dict[str, Any]:
+        """Request HOME through the sole RX owner and corroborate local XY with GPS.
+
+        PX4 may encode invalid local home as zero. Zero is accepted only when a
+        fresh, time-aligned global/local pair independently agrees with it.
+        """
+        cursor = self.local_position_cursor()
+        epoch = self._position_epoch
+        ack = self._send_and_wait_ack(512, [242.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], timeout_s=timeout_s)
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        reason = "home_position_unavailable"
+        with self._rx_condition:
+            while time.monotonic() < deadline:
+                home = dict(self._home_position or {})
+                global_pos = dict(self._global_position or {})
+                local = self._local_positions[-1] if self._local_positions else None
+                now = time.monotonic()
+                if self._position_epoch != epoch:
+                    return {"verified": False, "failure_reason": "home_reference_changed", "request_ack": ack}
+                if home.get("sequence", -1) > cursor:
+                    reason = "home_position_unverified"
+                    numbers = [home.get(k) for k in ("x", "y", "latitude", "longitude")]
+                    numbers += [global_pos.get("lat"), global_pos.get("lon")]
+                    valid = all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in numbers)
+                    if (valid and local and all(math.isfinite(v) for v in local[1:4])
+                            and home.get("position_epoch") == self._position_epoch
+                            and now - home["received_monotonic"] <= 2.0
+                            and now - global_pos["received_monotonic"] <= 2.0
+                            and now - local[4] <= 2.0
+                            and abs(global_pos["received_monotonic"] - local[4]) <= 0.25
+                            and isinstance(global_pos.get("time_boot_ms"), int)
+                            and self._last_position_boot_ms is not None
+                            and abs(global_pos["time_boot_ms"] - self._last_position_boot_ms) <= 250
+                            and abs(home["latitude"]) <= 900000000 and abs(global_pos["lat"]) <= 900000000
+                            and abs(home["longitude"]) <= 1800000000 and abs(global_pos["lon"]) <= 1800000000):
+                        lat = math.radians(global_pos["lat"] / 1e7)
+                        north = local[1] + math.radians((home["latitude"] - global_pos["lat"]) / 1e7) * 6378137.0
+                        east = local[2] + math.radians((home["longitude"] - global_pos["lon"]) / 1e7) * 6378137.0 * math.cos(lat)
+                        error = math.hypot(north - home["x"], east - home["y"])
+                        if error <= 2.0:
+                            return {**home, "verified": True, "verification": "global_local_xy_crosscheck",
+                                    "crosscheck_error_m": error, "request_ack": ack}
+                self._rx_condition.wait(timeout=0.05)
+        return {"verified": False, "failure_reason": reason, "request_ack": ack}
+
+    def verify_home_rtl_destination(self, *, timeout_s: float = 3.0,
+                                    cancel_event: threading.Event | None = None) -> dict[str, Any]:
+        """Read-only configuration proof: RTL_TYPE=0 with no rally points.
+
+        Other RTL modes can select a mission landing or rally destination.
+        There is no assumed default, parameter write, or second receiver.
+        """
+        self.start_receive_loop()
+        with self.command_lock:
+            cursor = self.observation_cursor()
+            epoch = self._position_epoch
+            with self.tx_lock:
+                self.connection.mav.param_request_read_send(self.target_system, self.target_component, b"RTL_TYPE", -1)
+                self.connection.mav.mission_request_list_send(self.target_system, self.target_component, 2)
+            deadline = time.monotonic() + max(float(timeout_s), 0.1)
+            with self._rx_condition:
+                while time.monotonic() < deadline:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return {"verified": False, "failure_reason": "cancelled"}
+                    if self._position_epoch != epoch:
+                        return {"verified": False, "failure_reason": "home_reference_changed"}
+                    param, rally = self._rtl_type_evidence, self._rally_count_evidence
+                    if (param and rally and param["sequence"] > cursor and rally["sequence"] > cursor
+                            and time.monotonic() - param["received_monotonic"] <= 2.0
+                            and time.monotonic() - rally["received_monotonic"] <= 2.0):
+                        value, count = param["param_value"], rally["count"]
+                        valid = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                 and math.isfinite(value) and value == 0
+                                 and isinstance(count, int) and not isinstance(count, bool) and count == 0)
+                        if isinstance(count, int) and count == 0:
+                            with self.tx_lock:
+                                self.connection.mav.mission_ack_send(self.target_system, self.target_component, 0, 2)
+                        return {"verified": valid, "rtl_type": dict(param), "rally_points": dict(rally),
+                                "failure_reason": None if valid else "rtl_home_configuration_unsupported"}
+                    self._rx_condition.wait(timeout=0.05)
+        return {"verified": False, "failure_reason": "rtl_destination_unverified"}
+
     def set_mode(
         self,
         *,
@@ -784,6 +951,7 @@ class MavlinkBackendSession:
 
         with self.command_lock:
             self.start_receive_loop()
+            mode_cursor = self.observation_cursor()
             generation = self._begin_ack_wait(command)
             self.send_command_long(
                 command,
@@ -804,7 +972,10 @@ class MavlinkBackendSession:
             sub_mode=sub_mode,
             match_sub_mode=match_sub,
             timeout_s=confirm_timeout_s,
+            after_sequence=mode_cursor,
         )
+        if ack.get("timeout") or ack.get("result") != 0:
+            confirmed = False
         observed_name = (
             None if observed_main is None
             else PX4_MAIN_MODE_NAMES.get(int(observed_main), f"MAIN_{int(observed_main)}")
@@ -858,6 +1029,7 @@ class MavlinkBackendSession:
         sub_mode: int = 0,
         match_sub_mode: bool = False,
         timeout_s: float,
+        after_sequence: int | None = None,
     ) -> tuple[bool, int | None, int | None]:
         """等待 HEARTBEAT 报告的目标模式。
 
@@ -874,7 +1046,9 @@ class MavlinkBackendSession:
         while time.monotonic() < deadline:
             with self._rx_condition:
                 latest = self._last_heartbeat_mode
-            if latest is not None:
+                heartbeat_at = self._armed_states[-1][2] if self._armed_states else None
+            if (latest is not None and (after_sequence is None or latest[0] > after_sequence)
+                    and heartbeat_at is not None and time.monotonic() - heartbeat_at <= 2.0):
                 observed_main = self.px4_main_mode_from_custom_mode(latest[2])
                 observed_sub = self.px4_sub_mode_from_custom_mode(latest[2])
                 if observed_main == int(main_mode):
@@ -1181,6 +1355,7 @@ class MavlinkBackendSession:
         with self.command_lock:
             self.start_receive_loop()
             observation_cursor = self.observation_cursor()
+            position_epoch = self._position_epoch
             generation = self._begin_ack_wait(command)
             self.send_command_long(command, [0.0] * 7)
             ack = self.wait_command_ack(
@@ -1190,6 +1365,7 @@ class MavlinkBackendSession:
             )
         ack["command_name"] = "MAV_CMD_NAV_LAND"
         ack["observation_cursor"] = observation_cursor
+        ack["position_epoch"] = position_epoch
         return ack
 
     def observe_local_position_altitude(
@@ -1348,12 +1524,112 @@ class MavlinkBackendSession:
         """记录最近一次观测证据，供 ``classify_incomplete`` 使用。"""
         self._last_completion_evidence = dict(evidence) if isinstance(evidence, dict) else {}
 
+    def observe_ground_landing(
+        self, *, timeout_s: float, after_sequence: int,
+        ground_reference: dict[str, Any], translation_scene_ned_m: dict[str, float],
+        stable_duration_s: float = 0.5, max_sample_gap_s: float = 0.5,
+        expected_position_epoch: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Confirm the stated scene plane, not merely contact with any surface."""
+        self.start_receive_loop()
+        deadline = time.monotonic() + max(timeout_s, 0.1)
+        epoch = self._position_epoch if expected_position_epoch is None else expected_position_epoch
+        seen = int(after_sequence)
+        armed = landed = position = None
+        armed_at = landed_at = last_position_at = stable_since = None
+        armed_seq = landed_seq = position_seq = None
+        position_stamp = armed_stamp = landed_stamp = None
+        stable_samples = 0
+        complete = False
+        reason = "landing_completion_timeout"
+        check: dict[str, Any] | None = None
+        bounds = ground_reference["xy_bounds_m"]
+        with self._rx_condition:
+            while time.monotonic() < deadline:
+                if cancel_event is not None and cancel_event.is_set():
+                    reason = "cancelled"
+                    break
+                if epoch != self._position_epoch:
+                    reason = "local_origin_changed"
+                    break
+                events = [(row[0], "armed", row) for row in self._armed_states if row[0] > seen]
+                events += [(row[0], "landed", row) for row in self._landed_states if row[0] > seen]
+                events += [(row[0], "position", row) for row in self._local_positions if row[0] > seen]
+                for sequence, kind, row in sorted(events):
+                    seen = sequence
+                    if kind == "armed":
+                        armed_seq, armed, armed_at, armed_stamp = row
+                        if armed:
+                            stable_samples, stable_since = 0, None
+                    elif kind == "landed":
+                        landed_seq, landed, landed_at, landed_stamp = row
+                        if landed != 1:
+                            stable_samples, stable_since = 0, None
+                    else:
+                        position_seq, north, east, down, received, position_stamp = row
+                        position = {"north": north, "east": east, "down": down}
+                        scene = {axis: position[axis] + translation_scene_ned_m[axis] for axis in position}
+                        finite = all(math.isfinite(v) for v in scene.values())
+                        in_bounds = finite and (bounds["north_min_m"] <= scene["north"] <= bounds["north_max_m"]
+                                               and bounds["east_min_m"] <= scene["east"] <= bounds["east_max_m"])
+                        error = abs(scene["down"] - ground_reference["ground_down_m"]) if finite else None
+                        on_plane = in_bounds and error <= 0.3
+                        check = {"scene_position_ned_m": scene, "vertical_error_m": error,
+                                 "in_reference_bounds": in_bounds, "on_scene_ground": on_plane,
+                                 "ground_down_m": ground_reference["ground_down_m"], "vertical_tolerance_m": 0.3}
+                        fresh_states = (armed_at is not None and landed_at is not None
+                                        and 0 <= received - armed_at <= 2.0 and 0 <= received - landed_at <= 2.0)
+                        if (last_position_at is None or received - last_position_at > max_sample_gap_s
+                                or not on_plane or armed is not False or landed != 1 or not fresh_states):
+                            stable_samples, stable_since = 0, None
+                        if on_plane and armed is False and landed == 1 and fresh_states:
+                            stable_since = received if stable_since is None else stable_since
+                            stable_samples += 1
+                        last_position_at = received
+                now = time.monotonic()
+                fresh = (armed_at is not None and landed_at is not None and last_position_at is not None
+                         and now - armed_at <= 2.0 and now - landed_at <= 2.0
+                         and now - last_position_at <= max_sample_gap_s)
+                if not fresh:
+                    stable_samples, stable_since = 0, None
+                complete = bool(fresh and armed is False and landed == 1 and stable_samples >= 3
+                                and stable_since is not None and last_position_at - stable_since >= stable_duration_s)
+                if complete:
+                    reason = "scene_ground_landed"
+                    break
+                self._rx_condition.wait(timeout=0.05)
+        now = time.monotonic()
+        physical = bool(armed is False and landed == 1 and armed_at is not None and landed_at is not None
+                        and now - armed_at <= 2.0 and now - landed_at <= 2.0)
+        if not complete and reason == "landing_completion_timeout" and physical:
+            reason = "scene_ground_not_reached" if check and not check["on_scene_ground"] else "landing_ground_stability_timeout"
+        evidence = {
+            "status": "succeeded" if complete else "cancelled" if reason == "cancelled" else "timed_out",
+            "telemetry_state": "fresh" if complete or physical else "incomplete" if armed_at or landed_at else "unknown",
+            "after_sequence": after_sequence, "last_sequence": seen, "completion_reached": complete,
+            "physical_landed_disarmed": physical, "landed_state": landed, "armed": armed,
+            "landed_state_name": "on_ground" if landed == 1 else "unknown" if landed is None else "not_on_ground",
+            "position_vehicle_local_ned_m": position, "position_sequence": position_seq,
+            "position_sample_timestamp": position_stamp, "armed_sample_timestamp": armed_stamp,
+            "landed_sample_timestamp": landed_stamp, "armed_sequence": armed_seq, "landed_sequence": landed_seq,
+            "position_fresh": last_position_at is not None and now - last_position_at <= max_sample_gap_s,
+            "ground_check": check, "ground_reference": ground_reference,
+            "ground_stable_samples": stable_samples, "stable_duration_ms": int(stable_duration_s * 1000),
+            "ground_stable_ms": int((last_position_at - stable_since) * 1000) if stable_since is not None else 0,
+            "failure_reason": None if complete else reason, "cancelled": reason == "cancelled",
+            "position_epoch": epoch,
+        }
+        self._record_completion_evidence(evidence)
+        return evidence
+
     def observe_landed_and_disarmed(
         self,
         *,
         timeout_s: float,
         after_sequence: int,
         freshness_window_s: float = 2.0,
+        require_local_position: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Require fresh ON_GROUND and disarmed evidence after the LAND command cursor."""
@@ -1370,6 +1646,10 @@ class MavlinkBackendSession:
         landed_timestamp: str | None = None
         armed_received_at: float | None = None
         landed_received_at: float | None = None
+        position: dict[str, float] | None = None
+        position_sequence: int | None = None
+        position_timestamp: str | None = None
+        position_received_at: float | None = None
         cancelled = False
         on_ground = self._mavlink_const("MAV_LANDED_STATE_ON_GROUND", 1)
         with self._rx_condition:
@@ -1389,6 +1669,12 @@ class MavlinkBackendSession:
                         landed_sequence = sequence
                         landed_timestamp = received_timestamp
                         landed_received_at = received_at
+                for sequence, north, east, down, received_at, received_timestamp in self._local_positions:
+                    if sequence > after_sequence and (position_sequence is None or sequence > position_sequence):
+                        position = {"north": north, "east": east, "down": down}
+                        position_sequence = sequence
+                        position_timestamp = received_timestamp
+                        position_received_at = received_at
                 newest = [value for value in (armed_sequence, landed_sequence) if value is not None]
                 if newest:
                     seen_sequence = max(seen_sequence, *newest)
@@ -1399,7 +1685,17 @@ class MavlinkBackendSession:
                     and now - armed_received_at <= max(freshness_window_s, 0.0)
                     and now - landed_received_at <= max(freshness_window_s, 0.0)
                 )
-                if armed is False and landed_state == on_ground and samples_fresh:
+                position_fresh = (
+                    position_received_at is not None
+                    and now - position_received_at <= max(freshness_window_s, 0.0)
+                )
+                position_after_landing = (
+                    position_sequence is not None and armed_sequence is not None
+                    and landed_sequence is not None
+                    and position_sequence > max(armed_sequence, landed_sequence)
+                )
+                if (armed is False and landed_state == on_ground and samples_fresh
+                        and (not require_local_position or (position_fresh and position_after_landing))):
                     break
                 if not self.connected and self.last_receive_error:
                     break
@@ -1415,6 +1711,10 @@ class MavlinkBackendSession:
             if landed_received_at is not None
             else None
         )
+        position_age_ms = (
+            max(0, int(round((completed_at - position_received_at) * 1000)))
+            if position_received_at is not None else None
+        )
         freshness_window_ms = int(round(max(freshness_window_s, 0.0) * 1000))
         samples_fresh = (
             armed_age_ms is not None
@@ -1422,7 +1722,14 @@ class MavlinkBackendSession:
             and armed_age_ms <= freshness_window_ms
             and landed_age_ms <= freshness_window_ms
         )
-        complete = armed is False and landed_state == on_ground and samples_fresh
+        position_fresh = position_age_ms is not None and position_age_ms <= freshness_window_ms
+        position_after_landing = (
+            position_sequence is not None and armed_sequence is not None
+            and landed_sequence is not None
+            and position_sequence > max(armed_sequence, landed_sequence)
+        )
+        complete = (armed is False and landed_state == on_ground and samples_fresh
+                    and (not require_local_position or (position_fresh and position_after_landing)))
         evidence_count = int(armed is not None) + int(landed_state is not None)
         any_sample_stale = (
             (armed_age_ms is not None and armed_age_ms > freshness_window_ms)
@@ -1451,6 +1758,12 @@ class MavlinkBackendSession:
             "landed_sample_timestamp": landed_timestamp,
             "armed_sample_age_ms": armed_age_ms,
             "landed_sample_age_ms": landed_age_ms,
+            "position_vehicle_local_ned_m": position,
+            "position_sequence": position_sequence,
+            "position_sample_timestamp": position_timestamp,
+            "position_sample_age_ms": position_age_ms,
+            "position_fresh": position_fresh,
+            "position_after_landing": position_after_landing,
             "freshness_window_ms": freshness_window_ms,
             "completion_reached": complete,
             "cancelled": cancelled,
@@ -1617,44 +1930,81 @@ class MavlinkBackendSession:
         *,
         timeout_s: float = 60.0,
         min_progress_m: float = 5.0,
+        home_local_north_m: float | None = None,
+        home_local_east_m: float | None = None,
+        home_tolerance_m: float = 0.75,
+        stable_duration_s: float = 1.0,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """让载具自主返航（``AUTO + RTL``），并**验证它真的在朝 home 收敛**。
+        """Observe real PX4 HOME arrival; RTL progress is never completion.
 
-        ⚠️ 判据为什么是位置而不是模式
-        -----------------------------
-        本方法最容易写错的地方就是"``set_mode`` 成功 → 报成功"。飞控接受 RTL
-        不等于飞机在返航：可能被拒绝执行、被其它模式抢占、或 home 点未定义。
-        那次事故正是这个形状 —— 接受了一个"正在返航"的模式并报 pass。
-
-        因此这里要求到 home 的**三维距离确实缩小 min_progress_m** 才判成功。
-        用"最大距离 − 最终距离"而不是"逐样本单调下降"：RTL 会先爬升到安全高度
-        再平飞，三维距离在早期可能不降反升，要求单调会把正常返航误判成失败。
-
-        ⚠️ RTL 与 PINNED_MODES
-        ----------------------
-        RTL **不在** ``PINNED_MODES`` 里，而且不应被加进去。那个集合的语义是
-        "确认安全、可作为回退目标"，而 RTL 是自主机动。本方法是对 RTL 的
-        **显式请求**，与"当成安全回退接受"是两件不同的事。
-
-        Returns:
-            含 ``returning``、``reason``、``initial_distance_m``、
-            ``final_distance_m``、``distance_reduction_m``、``mode``、
-            ``failure_reason`` 的证据字典。
-
-        Raises:
-            RuntimeError: 连接未建立。
+        RTL remains autonomous after HTTP returns. Its configured destination
+        can differ from home; that never satisfies this action's home goal.
         """
         if self.connection is None:
             raise RuntimeError("connection_required")
+        if not all(math.isfinite(value) for value in (home_tolerance_m, stable_duration_s, timeout_s, min_progress_m)):
+            raise ValueError("return_home_target_invalid")
+        if any(value is not None and not math.isfinite(value) for value in (home_local_north_m, home_local_east_m)):
+            raise ValueError("return_home_target_invalid")
+        if home_tolerance_m <= 0 or stable_duration_s <= 0:
+            raise ValueError("return_home_target_invalid")
 
         self.start_gcs_heartbeat()
-
-        mode_result = self.set_mode(
-            main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
-            sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
-        )
+        home = self.request_home_position(timeout_s=min(float(timeout_s), 3.0))
+        if not home.get("verified"):
+            return {"returning": False, "reason": "home_unavailable", "home_evidence": home,
+                    "failure_reason": home.get("failure_reason", "home_position_unverified"),
+                    "autonomous_execution_may_continue": False}
+        if ((home_local_north_m is not None and abs(home_local_north_m - home["x"]) > 0.1)
+                or (home_local_east_m is not None and abs(home_local_east_m - home["y"]) > 0.1)):
+            return {"returning": False, "reason": "home_target_mismatch", "home_evidence": home,
+                    "failure_reason": "home_target_mismatch", "autonomous_execution_may_continue": False}
+        home_local_north_m, home_local_east_m = float(home["x"]), float(home["y"])
+        # Cross-check uncertainty consumes the arrival tolerance; a 2 m
+        # verification envelope must not manufacture a 0.75 m arrival claim.
+        home_error = float(home.get("crosscheck_error_m", 0.0))
+        if not math.isfinite(home_error) or home_error >= home_tolerance_m:
+            return {"returning": False, "reason": "home_unverified", "home_evidence": home,
+                    "failure_reason": "home_position_uncertainty_exceeds_tolerance",
+                    "autonomous_execution_may_continue": False}
+        effective_tolerance = home_tolerance_m - home_error
+        epoch = self._position_epoch
+        start_sequence = self.local_position_cursor()
+        try:
+            with self.command_lock:
+                if cancel_event is not None and cancel_event.is_set():
+                    return {"returning": False, "reason": "cancelled", "home_evidence": home,
+                            "failure_reason": "cancelled", "autonomous_execution_may_continue": False}
+                try:
+                    destination = self.verify_home_rtl_destination(timeout_s=min(float(timeout_s), 3.0), cancel_event=cancel_event)
+                except Exception as exc:
+                    destination = {"verified": False, "failure_reason": "rtl_destination_unverified",
+                                   "error_class": type(exc).__name__}
+                if not destination.get("verified"):
+                    return {"returning": False, "reason": "rtl_destination_unverified", "home_evidence": home,
+                            "rtl_destination_evidence": destination, "failure_reason": destination.get("failure_reason"),
+                            "autonomous_execution_may_continue": False}
+                if (epoch != self._position_epoch or time.monotonic() - home.get("received_monotonic", time.monotonic()) > 2.0):
+                    return {"returning": False, "reason": "home_reference_changed", "home_evidence": home,
+                            "failure_reason": "home_reference_changed", "autonomous_execution_may_continue": False}
+                # The configuration read can be cancelled by LAND too.
+                if cancel_event is not None and cancel_event.is_set():
+                    return {"returning": False, "reason": "cancelled", "failure_reason": "cancelled",
+                            "home_evidence": home, "autonomous_execution_may_continue": False}
+                start_sequence = self.local_position_cursor()
+                mode_result = self.set_mode(
+                    main_mode=PX4_CUSTOM_MAIN_MODE_AUTO,
+                    sub_mode=PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+                )
+        except Exception as exc:
+            # A transport/confirmation exception does not retract a sent RTL.
+            return {"returning": False, "reason": "mode_exception", "home_evidence": home,
+                    "failure_reason": f"return_home_mode_exception:{type(exc).__name__}",
+                    "autonomous_execution_after_sequence": start_sequence,
+                    "autonomous_execution_may_continue": True}
         mode_evidence = {
+            "ack": mode_result.get("ack"),
             "confirmed": bool(mode_result.get("confirmed")),
             "observed_main_mode": mode_result.get("observed_main_mode"),
             "observed_sub_mode": mode_result.get("observed_sub_mode"),
@@ -1669,14 +2019,14 @@ class MavlinkBackendSession:
                 "distance_reduction_m": None,
                 "samples": 0,
                 "mode": mode_evidence,
+                "home_evidence": home,
+                "rtl_destination_evidence": destination,
+                "autonomous_execution_may_continue": True,
+                "autonomous_execution_after_sequence": start_sequence,
                 "failure_reason": "return_home_mode_not_confirmed",
             }
 
-        # home 在 PX4 里是 EKF 原点，也就是本机 local NED 的原点。
-        # goto() 用的也是这套坐标（见其文档字符串），因此这里直接用 (0, 0, z)。
-        # 高度分量用首个样本的 z：RTL 的目标不是回到 z=0（那会撞地），
-        # 而是回到 home 上方并降落，所以水平收敛才是判据，高度只作参考。
-        start_sequence = self.local_position_cursor()
+        # The PX4 EKF origin is not assumed to be the physical home pad.
         deadline = time.monotonic() + max(float(timeout_s), 0.1)
 
         first_distance: float | None = None
@@ -1684,13 +2034,32 @@ class MavlinkBackendSession:
         last_distance: float | None = None
         last_down: float | None = None
         samples = 0
+        arrival_started_at: float | None = None
+        arrival_samples = 0
+        last_sample_sequence = start_sequence
+        last_sample_at: float | None = None
 
         def finish(evidence: dict[str, Any]) -> dict[str, Any]:
             """统一出口：先留证据，再返回（理由同 hold_position.finish）。"""
+            evidence["home_evidence"] = home
+            evidence["rtl_destination_evidence"] = destination
+            stop = self.autonomous_state()
+            evidence["autonomous_execution_may_continue"] = not (
+                stop.get("active") is False and isinstance(stop.get("stop_sequence"), int)
+                and stop["stop_sequence"] > start_sequence
+            )
+            evidence["autonomous_execution_after_sequence"] = start_sequence
+            evidence["completion_goal"] = "px4_home_horizontal_arrival"
             self._record_completion_evidence(evidence)
             return evidence
 
         while time.monotonic() < deadline:
+            if epoch != self._position_epoch or (self._home_position and (
+                    self._home_position.get("x") != home["x"] or self._home_position.get("y") != home["y"]
+                    or self._home_position.get("latitude") != home["latitude"]
+                    or self._home_position.get("longitude") != home["longitude"])):
+                return finish({"returning": False, "reason": "home_reference_changed",
+                               "failure_reason": "home_reference_changed", "samples": samples})
             if cancel_event is not None and cancel_event.is_set():
                 return finish({
                     "returning": False, "reason": "cancelled", "samples": samples,
@@ -1699,22 +2068,35 @@ class MavlinkBackendSession:
                     "failure_reason": "cancelled",
                 })
             with self._rx_condition:
-                fresh = [row for row in self._local_positions if row[0] > start_sequence]
-            if fresh:
-                _, x, y, z, _, _ = fresh[-1]
-                samples = len(fresh)
-                distance = math.sqrt(float(x) ** 2 + float(y) ** 2)
+                fresh = [row for row in self._local_positions if row[0] > last_sample_sequence]
+            for sequence, x, y, z, received_at, _ in fresh:
+                samples += 1
+                distance = math.hypot(float(x) - home_local_north_m, float(y) - home_local_east_m)
                 last_down = float(z)
                 if first_distance is None:
                     first_distance = distance
                     max_distance = distance
                 max_distance = max(max_distance or distance, distance)
                 last_distance = distance
-                # 用"最远时刻 − 当前"衡量进展：RTL 可能先爬升再平飞，
-                # 用逐样本单调下降会把正常返航误判为失败。
-                if (max_distance - distance) >= max(float(min_progress_m), 0.0):
+                if sequence > last_sample_sequence:
+                    last_sample_sequence = sequence
+                    if last_sample_at is not None and received_at - last_sample_at > 0.5:
+                        arrival_started_at, arrival_samples = None, 0
+                    last_sample_at = received_at
+                    if math.isfinite(distance) and distance <= effective_tolerance and time.monotonic() - received_at <= 0.5:
+                        if arrival_started_at is None:
+                            arrival_started_at = received_at
+                        arrival_samples += 1
+                    else:
+                        arrival_started_at = None
+                        arrival_samples = 0
+            if last_sample_at is not None and time.monotonic() - last_sample_at > 0.5:
+                arrival_started_at, arrival_samples = None, 0
+            if (arrival_started_at is not None and arrival_samples >= 3
+                        and last_sample_at - arrival_started_at >= stable_duration_s
+                        and time.monotonic() - last_sample_at <= 0.5):
                     return finish({
-                        "returning": True, "reason": "converging_on_home",
+                        "returning": False, "reason": "arrived_at_home",
                         "samples": samples,
                         "initial_distance_m": first_distance,
                         "max_distance_m": max_distance,
@@ -1722,14 +2104,20 @@ class MavlinkBackendSession:
                         "distance_reduction_m": max_distance - distance,
                         "min_progress_m": float(min_progress_m),
                         "last_down_m": last_down,
+                        "arrival_samples": arrival_samples,
+                        "home_tolerance_m": home_tolerance_m,
+                        "effective_home_tolerance_m": effective_tolerance,
+                        "stable_duration_s": stable_duration_s,
                         "mode": mode_evidence,
                         "failure_reason": None,
                     })
             time.sleep(0.05)
 
+        progressed = (max_distance is not None and last_distance is not None
+                      and max_distance - last_distance >= max(float(min_progress_m), 0.0))
         return finish({
-            "returning": False,
-            "reason": "no_convergence",
+            "returning": bool(progressed),
+            "reason": "in_progress" if progressed else "no_convergence",
             "samples": samples,
             "initial_distance_m": first_distance,
             "max_distance_m": max_distance,
@@ -1742,8 +2130,12 @@ class MavlinkBackendSession:
             # 实际执行的那一份是同一个值。
             "min_progress_m": float(min_progress_m),
             "last_down_m": last_down,
+            "arrival_samples": arrival_samples,
+            "home_tolerance_m": home_tolerance_m,
+            "effective_home_tolerance_m": effective_tolerance,
+            "stable_duration_s": stable_duration_s,
             "mode": mode_evidence,
-            "failure_reason": "return_home_not_converging",
+            "failure_reason": "return_home_in_progress" if progressed else "return_home_not_converging",
         })
 
     def observe_arrival(
