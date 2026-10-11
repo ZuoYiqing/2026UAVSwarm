@@ -49,6 +49,7 @@ from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
+from uav_runtime.http.preflight import check_preflight
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
@@ -83,6 +84,14 @@ def _query_int(values: dict[str, list[str]], key: str, default: int, *, minimum:
 
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": "uav_runtime_http_bridge", "version": BRIDGE_VERSION, "mode": "local_dev"}
+
+
+def preflight(query: str = "") -> dict[str, Any]:
+    values = parse_qs(query, keep_blank_values=True)
+    node_ids = values.get("node_id", [])
+    if set(values) != {"node_id"} or len(node_ids) != 1 or not node_ids[0].strip():
+        raise RequestValidationError("invalid_parameter", "node_id", "Exactly one explicit node_id is required; overrides are forbidden")
+    return check_preflight(VEHICLE_REGISTRY, RUNTIME_STATE_STORE, node_ids[0])
 
 
 def check_backend(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1052,6 +1061,8 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
     if method == "GET" and normalized == "/api/health":
         return 200, health()
+    if method == "GET" and normalized == "/api/preflight":
+        return 200, preflight(query)
     if method == "POST" and normalized == "/api/backend/check":
         return 200, check_backend(payload)
     if method == "POST" and normalized == "/api/actions/smoke-takeoff":

@@ -834,7 +834,8 @@ class MavlinkBackendSession:
             ))
             stop_sequence = (armed[0] if (main, sub) in PINNED_MODES else
                              min(armed[0], landed[0]) if armed and landed else None)
-            return {"fresh": heartbeat_fresh, "active": False if stopped else True if heartbeat_fresh else None,
+            return {"fresh": heartbeat_fresh, "landed_fresh": landed_fresh,
+                    "active": False if stopped else True if heartbeat_fresh else None,
                     "stop_sequence": stop_sequence,
                     "mode": {"main_mode": main, "sub_mode": sub},
                     "armed": armed[1] if armed else None, "landed_state": landed[1] if landed else None}

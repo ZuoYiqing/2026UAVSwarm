@@ -287,16 +287,66 @@ gap and require the Simulation calibration monitor. Ground health must be
 republished while observing a flight (producer TTL 5000 ms); a one-shot expired
 publication cannot complete LAND.
 
+Simulation owns the world-hash scheme. Its cross-checkout reference uses SHA-256
+of LF-normalized SDF content (`world_sha256_scheme: sha256-lf-v1`); the harness
+separately records and checks the startup file's raw-byte `world_file_sha256`.
+Runtime treats `world_sha256` as an opaque
+version binding and compares producer fields, never silently normalizes an
+incoming hash. A matching normalized hash does not excuse a changed running
+file. This is not a proof of dynamically modified Gazebo geometry.
+
 Executable additive examples are in
 `docs/fixtures/runtime_ground_completion_v1_1.json`. Old fixtures keep their
 existing field shapes. No endpoint, sysid, port, or config manifest changes.
 
-`ready` requires fresh evidence, an advancing clock, a ready world, and ready
-model evidence covering enabled nodes. Fresh but incomplete evidence is
-`degraded`; missing or expired evidence is `unknown`. PX4 heartbeat is reported
+Simulation `ready` requires fresh evidence, an advancing clock, a ready world,
+and ready model evidence covering enabled nodes. Fresh but incomplete evidence
+is `degraded`; missing or expired evidence is `unknown`. PX4 heartbeat is reported
 separately and never promotes Gazebo to ready. In integrated mode Simulation does
 not bind ports 14540-14542. `evidence_fresh`, `evidence_age_ms`, and
 `evidence_valid_for_ms` expose the TTL decision even after evidence expires.
+
+## Read-only acceptance preflight
+
+`GET /api/preflight?node_id=UAV-02` is implemented as diagnostic contract `1.0`.
+Exactly one explicit `node_id` is required; endpoint/system/timeout overrides
+and duplicate/empty node parameters return HTTP 400. Unknown nodes return 404.
+
+The handler reuses **already connected Registry-owned sessions**. It never
+starts or reconnects a vehicle, opens a temporary probe, creates an action, or
+calls ARM, TAKEOFF, LAND, RTL mode switching, parameter/mission writes or flight
+setpoints. HOME uses REQUEST_MESSAGE (512/242); RTL evidence uses PARAM_REQUEST_READ,
+MISSION_REQUEST_LIST(RALLY=2) and the zero-count MISSION_ACK protocol reply.
+These diagnostic MAVLink reads are not flight commands. GCS heartbeat continues.
+
+The report returns `preflight_id`, `timestamp`, `node_id`, per-node `nodes`,
+`home_evidence`, `rtl_destination_evidence`, `ground_context`, `reason_codes`,
+`status` (`ready`/`not_ready`), `execution_authorized: false`, and
+`flight_command_sent: false`. HTTP 200 means a diagnostic report, not passed
+flight acceptance. `ready` requires all registered nodes' fresh disarmed evidence,
+one RX owner and GCS heartbeat, no busy/autonomous lease, selected-node fresh
+ON_GROUND, current ground/calibration context, verified HOME cross-check error
+strictly below the default 0.75 m tolerance, and supported HOME-only RTL config.
+Locks are acquired nonblocking; a busy/offline/stale node is not queried.
+Queries use fixed two-second per-wait budgets; HOME's ACK and evidence waits can
+total four seconds, plus the two-second RTL query. Isolation and ground context
+are rechecked afterwards. No lock or readiness ticket persists in this report.
+
+Failures remain `not_ready` with reasons such as
+`persistent_session_unavailable:UAV-02`, `fresh_disarmed_evidence_unavailable:UAV-01`,
+`node_busy:UAV-02`, `fresh_landed_evidence_unavailable`,
+`ground_reference_unavailable`, `ground_reference_changed_or_stale`,
+`home_position_unverified`, `home_position_uncertainty_exceeds_tolerance`,
+`rtl_destination_unverified`, `rtl_home_configuration_unsupported`,
+`home_or_rtl_not_checked`, or `preflight_query_exception` (with `error_class`).
+Ground/config source evidence and timestamps remain separate from report time.
+
+This point-in-time diagnostic is **not Policy admission**, a landing-surface
+safety certificate, nor a promise of future completion. Ordinary controlled
+LAND does not depend on preflight being ready. Operators must not arm to make
+an unavailable HOME query pass. Existing action routes retain all their gates.
+The executable response projection is in
+`docs/fixtures/runtime_preflight_v1.json`; it is offline, not live evidence.
 
 ## Compatibility and consumer handoff
 
