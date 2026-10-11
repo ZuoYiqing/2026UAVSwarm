@@ -71,7 +71,12 @@ def from_managed_world(manifest: dict[str, Any], state: dict[str, Any]) -> dict[
     if state.get("world_name") != SUPPORTED_WORLD or state.get("world_path") != str(world_path):
         raise ValueError("ground_reference_run_world_mismatch")
     world_bytes = world_path.read_bytes()
-    digest = hashlib.sha256(world_bytes).hexdigest()
+    raw_digest = hashlib.sha256(world_bytes).hexdigest()
+    digest = hashlib.sha256(harness.canonical_world_bytes(world_bytes)).hexdigest()
+    if state.get("world_file_sha256") != raw_digest:
+        raise ValueError("ground_reference_run_world_file_hash_mismatch")
+    if state.get("world_sha256_scheme") != harness.WORLD_SHA256_SCHEME:
+        raise ValueError("ground_reference_run_world_hash_scheme_mismatch")
     if state.get("world_sha256") != digest:
         raise ValueError("ground_reference_run_world_hash_mismatch")
 
@@ -98,6 +103,7 @@ def from_managed_world(manifest: dict[str, Any], state: dict[str, Any]) -> dict[
         "scene_id": SUPPORTED_SCENE,
         "map_version": SUPPORTED_MAP,
         "world_sha256": digest,
+        "world_sha256_scheme": harness.WORLD_SHA256_SCHEME,
         "frame": "scene_ned",
         "kind": "horizontal_plane",
         "ground_down_m": 0.0,

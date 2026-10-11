@@ -3,6 +3,7 @@
   "scene_id": "simple_recon_v0_1",
   "map_version": "simple_recon_v0_1-map-1",
   "world_sha256": "9086de5bea22ae0470fe76f6b06cf9e73b6ac9bdf96477c2171ae304a7b575fa",
+  "world_sha256_scheme": "sha256-lf-v1",
   "frame": "scene_ned",
   "kind": "horizontal_plane",
   "ground_down_m": 0.0,

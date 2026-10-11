@@ -30,6 +30,15 @@ RUNTIME_ROOT = REPO_ROOT / ".runtime" / "px4_gazebo"
 STATE_PATH = RUNTIME_ROOT / "harness_state.json"
 MINIMUM_VEHICLE_COUNT = 3
 HARNESS_RUN_ID_ENV = "UAV_SWARM_HARNESS_RUN_ID"
+WORLD_SHA256_SCHEME = "sha256-lf-v1"
+
+
+def canonical_world_bytes(contents: bytes) -> bytes:
+    """Normalize only Git's LF/CRLF checkout variation for world identity."""
+    normalized = contents.replace(b"\r\n", b"\n")
+    if b"\r" in normalized:
+        raise ValueError("world_line_endings_unsupported")
+    return normalized
 
 IDENTITY_OBSERVED = "identity_observed"
 IDENTITY_MATCH = "match"
@@ -1043,7 +1052,9 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
     manifest = load_manifest(manifest_path)
     environment = preflight(manifest)
     world_path = Path(environment["world_path"]).resolve()
-    world_digest = hashlib.sha256(world_path.read_bytes()).hexdigest()
+    world_bytes = world_path.read_bytes()
+    world_digest = hashlib.sha256(canonical_world_bytes(world_bytes)).hexdigest()
+    world_file_digest = hashlib.sha256(world_bytes).hexdigest()
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
     state: dict[str, Any] = {
@@ -1057,6 +1068,8 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         "world_name": manifest["world_name"],
         "world_path": str(world_path),
         "world_sha256": world_digest,
+        "world_sha256_scheme": WORLD_SHA256_SCHEME,
+        "world_file_sha256": world_file_digest,
         "required_udp_ports": [
             {"host": host, "port": port, "owner": owner}
             for host, port, owner in required_udp_ports(manifest)

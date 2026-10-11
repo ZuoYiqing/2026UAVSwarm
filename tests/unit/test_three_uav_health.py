@@ -54,11 +54,14 @@ def _state(manifest: dict[str, Any]) -> dict[str, Any]:
     server["process_identity"].update(pid=5500, executable="/usr/bin/ruby",
                                     cmdline=["gz", "sim", "simple_recon_v0_1.sdf"])
     world_path = harness.resolve_repo_path(str(manifest["world_path"])).resolve()
+    world_bytes = world_path.read_bytes()
     return {
         "version": "1.2", "run_id": RUN_ID, "processes": processes,
         "gazebo_processes": [server], "world_name": manifest["world_name"],
         "world_path": str(world_path),
-        "world_sha256": hashlib.sha256(world_path.read_bytes()).hexdigest(),
+        "world_sha256": hashlib.sha256(harness.canonical_world_bytes(world_bytes)).hexdigest(),
+        "world_sha256_scheme": harness.WORLD_SHA256_SCHEME,
+        "world_file_sha256": hashlib.sha256(world_bytes).hexdigest(),
     }
 
 
@@ -245,8 +248,6 @@ def test_integrated_health_publishes_only_known_ground_collision_geometry(
     expected = json.loads(Path(
         "docs/simulation/fixtures/ground_reference_simple_recon_v0_1.json"
     ).read_text(encoding="utf-8"))
-    world_path = harness.resolve_repo_path(str(manifest["world_path"]))
-    assert b"\r\n" not in world_path.read_bytes()
     assert payload["runtime_evidence"]["ground_reference"] == expected
     assert payload["world_sha256"] == expected["world_sha256"]
     assert payload["runtime_evidence"]["world_sha256"] == expected["world_sha256"]
@@ -268,6 +269,34 @@ def test_integrated_health_omits_ground_without_matching_startup_hash(
     assert payload["simulation_status"] == "ready"
     assert "ground_reference" not in payload["runtime_evidence"]
     assert "ground_reference_run_world_hash_mismatch" in payload["evidence"]["ground_reference_status"]
+
+
+def test_ground_reference_same_across_lf_and_crlf_checkouts(tmp_path: Path) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    original = harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    canonical = harness.canonical_world_bytes(original)
+    expected = json.loads(Path(
+        "docs/simulation/fixtures/ground_reference_simple_recon_v0_1.json"
+    ).read_text(encoding="utf-8"))
+    for line_ending in (b"\n", b"\r\n"):
+        world_path = tmp_path / ("lf.sdf" if line_ending == b"\n" else "crlf.sdf")
+        world_path.write_bytes(canonical.replace(b"\n", line_ending))
+        variant = {**manifest, "world_path": str(world_path)}
+        assert ground_reference.from_managed_world(variant, _state(variant)) == expected
+
+
+def test_ground_reference_rejects_raw_file_change_after_start(tmp_path: Path) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    canonical = harness.canonical_world_bytes(
+        harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    )
+    world_path = tmp_path / "world.sdf"
+    world_path.write_bytes(canonical)
+    manifest["world_path"] = str(world_path)
+    state = _state(manifest)
+    world_path.write_bytes(canonical.replace(b"\n", b"\r\n"))
+    with pytest.raises(ValueError, match="ground_reference_run_world_file_hash_mismatch"):
+        ground_reference.from_managed_world(manifest, state)
 
 
 @pytest.mark.parametrize("replacement", [
