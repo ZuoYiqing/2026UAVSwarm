@@ -75,7 +75,9 @@ python3 simulation/px4_gazebo/scripts/health_three_uav.py --mode integrated \
 它只描述 SDF 中 `ground_plane` 的承重 collision：公共 `scene_ned` 的
 `ground_down_m=0`，有效 XY 范围为北/东各 `[-1000,1000]` 米，
 `kind=horizontal_plane`、`source=world_collision_geometry`。`world_sha256`
-是完整 world 文件内容哈希，harness 启动时记录并在采样时复核；旧 harness
+是实际 world 文件原始字节的哈希；此场景的 SDF 由同目录 `.gitattributes`
+固定为 LF checkout，避免 Windows CRLF 与 Linux LF 产生不同哈希。
+harness 启动时记录并在采样时复核；旧 harness
 运行记录无启动哈希、文件已修改、场景/版本不匹配或 world/进程身份不可信时
 省略该字段，不能猜测地面高度。可审查的静态示例见
 `fixtures/ground_reference_simple_recon_v0_1.json`。`ground_reference` 自身

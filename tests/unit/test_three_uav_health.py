@@ -245,6 +245,8 @@ def test_integrated_health_publishes_only_known_ground_collision_geometry(
     expected = json.loads(Path(
         "docs/simulation/fixtures/ground_reference_simple_recon_v0_1.json"
     ).read_text(encoding="utf-8"))
+    world_path = harness.resolve_repo_path(str(manifest["world_path"]))
+    assert b"\r\n" not in world_path.read_bytes()
     assert payload["runtime_evidence"]["ground_reference"] == expected
     assert payload["world_sha256"] == expected["world_sha256"]
     assert payload["runtime_evidence"]["world_sha256"] == expected["world_sha256"]
