@@ -1,0 +1,84 @@
+{
+  "contract_version": "landing_assessment_proposal_v0.1",
+  "assessment_id": "stale-samples-001",
+  "correlation": {
+    "mission_id": "M-REPLAY",
+    "request_id": "REQ-001",
+    "action_id": null,
+    "trace_id": null
+  },
+  "goal": {
+    "kind": "scene_ground_contact",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "ground_reference": {
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_kind": "synthetic_scene_geometry",
+      "source_ref": "fixture://world/ground_plane",
+      "ground_down_m": 0
+    },
+    "vertical_tolerance_m": 0.3,
+    "min_samples": 3,
+    "min_stable_s": 0.5
+  },
+  "observation": {
+    "node_id": "UAV-01",
+    "source_kind": "synthetic_replay",
+    "source_ref": "fixture://stale-samples",
+    "timebase": "simulation_s",
+    "evaluated_at_s": 20,
+    "max_sample_age_s": 2,
+    "calibration": {
+      "version": "synthetic-cal-1",
+      "frame": "scene_ned",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_ref": "fixture://calibration"
+    },
+    "samples": [
+      {
+        "sample_id": "s1",
+        "t_s": 10,
+        "position_scene_ned_m": {
+          "north_m": 0.03,
+          "east_m": 0.02,
+          "down_m": 0.02
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://stale-samples/s1"
+      },
+      {
+        "sample_id": "s2",
+        "t_s": 10.3,
+        "position_scene_ned_m": {
+          "north_m": 0.03,
+          "east_m": 0.02,
+          "down_m": 0.02
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://stale-samples/s2"
+      },
+      {
+        "sample_id": "s3",
+        "t_s": 10.6,
+        "position_scene_ned_m": {
+          "north_m": 0.03,
+          "east_m": 0.02,
+          "down_m": 0.02
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://stale-samples/s3"
+      }
+    ],
+    "surface_observation": {
+      "kind": "absent",
+      "image_ref": null,
+      "range_down_m": null,
+      "source_ref": null
+    }
+  }
+}
