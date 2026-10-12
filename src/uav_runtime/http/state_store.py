@@ -140,7 +140,9 @@ class RuntimeStateStore:
         self._idempotency_index: dict[str, tuple[str, str]] = {}
         self._simulation_evidence: dict[str, Any] | None = None
         self._simulation_evidence_received_at: float | None = None
+        self._ground_reference_binding: dict[str, Any] | None = None
         self._coordinate_calibrations: dict[str, dict[str, Any]] = {}
+        self._landing_sites: dict[str, dict[str, Any]] = {}
 
     def mark_collector_started(self, *, endpoint: str) -> None:
         with self._lock:
@@ -503,7 +505,60 @@ class RuntimeStateStore:
         with self._lock:
             self._simulation_evidence = normalized
             self._simulation_evidence_received_at = self._monotonic()
+            # The health envelope transports geometry, but does not own its
+            # lifetime. Every publication replaces/revokes the binding; stale
+            # replay or negative evidence must never resurrect an old world.
+            self._ground_reference_binding = self._bind_ground_reference(normalized)
         return copy.deepcopy(normalized)
+
+    def _source_fresh(self, evidence: dict[str, Any]) -> bool:
+        try:
+            source = datetime.fromisoformat(evidence["source_timestamp"].replace("Z", "+00:00"))
+            age_ms = (self._clock() - source.timestamp()) * 1000
+            return source.tzinfo is not None and -100 <= age_ms <= evidence["valid_for_ms"]
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+            return False
+
+    def _bind_ground_reference(self, evidence: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate a static geometry publication, not ongoing Gazebo health.
+
+        Re-reading an expired health file must not refresh its source age.
+        Geometry has no TTL once bound; a new publication can revoke it.
+        """
+        if not self._source_fresh(evidence):
+            return None
+        reference = evidence.get("ground_reference")
+        world, models = evidence.get("world"), evidence.get("models")
+        if (not isinstance(reference, dict) or reference.get("contract_version") != "1.0"
+                or reference.get("kind") != "horizontal_plane" or reference.get("frame") != "scene_ned"
+                or reference.get("source") != "world_collision_geometry"
+                or not isinstance(world, dict) or world.get("status") != "ready"
+                or evidence.get("clock_advancing") is not True or not isinstance(models, list)):
+            return None
+        if (reference.get("scene_id") != evidence.get("scene_id")
+                or reference.get("map_version") != evidence.get("map_version")
+                or not isinstance(reference.get("world_sha256"), str)
+                or len(reference["world_sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in reference["world_sha256"])
+                or reference["world_sha256"] != evidence.get("world_sha256")
+                or not reference.get("surface_id") or not evidence.get("run_id")):
+            return None
+        bounds = reference.get("xy_bounds_m")
+        if not isinstance(bounds, dict):
+            return None
+        values = [reference.get("ground_down_m")] + [bounds.get(key) for key in
+                  ("north_min_m", "north_max_m", "east_min_m", "east_max_m")]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
+            return None
+        if bounds["north_min_m"] >= bounds["north_max_m"] or bounds["east_min_m"] >= bounds["east_max_m"]:
+            return None
+        return copy.deepcopy({
+            "scene_id": evidence["scene_id"], "map_version": evidence["map_version"],
+            "world_sha256": evidence["world_sha256"], "run_id": evidence["run_id"],
+            "source_timestamp": evidence["source_timestamp"], "reference": reference,
+            "validated_node_ids": [model.get("node_id") for model in models
+                                   if isinstance(model, dict) and model.get("status") == "ready"],
+        })
 
     def update_coordinate_calibration(self, evidence: dict[str, Any]) -> dict[str, Any]:
         """Accept an explicit local-to-scene translation; yaw is never used as an axis transform."""
@@ -561,6 +616,8 @@ class RuntimeStateStore:
             "valid_for_ms": max(100, min(int(evidence["valid_for_ms"]), 60000)),
             "received_monotonic": self._monotonic(),
         })
+        session = self.vehicle_registry.get_vehicle(node_id).session if self.vehicle_registry is not None else None
+        normalized["session_position_epoch"] = getattr(session, "_position_epoch", None)
         with self._lock:
             self._coordinate_calibrations[node_id] = normalized
         public = copy.deepcopy(normalized)
@@ -575,6 +632,18 @@ class RuntimeStateStore:
         received = float(calibration.pop("received_monotonic"))
         age_ms = max(0, int(round((self._monotonic() - received) * 1000)))
         calibration["evidence_age_ms"] = age_ms
+        session = self.vehicle_registry.get_vehicle(node_id).session if self.vehicle_registry is not None else None
+        if calibration.get("session_position_epoch") != getattr(session, "_position_epoch", None):
+            return calibration, "unavailable"
+        changed = getattr(session, "_position_epoch_changed_timestamp", None)
+        if changed is not None:
+            try:
+                source = datetime.fromisoformat(calibration["source_timestamp"].replace("Z", "+00:00"))
+                reset = datetime.fromisoformat(changed.replace("Z", "+00:00"))
+                if source.tzinfo is None or source <= reset:
+                    return calibration, "unavailable"
+            except (KeyError, TypeError, ValueError, AttributeError):
+                return calibration, "unavailable"
         if age_ms > int(calibration["valid_for_ms"]):
             return calibration, "stale"
         return calibration, str(calibration.get("status") or "unavailable")
@@ -590,6 +659,91 @@ class RuntimeStateStore:
         "unavailable"（从未发布）或 "stale"（过期），此时 translation 不可信。
         """
         return self._coordinate_calibration(node_id)
+
+    def ground_landing_context(self, node_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Read version-bound static geometry with this node's live calibration.
+
+        Health freshness is reported separately by simulation_status(). This
+        context asserts coordinate compatibility, never current Gazebo health.
+        Neither scene origin nor an arbitrary site candidate defines ground.
+        """
+        calibration, status = self.coordinate_calibration(node_id)
+        if status != "calibrated" or not calibration:
+            return None
+        with self._lock:
+            binding = copy.deepcopy(self._ground_reference_binding)
+        if not binding or node_id not in binding["validated_node_ids"]:
+            return None
+        if not self._source_fresh(calibration):
+            return None
+        if (binding["scene_id"] != calibration.get("scene_id")
+                or binding["map_version"] != calibration.get("map_version")
+                or calibration.get("axis_alignment") != "ned_aligned"
+                or calibration.get("origin_continuity") != "verified"):
+            return None
+        context = calibration.get("context") or {}
+        if not isinstance(context, dict):
+            return None
+        if context.get("run_id") != binding["run_id"]:
+            return None
+        return calibration, binding["reference"]
+
+    def update_landing_site_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
+        """Store static, version-keyed site geometry independently of dynamic EKF calibration."""
+        if evidence.get("contract_version") != "1.0":
+            raise ValueError("unsupported_landing_site_version")
+        if "valid_for_ms" in evidence:
+            raise ValueError("landing_site_ttl_not_supported")
+        required = (
+            "scene_id", "map_version", "world_sha256", "node_id", "object_id",
+            "center_scene_ned_m", "horizontal_tolerance_m", "ground_down_m",
+            "vertical_tolerance_m", "collision_surface", "source_timestamp",
+            "status", "validation",
+        )
+        missing = [key for key in required if evidence.get(key) in (None, "")]
+        if missing:
+            raise ValueError(f"landing_site_missing:{','.join(missing)}")
+        node_id = str(evidence["node_id"])
+        if self.vehicle_registry is not None:
+            self.vehicle_registry.get_vehicle(node_id)
+            if evidence["scene_id"] != self.vehicle_registry.scene_id:
+                raise ValueError("landing_site_scene_mismatch")
+        center = evidence["center_scene_ned_m"]
+        if not isinstance(center, dict) or not all(
+            isinstance(center.get(axis), (int, float))
+            and not isinstance(center[axis], bool)
+            and math.isfinite(float(center[axis]))
+            for axis in ("north", "east", "down")
+        ):
+            raise ValueError("landing_site_center_invalid")
+        for key in ("horizontal_tolerance_m", "vertical_tolerance_m", "ground_down_m"):
+            value = evidence[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                raise ValueError(f"landing_site_{key}_invalid")
+        if not 0 < float(evidence["horizontal_tolerance_m"]) <= 0.75:
+            raise ValueError("landing_site_horizontal_tolerance_invalid")
+        if not 0 < float(evidence["vertical_tolerance_m"]) <= 0.3:
+            raise ValueError("landing_site_vertical_tolerance_invalid")
+        if not isinstance(evidence["collision_surface"], dict) or not evidence["collision_surface"].get("object_id"):
+            raise ValueError("landing_site_collision_surface_invalid")
+        validation = evidence["validation"]
+        if not isinstance(validation, dict):
+            raise ValueError("landing_site_validation_invalid")
+        # The current HTTP bridge has no authenticated Simulation publisher.
+        # A caller-supplied run_id/real_landing flag cannot grant flight authority.
+        if evidence["status"] == "validated":
+            raise ValueError("trusted_landing_site_producer_unavailable")
+        public = finite_json({**evidence, "status": "candidate"})
+        with self._lock:
+            self._landing_sites[node_id] = public
+        return copy.deepcopy(public)
+
+    def landing_site(self, node_id: str) -> tuple[dict[str, Any] | None, str]:
+        with self._lock:
+            site = copy.deepcopy(self._landing_sites.get(node_id))
+        if site is None:
+            return None, "unavailable"
+        return site, str(site["status"])
 
     def simulation_status(self) -> dict[str, Any]:
         telemetry = self.telemetry_latest()
@@ -730,6 +884,15 @@ class RuntimeStateStore:
                           if self.vehicle_registry is not None else "x500"),
                 "source": {"id": f"px4-sitl-{row.get('system_id') or node_id}", "kind": "simulation", "label": "PX4 SITL"},
                 "connected": bool(row.get("connected")) and not bool(row.get("stale")),
+                "control": {
+                    "contract_version": "1.1",
+                    "active_action": row.get("active_action"),
+                    "active_action_id": row.get("active_action_id"),
+                    "autonomous_action": row.get("autonomous_action"),
+                    "autonomous_action_id": row.get("autonomous_action_id"),
+                    "autonomous_execution_may_continue": row.get("autonomous_action_id") is not None,
+                    "autonomous_execution_evidence": row.get("autonomous_execution_evidence"),
+                },
                 "pose": pose, "pose_source": pose_source,
                 "spatial": {
                     "contract_version": "1.0",

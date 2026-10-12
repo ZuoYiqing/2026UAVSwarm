@@ -83,6 +83,11 @@ class VehicleRuntimeState:
     last_action_at: str | None = None
     active_action: str | None = None
     active_action_id: str | None = None
+    # An HTTP observation ending does not stop PX4's autonomous mode.
+    autonomous_action: str | None = None
+    autonomous_action_id: str | None = None
+    autonomous_after_sequence: int | None = None
+    autonomous_execution_evidence: dict[str, Any] | None = None
     fault_state: str | None = None
     last_error: str | None = None
     telemetry_freshness_ms: int | None = None
@@ -507,6 +512,16 @@ class VehicleRegistry:
         handle = self.get_vehicle(node_id)
         with handle.action_lock, handle.state_lock:
             state = handle.runtime_state
+            self._refresh_autonomous_guard(handle)
+            if state.autonomous_action_id is not None and action_type != "land":
+                raise VehicleRegistryError(
+                    "node_busy", node_id=node_id, status=409,
+                    details={
+                        "active_action": state.autonomous_action,
+                        "active_action_id": state.autonomous_action_id,
+                        "autonomous_execution_may_continue": True,
+                    },
+                )
             if state.active_action is not None:
                 if action_type != "land" or state.active_action == "land":
                     raise VehicleRegistryError(
@@ -520,6 +535,14 @@ class VehicleRegistry:
                     )
                 preempted_action = state.active_action
                 preempted_action_id = state.active_action_id
+                # Cancelling the observer does not cancel PX4 RTL. Preserve
+                # its lease before LAND takes ownership, including when LAND
+                # is subsequently rejected or its ACK is not observed.
+                if preempted_action == "return_home" and preempted_action_id is not None:
+                    state.autonomous_action = preempted_action
+                    state.autonomous_action_id = preempted_action_id
+                    cursor_getter = getattr(handle.session, "observation_cursor", None)
+                    state.autonomous_after_sequence = cursor_getter() if callable(cursor_getter) else None
                 if handle.action_cancel_event is not None:
                     handle.action_cancel_event.set()
             else:
@@ -535,6 +558,53 @@ class VehicleRegistry:
                 "preempted_action": preempted_action,
                 "preempted_action_id": preempted_action_id,
             }
+
+    def _refresh_autonomous_guard(self, handle: VehicleHandle) -> None:
+        """Clear only on fresh dispatcher proof that autonomous flight has ended.
+
+        Called while holding this handle's state lock. Session owns evidence
+        interpretation: active=False means a fresh safe HOLD mode or fresh
+        landed/disarmed pair. Unknown, stale, unavailable or failed evidence
+        never clears the guard, regardless of elapsed wall-clock time.
+        """
+        state = handle.runtime_state
+        if state.autonomous_action_id is None:
+            return
+        try:
+            getter = getattr(handle.session, "autonomous_state", None)
+            evidence = getter() if callable(getter) else None
+        except Exception:
+            evidence = None
+        state.autonomous_execution_evidence = (
+            dict(evidence) if isinstance(evidence, dict)
+            else {"active": None, "fresh": False, "reason": "autonomous_evidence_unavailable"}
+        )
+        if (state.autonomous_execution_evidence.get("fresh") is True
+                and state.autonomous_execution_evidence.get("active") is False
+                and (state.autonomous_after_sequence is None
+                     or (isinstance(state.autonomous_execution_evidence.get("stop_sequence"), int)
+                         and state.autonomous_execution_evidence["stop_sequence"] > state.autonomous_after_sequence))):
+            state.autonomous_action = None
+            state.autonomous_action_id = None
+            state.autonomous_after_sequence = None
+
+    def retain_autonomous_action(self, node_id: str, action_id: str, action: str, *, after_sequence: int | None = None) -> bool:
+        """Retain per-node exclusivity after an autonomous action's observation.
+
+        Invoke before releasing the HTTP action lease. A preempted observer
+        cannot replace the newer LAND lease with its old autonomous action.
+        LAND remains admissible while this guard is held.
+        """
+        handle = self.get_vehicle(node_id)
+        with handle.action_lock, handle.state_lock:
+            state = handle.runtime_state
+            if state.active_action_id != action_id:
+                return False
+            state.autonomous_action = action
+            state.autonomous_action_id = action_id
+            state.autonomous_after_sequence = after_sequence
+            self._refresh_autonomous_guard(handle)
+            return state.autonomous_action_id is not None
 
     def release_action(
         self,
@@ -626,6 +696,7 @@ class VehicleRegistry:
         for handle in self.list_vehicles():
             self.refresh_state(handle)
             with handle.state_lock:
+                self._refresh_autonomous_guard(handle)
                 rows.append({
                     "node_id": handle.config.node_id,
                     "backend": handle.config.backend,

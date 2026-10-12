@@ -49,6 +49,7 @@ from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
+from uav_runtime.http.preflight import check_preflight
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
@@ -83,6 +84,14 @@ def _query_int(values: dict[str, list[str]], key: str, default: int, *, minimum:
 
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": "uav_runtime_http_bridge", "version": BRIDGE_VERSION, "mode": "local_dev"}
+
+
+def preflight(query: str = "") -> dict[str, Any]:
+    values = parse_qs(query, keep_blank_values=True)
+    node_ids = values.get("node_id", [])
+    if set(values) != {"node_id"} or len(node_ids) != 1 or not node_ids[0].strip():
+        raise RequestValidationError("invalid_parameter", "node_id", "Exactly one explicit node_id is required; overrides are forbidden")
+    return check_preflight(VEHICLE_REGISTRY, RUNTIME_STATE_STORE, node_ids[0])
 
 
 def check_backend(payload: dict[str, Any]) -> dict[str, Any]:
@@ -198,6 +207,16 @@ def _request_fingerprint(req: BackendRequest, *, action: str, smoke: bool) -> di
         "stable_duration_ms",
         "command_timeout_ms",
         "observe_timeout_ms",
+        "timeout_s",
+        "min_progress_m",
+        "home_tolerance_m",
+        "north_m",
+        "east_m",
+        "down_m",
+        "arrival_tolerance_m",
+        "tolerance_m",
+        "hold_s",
+        "duration_s",
     ):
         if hasattr(req, name):
             fields[name] = getattr(req, name)
@@ -267,6 +286,11 @@ def _finalize_action(
     if lifecycle_status != "succeeded" and out.get("code") in {None, "", "px4_sitl_action_failed"}:
         out["code"] = failure_reason or "action_failed"
     RUNTIME_STATE_STORE.finish_action(action_id, out)
+    if out.get("autonomous_execution_may_continue") is True:
+        VEHICLE_REGISTRY.retain_autonomous_action(
+            handle.config.node_id, action_id, str(out.get("action") or ""),
+            after_sequence=out.get("autonomous_execution_after_sequence"),
+        )
     VEHICLE_REGISTRY.release_action(
         handle.config.node_id,
         action_id,
@@ -435,6 +459,9 @@ def _execute_flight_action(
             RUNTIME_STATE_STORE.record_event(event)
     cancel_event = admission["cancel_event"]
     RUNTIME_STATE_STORE.transition_action(action_id, "executing")
+    landing_context: tuple[dict[str, Any], dict[str, Any]] | None = None
+    execution_cursor: int | None = None
+    execution_started = False
     try:
         backend = Px4SitlBackend(cfg, handle.session)
         rt.gateway.register(Px4RuntimeActionAdapter(backend))
@@ -529,10 +556,22 @@ def _execute_flight_action(
             }
         elif action == "return_home":
             assert isinstance(req, ReturnHomeRequest)
-            # 同理不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
             action_req.params = {
                 "timeout_s": req.timeout_s,
                 "min_progress_m": req.min_progress_m,
+                "home_tolerance_m": req.home_tolerance_m,
+                "stable_duration_s": req.stable_duration_ms / 1000.0,
+                "_cancel_event": cancel_event,
+            }
+        elif action == "land":
+            # Ordinary LAND confirms the stated scene ground, not a named pad.
+            landing_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
+            calibration, reference = landing_context if landing_context is not None else ({}, {})
+            action_req.params = {
+                "command_timeout_ms": req.command_timeout_ms,
+                "observe_timeout_ms": req.observe_timeout_ms,
+                "ground_reference": reference,
+                "translation_scene_ned_m": calibration.get("translation_scene_ned_m", {}),
                 "_cancel_event": cancel_event,
             }
         else:
@@ -541,6 +580,9 @@ def _execute_flight_action(
                 "observe_timeout_ms": req.observe_timeout_ms,
                 "_cancel_event": cancel_event,
             }
+        cursor_getter = getattr(handle.session, "observation_cursor", None)
+        execution_cursor = cursor_getter() if callable(cursor_getter) else None
+        execution_started = True
         gateway_result = rt.gateway.execute("mavlink", action_req)
         out = dict(gateway_result.get("raw_result") or {
             "action": action,
@@ -552,9 +594,21 @@ def _execute_flight_action(
         })
         out.setdefault("accepted", gateway_result.get("accepted", False))
         out.setdefault("code", gateway_result.get("code"))
+        if action in {"land", "return_home"} and gateway_result.get("code") == "adapter_execution_exception":
+            out["autonomous_execution_may_continue"] = True
+            out["autonomous_execution_after_sequence"] = execution_cursor
         out.update(identity)
         out["execution_admitted"] = True
         out["policy_decision"] = policy_event
+        if action == "land" and out.get("result") == "pass":
+            current_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
+            if (landing_context is None or current_context is None
+                    or current_context[0].get("calibration_version") != landing_context[0].get("calibration_version")
+                    or current_context[1].get("world_sha256") != landing_context[1].get("world_sha256")
+                    or current_context[1] != landing_context[1]):
+                reason = "ground_reference_unavailable" if landing_context is None else "ground_reference_changed_or_stale"
+                out.update(result="fail", accepted=False, failure_reason=reason,
+                           code=reason, completion_state="unknown")
         result_event = {
             **_adapter_event("adapter_execution_result", handle, action, result=out),
             "action_id": action_id,
@@ -579,6 +633,11 @@ def _execute_flight_action(
             "ack_evidence": [],
             "completion_evidence": None,
         }
+        if execution_started and action in {"land", "return_home"}:
+            out["autonomous_execution_may_continue"] = True
+            out["autonomous_execution_after_sequence"] = execution_cursor
+            VEHICLE_REGISTRY.retain_autonomous_action(handle.config.node_id, action_id, action,
+                                                     after_sequence=out["autonomous_execution_after_sequence"])
         RUNTIME_STATE_STORE.finish_action(action_id, out)
         VEHICLE_REGISTRY.release_action(
             handle.config.node_id,
@@ -636,14 +695,7 @@ def hold_position(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def return_home(payload: dict[str, Any]) -> dict[str, Any]:
-    """自主返航（RETURN_HOME / AUTO+RTL），并验证它真的在朝 home 收敛。
-
-    不需要标定：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
-
-    ⚠️ 判据是**到 home 的距离确实缩小**，不是"模式变成了 RTL"。
-    本项目出过一次事故：收尾阶段把 AUTO_RTL 当成安全悬停接受，飞机自主返航
-    而动作报 pass。这个端点的实现刻意与之相反。
-    """
+    """Request RTL only with a validated pad and complete at stable pad arrival."""
     return _execute_flight_action(
         ReturnHomeRequest.from_json(payload), action="return_home"
     )
@@ -1009,6 +1061,8 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
     if method == "GET" and normalized == "/api/health":
         return 200, health()
+    if method == "GET" and normalized == "/api/preflight":
+        return 200, preflight(query)
     if method == "POST" and normalized == "/api/backend/check":
         return 200, check_backend(payload)
     if method == "POST" and normalized == "/api/actions/smoke-takeoff":

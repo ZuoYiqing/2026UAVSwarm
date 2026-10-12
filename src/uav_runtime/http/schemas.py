@@ -288,17 +288,16 @@ class HoldPositionRequest(BackendRequest):
 
 @dataclass(slots=True)
 class ReturnHomeRequest(BackendRequest):
-    """自主返航（RETURN_HOME / ``AUTO + RTL``）。
+    """Observe fresh stable arrival at the actual PX4 home through RTL.
 
-    不需要坐标：目标是 home，由飞控自己知道（PX4 的 EKF 原点）。
-
-    判据是**到 home 的距离确实缩小**而不是模式切换成功。
-    本项目出过一次事故：收尾阶段把 AUTO_RTL 当成安全悬停接受，飞机自主返航
-    而动作报 pass。所以这里只认位置证据。
+    This is not a promise that RTL will stop or land at a designated site.
+    ``min_progress_m`` remains a diagnostic field only.
     """
 
     timeout_s: float = 60.0
     min_progress_m: float = 5.0
+    home_tolerance_m: float = 0.75
+    stable_duration_ms: int = 1000
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> "ReturnHomeRequest":
@@ -316,7 +315,16 @@ class ReturnHomeRequest(BackendRequest):
                     "invalid_parameter", field, f"{field} 必须是正的有限数", value=raw
                 )
             values[field] = value
-        return cls(**asdict(base), **values)
+        tolerance = payload.get("home_tolerance_m", 0.75)
+        if (isinstance(tolerance, bool) or not isinstance(tolerance, (int, float))
+                or not math.isfinite(float(tolerance)) or not 0.05 <= float(tolerance) <= 5.0):
+            raise RequestValidationError("invalid_parameter", "home_tolerance_m", "home_tolerance_m must be within [0.05, 5.0]", value=tolerance)
+        return cls(
+            **asdict(base), **values,
+            home_tolerance_m=float(tolerance),
+            stable_duration_ms=_int(payload.get("stable_duration_ms"), 1000,
+                                    field="stable_duration_ms", minimum=300, maximum=10000),
+        )
 
 
 @dataclass(slots=True)

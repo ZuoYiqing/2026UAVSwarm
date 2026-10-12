@@ -8,7 +8,7 @@
    "任意非 OFFBOARD 模式"当成安全悬停，于是接受了 RTL —— 飞机自主返航，
    而动作报 pass。所以：
      * HOLD 必须在**持续时间内位置稳定**才算成功，模式对了但飞机在飘 = 失败
-     * RETURN_HOME 必须**看到到 home 的距离在缩小**才算成功
+     * RETURN_HOME 必须**新鲜位置持续到达实际 PX4 home**才算成功
 2. **只认目标子模式。** AUTO 主模式下子模式决定行为：LOITER(3) 是悬停，
    RTL(5) 是自主返航。只比主模式会把两者混为一谈。
 3. **只用新模式切换之后的样本。** 切换前的旧位置不能当作新模式生效的证据。
@@ -233,9 +233,23 @@ def test_hold_position_requires_connection() -> None:
 # =========================================================================
 
 
-def test_return_home_succeeds_only_when_distance_to_home_shrinks() -> None:
-    """看到到 home 的距离在缩小：应成功，并报告收敛证据。"""
+def _verified_home(monkeypatch, session) -> None:
+    # Isolate the arrival/mode observer. Real HOME querying and verification
+    # are exercised separately; this fixture never opens a MAVLink endpoint.
+    monkeypatch.setattr(type(session), "request_home_position", lambda self, **kwargs: {
+        "verified": True, "x": 0.0, "y": 0.0, "z": 0.0,
+        "latitude": 473977420, "longitude": 85455940, "altitude": 488000,
+        "verification_source": "unit_fixture_only",
+    })
+    monkeypatch.setattr(type(session), "verify_home_rtl_destination", lambda self, **kwargs: {
+        "verified": True, "verification_source": "unit_fixture_only", "rtl_type": 0, "rally_count": 0,
+    })
+
+
+def test_return_home_progress_does_not_complete_before_home_arrival(monkeypatch) -> None:
+    """The incident's 5 m progress must remain in_progress at 23 m from home."""
     session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
+    _verified_home(monkeypatch, session)
     _feed(session, x=50.0, y=0.0, z=-30.0)
 
     stop = threading.Event()
@@ -246,20 +260,42 @@ def test_return_home_succeeds_only_when_distance_to_home_shrinks() -> None:
         repeats=12, stop=stop,
     )
     try:
-        result = session.return_home(timeout_s=6.0, min_progress_m=1.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=1.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
 
-    assert result["returning"] is True, f"距离在缩小，应判成功：{result}"
-    assert result["reason"] == "converging_on_home"
+    assert result["returning"] is True
+    assert result["reason"] == "in_progress"
     assert result["initial_distance_m"] == pytest.approx(50.0, abs=1.0)
     assert result["final_distance_m"] < result["initial_distance_m"]
     assert result["distance_reduction_m"] >= 1.0
+    assert result["failure_reason"] == "return_home_in_progress"
+
+
+def test_return_home_completes_only_after_fresh_stable_home_arrival(monkeypatch) -> None:
+    session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
+    _verified_home(monkeypatch, session)
+    _feed(session, x=25.0, y=0.0, z=-6.0)
+    stop = threading.Event()
+    feeder = _feed_plan(session, positions=[(25.0, 0.0, -6.0), (4.0, 0.0, -6.0),
+                                             (0.2, 0.1, -3.0)], repeats=20, stop=stop)
+    try:
+        result = session.return_home(timeout_s=3.0, min_progress_m=5.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
+    finally:
+        stop.set()
+        feeder.join(timeout=1.0)
+    assert result["reason"] == "arrived_at_home"
     assert result["failure_reason"] is None
+    assert result["arrival_samples"] >= 3
+    assert result["final_distance_m"] <= 0.75
 
 
-def test_return_home_fails_when_it_only_switches_mode() -> None:
+def test_return_home_fails_when_it_only_switches_mode(monkeypatch) -> None:
     """**只切模式、位置没动 = 失败。**
 
     这条直接对应那次事故：模式变成 RTL 就报成功的写法会在这里判错。
@@ -267,6 +303,7 @@ def test_return_home_fails_when_it_only_switches_mode() -> None:
     或 home 点未定义）。
     """
     session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
+    _verified_home(monkeypatch, session)
     _feed(session, x=50.0, y=0.0, z=-30.0)
 
     stop = threading.Event()
@@ -277,7 +314,9 @@ def test_return_home_fails_when_it_only_switches_mode() -> None:
         repeats=20, stop=stop,
     )
     try:
-        result = session.return_home(timeout_s=2.0, min_progress_m=5.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=5.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
@@ -289,16 +328,19 @@ def test_return_home_fails_when_it_only_switches_mode() -> None:
     assert result["failure_reason"] == "return_home_not_converging"
 
 
-def test_return_home_fails_when_mode_is_not_rtl() -> None:
+def test_return_home_fails_when_mode_is_not_rtl(monkeypatch) -> None:
     """切不进 RTL：必须失败，即使位置碰巧在靠近 home。"""
     session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LOITER)] * 8)
+    _verified_home(monkeypatch, session)
     _feed(session, x=50.0, y=0.0, z=-30.0)
 
     stop = threading.Event()
     feeder = _feed_plan(session, positions=[(40.0, 0.0, -20.0), (30.0, 0.0, -10.0)],
                         repeats=15, stop=stop)
     try:
-        result = session.return_home(timeout_s=2.0, min_progress_m=1.0)
+        result = session.return_home(timeout_s=2.0, min_progress_m=1.0,
+                                     home_local_north_m=0.0, home_local_east_m=0.0,
+                                     home_tolerance_m=0.75, stable_duration_s=0.2)
     finally:
         stop.set()
         feeder.join(timeout=1.0)
@@ -314,4 +356,49 @@ def test_return_home_requires_connection() -> None:
     session, _ = make_goto_session(mode_plan=[])
     session.connection = None
     with pytest.raises(RuntimeError, match="connection_required"):
-        session.return_home(timeout_s=1.0)
+        session.return_home(timeout_s=1.0, home_local_north_m=0.0,
+                            home_local_east_m=0.0, home_tolerance_m=0.75,
+                            stable_duration_s=0.2)
+
+
+def test_return_home_accepted_mode_ack_without_confirmation_is_incomplete(monkeypatch) -> None:
+    session, _ = make_goto_session(mode_plan=[])
+    _verified_home(monkeypatch, session)
+    monkeypatch.setattr(type(session), "set_mode", lambda self, **kwargs: {
+        "confirmed": False,
+        "ack": {"command": DO_SET_MODE, "result": 0, "timeout": False},
+        "observed_main_mode": PX4_CUSTOM_MAIN_MODE_AUTO,
+        "observed_sub_mode": PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+    })
+    result = session.return_home(timeout_s=0.2, stable_duration_s=0.1)
+    assert result["reason"] == "mode_not_confirmed"
+    assert result["failure_reason"] == "return_home_mode_not_confirmed"
+    assert result["mode"]["confirmed"] is False
+
+
+def test_return_home_consumes_intermediate_outliers_in_each_rx_batch(monkeypatch) -> None:
+    session, _ = make_goto_session(mode_plan=[(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_RTL)])
+    _verified_home(monkeypatch, session)
+    stop = threading.Event()
+
+    def feed_batches() -> None:
+        while not stop.is_set():
+            # Every batch ends inside the goal. Reading only fresh[-1] would
+            # hide every excursion and build an invalid stable-arrival window.
+            with session._rx_condition:
+                _feed(session, x=0.1, y=0.0, z=-3.0)
+                _feed(session, x=3.0, y=0.0, z=-3.0)
+                _feed(session, x=0.1, y=0.0, z=-3.0)
+            time.sleep(0.02)
+
+    feeder = threading.Thread(target=feed_batches, daemon=True)
+    feeder.start()
+    try:
+        result = session.return_home(timeout_s=0.8, home_tolerance_m=0.75, stable_duration_s=0.15)
+    finally:
+        stop.set()
+        feeder.join(timeout=1.0)
+    assert result["reason"] != "arrived_at_home"
+    assert result["failure_reason"] is not None
+    assert result["arrival_samples"] <= 1
+    assert result["samples"] > 3

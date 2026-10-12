@@ -277,7 +277,9 @@ def test_land_preempts_takeoff_and_finishes_old_lifecycle(monkeypatch: pytest.Mo
         "POST", "/api/actions/land", body=action_body("UAV-02", key="land")
     )
 
-    assert land_status == 200 and landed["status"] == "succeeded"
+    assert land_status == 200 and landed["status"] == "failed"
+    assert landed["failure_reason"] == "ground_reference_unavailable"
+    assert registry.get_vehicle("UAV-02").session.calls == ["land"]
     assert old_lease["cancel_event"].is_set() is True
     old_result = store.action(old["action_id"])
     assert old_result["status"] == "failed"
