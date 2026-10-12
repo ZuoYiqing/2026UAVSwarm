@@ -187,6 +187,20 @@ python ops/watch-uav01-altitude.py
 | 文件 | 内容 |
 | --- | --- |
 | `HANDOFF_return_home_then_land.md` | 给仿真/Runtime 侧：`return-home` 后接 `land`，飞机停在约 10 m 且 `armed=False`。含完整证据与对照实验 |
+| `MSG_to_runtime_PR88_followup.md` | 给 Runtime 侧：PR #88 的接口边界问题 |
+| `MSG_to_runtime_decouple_ground_reference.md` | 给 Runtime 侧：静态 `ground_reference` 被 health 的 5 秒 TTL 判掉（B） |
+| `MERGE_READINESS_91_92_88.md` | 合并前核查：#92 fixture 的 world 哈希不符，以及**合并顺序不能反** |
+| `LANDING_SITE_THREE_WAY_DISCUSSION.md` | 三方协商材料：着陆点证据的信任来源与数据模型 |
+
+## 验收记录（实飞与在线）
+
+| 文件 | 内容 |
+| --- | --- |
+| `ACCEPTANCE_UAV02_FLIGHT_20261012.md` | **UAV-02 联合实飞**：屋顶假成功与返航假完成两处修复的实测证据；`goto` 待查项 |
+| `ACCEPTANCE_B_0_8_30_RESULT.md` | **在线 0/8/30 秒**：静态几何不再随 health TTL 过期；含 CRLF 阻塞及其根因 |
+
+**当前已验证版本**：`v0.1.2-rooftop-and-return-home-verified` → `1113617`
+（全量 917 passed / 6 skipped / 0 failed，两处核心修复已实飞验证）
 
 ---
 
