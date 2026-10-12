@@ -273,9 +273,12 @@ Runtime rejects a scene mismatch and exposes accepted evidence through
 `GET /api/simulation/status`.
 
 Simulation PR #92 adds optional `ground_reference` `1.0` and matching
-`world_sha256` to `runtime_evidence`. Runtime requires the outer source timestamp
-and TTL, world ready/advancing clock, selected-node model ready, matching
-scene/map/world identity, and calibration `context.run_id` matching health.
+`world_sha256` to `runtime_evidence`. At publication acceptance Runtime requires
+the outer source timestamp and TTL, world ready/advancing clock, model ready,
+and matching scene/map/world identity. It then stores a separate static geometry
+binding (`scene_id`, `map_version`, `world_sha256`, `run_id`, validated node IDs).
+At use time it requires fresh calibrated coordinates, matching scene/map and
+calibration `context.run_id`, verified origin continuity and no observed reset.
 `ground_reference` contains `frame: scene_ned`, `kind: horizontal_plane`,
 `ground_down_m`, `xy_bounds_m`, `surface_id`, and
 `source: world_collision_geometry`. It is a known-scene geometry reference,
@@ -283,9 +286,20 @@ not a perception model or trusted pad certificate. Source time is checked too;
 reposting an old file does not rejuvenate it. Local boot/reset-counter changes
 immediately invalidate accepted calibration; republication must postdate reset.
 Silent origin resets with no observable reset signal remain a real-verification
-gap and require the Simulation calibration monitor. Ground health must be
-republished while observing a flight (producer TTL 5000 ms); a one-shot expired
-publication cannot complete LAND.
+gap and require the Simulation calibration monitor.
+
+Static geometry has **no wall-clock TTL**. Health envelope expiry alone does not
+delete it or prevent ground completion. Dynamic health keeps its short TTL and
+becomes `unknown` when stale; cached geometry never promotes it to `ready`.
+Every new accepted envelope replaces the geometry binding. Missing/invalid
+reference, stale-source replay, negative world/clock/model evidence revoke its
+use; recovery requires a new valid publication. This is deliberately conservative:
+the producer cannot yet distinguish omitted geometry due to temporary low RTF
+from omitted geometry due to a changed world. A new run/map requires matching
+calibration; a Runtime restart starts with no cached geometry. No fixture is
+auto-loaded as live evidence and no second receiver or publisher loop is added.
+An unreported world change cannot be detected from static data: producer identity
+checks and fresh dynamic health remain separately necessary for operational use.
 
 Simulation owns the world-hash scheme. Its cross-checkout reference uses SHA-256
 of LF-normalized SDF content (`world_sha256_scheme: sha256-lf-v1`); the harness
@@ -331,6 +345,15 @@ Locks are acquired nonblocking; a busy/offline/stale node is not queried.
 Queries use fixed two-second per-wait budgets; HOME's ACK and evidence waits can
 total four seconds, plus the two-second RTL query. Isolation and ground context
 are rechecked afterwards. No lock or readiness ticket persists in this report.
+
+The additive `simulation_health` projection exposes dynamic `status`,
+`evidence_fresh`, `evidence_age_ms`, `evidence_valid_for_ms`, and `reason`.
+After 30 seconds a diagnostic can remain `ready` with `simulation_health.status:
+unknown`: HOME/RTL, live node state and version-bound geometry checks passed,
+but current Gazebo health is not established. This is not flight authorization
+and must not be displayed as overall system ready. See the versioned lifecycle
+example and executable expired-health projection in `runtime_preflight_v1.json`.
+Calibration TTL, telemetry freshness and Policy gates are not relaxed.
 
 Failures remain `not_ready` with reasons such as
 `persistent_session_unavailable:UAV-02`, `fresh_disarmed_evidence_unavailable:UAV-01`,

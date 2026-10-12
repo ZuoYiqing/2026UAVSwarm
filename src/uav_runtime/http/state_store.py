@@ -140,6 +140,7 @@ class RuntimeStateStore:
         self._idempotency_index: dict[str, tuple[str, str]] = {}
         self._simulation_evidence: dict[str, Any] | None = None
         self._simulation_evidence_received_at: float | None = None
+        self._ground_reference_binding: dict[str, Any] | None = None
         self._coordinate_calibrations: dict[str, dict[str, Any]] = {}
         self._landing_sites: dict[str, dict[str, Any]] = {}
 
@@ -504,7 +505,60 @@ class RuntimeStateStore:
         with self._lock:
             self._simulation_evidence = normalized
             self._simulation_evidence_received_at = self._monotonic()
+            # The health envelope transports geometry, but does not own its
+            # lifetime. Every publication replaces/revokes the binding; stale
+            # replay or negative evidence must never resurrect an old world.
+            self._ground_reference_binding = self._bind_ground_reference(normalized)
         return copy.deepcopy(normalized)
+
+    def _source_fresh(self, evidence: dict[str, Any]) -> bool:
+        try:
+            source = datetime.fromisoformat(evidence["source_timestamp"].replace("Z", "+00:00"))
+            age_ms = (self._clock() - source.timestamp()) * 1000
+            return source.tzinfo is not None and -100 <= age_ms <= evidence["valid_for_ms"]
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+            return False
+
+    def _bind_ground_reference(self, evidence: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate a static geometry publication, not ongoing Gazebo health.
+
+        Re-reading an expired health file must not refresh its source age.
+        Geometry has no TTL once bound; a new publication can revoke it.
+        """
+        if not self._source_fresh(evidence):
+            return None
+        reference = evidence.get("ground_reference")
+        world, models = evidence.get("world"), evidence.get("models")
+        if (not isinstance(reference, dict) or reference.get("contract_version") != "1.0"
+                or reference.get("kind") != "horizontal_plane" or reference.get("frame") != "scene_ned"
+                or reference.get("source") != "world_collision_geometry"
+                or not isinstance(world, dict) or world.get("status") != "ready"
+                or evidence.get("clock_advancing") is not True or not isinstance(models, list)):
+            return None
+        if (reference.get("scene_id") != evidence.get("scene_id")
+                or reference.get("map_version") != evidence.get("map_version")
+                or not isinstance(reference.get("world_sha256"), str)
+                or len(reference["world_sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in reference["world_sha256"])
+                or reference["world_sha256"] != evidence.get("world_sha256")
+                or not reference.get("surface_id") or not evidence.get("run_id")):
+            return None
+        bounds = reference.get("xy_bounds_m")
+        if not isinstance(bounds, dict):
+            return None
+        values = [reference.get("ground_down_m")] + [bounds.get(key) for key in
+                  ("north_min_m", "north_max_m", "east_min_m", "east_max_m")]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
+            return None
+        if bounds["north_min_m"] >= bounds["north_max_m"] or bounds["east_min_m"] >= bounds["east_max_m"]:
+            return None
+        return copy.deepcopy({
+            "scene_id": evidence["scene_id"], "map_version": evidence["map_version"],
+            "world_sha256": evidence["world_sha256"], "run_id": evidence["run_id"],
+            "source_timestamp": evidence["source_timestamp"], "reference": reference,
+            "validated_node_ids": [model.get("node_id") for model in models
+                                   if isinstance(model, dict) and model.get("status") == "ready"],
+        })
 
     def update_coordinate_calibration(self, evidence: dict[str, Any]) -> dict[str, Any]:
         """Accept an explicit local-to-scene translation; yaw is never used as an axis transform."""
@@ -607,68 +661,32 @@ class RuntimeStateStore:
         return self._coordinate_calibration(node_id)
 
     def ground_landing_context(self, node_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        """Read a producer-declared plane, bound to this node's live calibration.
+        """Read version-bound static geometry with this node's live calibration.
 
+        Health freshness is reported separately by simulation_status(). This
+        context asserts coordinate compatibility, never current Gazebo health.
         Neither scene origin nor an arbitrary site candidate defines ground.
-        Re-reading an expired health file must not refresh its source age.
         """
         calibration, status = self.coordinate_calibration(node_id)
         if status != "calibrated" or not calibration:
             return None
         with self._lock:
-            evidence = copy.deepcopy(self._simulation_evidence)
-            received = self._simulation_evidence_received_at
-        if not evidence or received is None or self._monotonic() - received > evidence["valid_for_ms"] / 1000.0:
+            binding = copy.deepcopy(self._ground_reference_binding)
+        if not binding or node_id not in binding["validated_node_ids"]:
             return None
-        for item in (evidence, calibration):
-            try:
-                source = datetime.fromisoformat(item["source_timestamp"].replace("Z", "+00:00"))
-                if source.tzinfo is None:
-                    return None
-                age_ms = (self._clock() - source.timestamp()) * 1000
-                if not -100 <= age_ms <= item["valid_for_ms"]:
-                    return None
-            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
-                return None
-        reference = evidence.get("ground_reference")
-        world = evidence.get("world") or {}
-        models = evidence.get("models") or []
-        if not isinstance(world, dict) or not isinstance(models, list):
+        if not self._source_fresh(calibration):
             return None
-        if (not isinstance(reference, dict) or reference.get("contract_version") != "1.0"
-                or reference.get("kind") != "horizontal_plane" or reference.get("frame") != "scene_ned"
-                or reference.get("source") != "world_collision_geometry"
-                or evidence.get("clock_advancing") is not True or world.get("status") != "ready"
-                or not any(isinstance(model, dict) and model.get("node_id") == node_id and model.get("status") == "ready" for model in models)):
-            return None
-        if (reference.get("scene_id") != calibration.get("scene_id")
-                or reference.get("map_version") != calibration.get("map_version")
-                or reference.get("scene_id") != evidence.get("scene_id")
-                or reference.get("map_version") != evidence.get("map_version")
-                or not isinstance(reference.get("world_sha256"), str)
-                or len(reference["world_sha256"]) != 64
-                or any(c not in "0123456789abcdef" for c in reference["world_sha256"])
-                or reference["world_sha256"] != evidence.get("world_sha256")
-                or not reference.get("surface_id")
+        if (binding["scene_id"] != calibration.get("scene_id")
+                or binding["map_version"] != calibration.get("map_version")
                 or calibration.get("axis_alignment") != "ned_aligned"
                 or calibration.get("origin_continuity") != "verified"):
             return None
         context = calibration.get("context") or {}
         if not isinstance(context, dict):
             return None
-        run_id = evidence.get("run_id")
-        if not run_id or context.get("run_id") != run_id:
+        if context.get("run_id") != binding["run_id"]:
             return None
-        bounds = reference.get("xy_bounds_m")
-        if not isinstance(bounds, dict):
-            return None
-        values = [reference.get("ground_down_m")] + [bounds.get(key) for key in
-                  ("north_min_m", "north_max_m", "east_min_m", "east_max_m")]
-        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
-            return None
-        if bounds["north_min_m"] >= bounds["north_max_m"] or bounds["east_min_m"] >= bounds["east_max_m"]:
-            return None
-        return calibration, reference
+        return calibration, binding["reference"]
 
     def update_landing_site_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
         """Store static, version-keyed site geometry independently of dynamic EKF calibration."""

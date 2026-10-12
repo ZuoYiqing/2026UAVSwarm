@@ -42,7 +42,7 @@ def _check_preflight(registry: Any, store: Any, node_id: str) -> dict[str, Any]:
     A disconnected or busy node is not probed with a temporary connection.
     This point-in-time report must never be used as Policy admission or a
     promise that the next flight will complete. Ground evidence is re-read
-    after queries because health/calibration can expire during the wait.
+    after queries because calibration can expire or geometry can be revoked.
     """
     handle, _ = registry.resolve_vehicle(node_id)
     output: dict[str, Any] = {
@@ -108,6 +108,12 @@ def _check_preflight(registry: Any, store: Any, node_id: str) -> dict[str, Any]:
         }
     if output["home_evidence"] is None or output["rtl_destination_evidence"] is None:
         reasons.append("home_or_rtl_not_checked")
+    # Diagnostic readiness is not current simulation readiness or flight
+    # permission. Make dynamic expiry visible without expiring static geometry.
+    health = store.simulation_status()
+    output["simulation_health"] = {key: health.get(key) for key in
+                                   ("status", "evidence_fresh", "evidence_age_ms",
+                                    "evidence_valid_for_ms", "reason")}
     output.update({"timestamp": datetime.now(timezone.utc).isoformat(), "nodes": nodes,
                    "reason_codes": sorted(set(reasons)), "status": "ready" if not reasons else "not_ready"})
     return finite_json(output)

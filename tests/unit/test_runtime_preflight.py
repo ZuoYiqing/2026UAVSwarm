@@ -94,6 +94,91 @@ def request_preflight(query: str = "node_id=UAV-02") -> tuple[int, dict[str, Any
     return routes.dispatch("GET", "/api/preflight", query=query)
 
 
+@pytest.mark.parametrize("delay", [0, 8, 30])
+def test_static_geometry_survives_health_ttl_without_promoting_dynamic_health(preflight_environment, monkeypatch, delay):
+    from datetime import datetime
+    env = preflight_environment
+    elapsed = [0.0]
+    source = datetime.fromisoformat(env.health["source_timestamp"]).timestamp()
+    monkeypatch.setattr(env.store, "_clock", lambda: source + elapsed[0])
+    monkeypatch.setattr(env.store, "_monotonic", lambda: elapsed[0])
+    env.health["valid_for_ms"] = 4913
+    env.store.update_coordinate_calibration(env.calibration)
+    env.store.update_simulation_evidence(env.health)
+    elapsed[0] = delay
+    _, result = request_preflight()
+    assert result["status"] == "ready"
+    assert result["home_evidence"] == env.home
+    assert result["ground_context"]["ground_reference"] == GROUND
+    assert result["execution_authorized"] is False
+    assert result["flight_command_sent"] is False
+    assert result["simulation_health"]["evidence_fresh"] is (delay == 0)
+    if delay:
+        assert result["simulation_health"]["status"] == "unknown"
+        assert result["simulation_health"]["reason"] == "simulation_evidence_stale"
+        fixture = json.loads((Path(__file__).resolve().parents[2] / "docs/fixtures/runtime_preflight_v1.json").read_text())
+        for key, value in fixture["expired_health_response_projection"].items():
+            assert result[key] == value
+    # Only calibration expiry (not the 4.913s envelope) invalidates this context.
+    elapsed[0] = 61
+    assert_not_ready(request_preflight()[1], "ground_reference_unavailable")
+
+
+@pytest.mark.parametrize("change", [
+    "stale_replay", "future_source", "missing_reference", "world_not_ready", "clock_stopped",
+    "model_missing", "model_not_ready", "new_run", "new_map", "hash_mismatch",
+    "bad_contract", "bad_frame", "bad_source", "bad_kind", "bad_bounds",
+])
+def test_new_publication_revokes_static_binding(preflight_environment, change):
+    env = preflight_environment
+    assert env.store.ground_landing_context("UAV-02") is not None
+    health = deepcopy(env.health)
+    ref = health["ground_reference"]
+    if change == "stale_replay":
+        health["source_timestamp"] = "2000-01-01T00:00:00Z"
+    elif change == "future_source":
+        health["source_timestamp"] = "2099-01-01T00:00:00Z"
+    elif change == "missing_reference":
+        health.pop("ground_reference")
+    elif change == "world_not_ready":
+        health["world"]["status"] = "unknown"
+    elif change == "clock_stopped":
+        health["clock_advancing"] = False
+    elif change == "model_missing":
+        health["models"] = []
+    elif change == "model_not_ready":
+        health["models"][0]["status"] = "unknown"
+    elif change == "new_run":
+        health["run_id"] = "new-run"
+    elif change == "new_map":
+        health["map_version"] = ref["map_version"] = "new-map"
+    elif change == "hash_mismatch":
+        health["world_sha256"] = "b" * 64
+    elif change == "bad_bounds":
+        ref["xy_bounds_m"] = {"north_min_m": float("nan")}
+    else:
+        ref[{"bad_contract": "contract_version", "bad_frame": "frame",
+             "bad_source": "source", "bad_kind": "kind"}[change]] = "invalid"
+    env.store.update_simulation_evidence(health)
+    assert_not_ready(request_preflight()[1], "ground_reference_unavailable")
+    assert env.calls == []
+    env.store.update_simulation_evidence(env.health)
+    assert request_preflight()[1]["status"] == "ready"
+
+
+def test_geometry_cache_is_defensive_and_node_bound(preflight_environment):
+    env = preflight_environment
+    _, reference = env.store.ground_landing_context("UAV-02")
+    reference["ground_down_m"] = 999
+    env.health = deepcopy(env.health)
+    env.health["ground_reference"]["ground_down_m"] = 888
+    assert env.store.ground_landing_context("UAV-02")[1]["ground_down_m"] == GROUND["ground_down_m"]
+    calibration = deepcopy(env.calibration)
+    calibration["node_id"] = "UAV-01"
+    env.store.update_coordinate_calibration(calibration)
+    assert env.store.ground_landing_context("UAV-01") is None
+
+
 def assert_not_ready(result: dict[str, Any], reason: str) -> None:
     assert result["status"] == "not_ready"
     assert reason in result["reason_codes"]
