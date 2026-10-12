@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import copy
+import hashlib
 import sys
 import threading
 from pathlib import Path
@@ -15,6 +16,7 @@ sys.path.insert(0, str(HARNESS_DIR))
 
 import harness  # noqa: E402
 import health  # noqa: E402
+import ground_reference  # noqa: E402
 from simulation.px4_gazebo.scripts import health_three_uav  # noqa: E402
 
 
@@ -51,7 +53,16 @@ def _state(manifest: dict[str, Any]) -> dict[str, Any]:
     server.update(kind="gazebo", pid=5500)
     server["process_identity"].update(pid=5500, executable="/usr/bin/ruby",
                                     cmdline=["gz", "sim", "simple_recon_v0_1.sdf"])
-    return {"version": "1.2", "run_id": RUN_ID, "processes": processes, "gazebo_processes": [server]}
+    world_path = harness.resolve_repo_path(str(manifest["world_path"])).resolve()
+    world_bytes = world_path.read_bytes()
+    return {
+        "version": "1.2", "run_id": RUN_ID, "processes": processes,
+        "gazebo_processes": [server], "world_name": manifest["world_name"],
+        "world_path": str(world_path),
+        "world_sha256": hashlib.sha256(harness.canonical_world_bytes(world_bytes)).hexdigest(),
+        "world_sha256_scheme": harness.WORLD_SHA256_SCHEME,
+        "world_file_sha256": hashlib.sha256(world_bytes).hexdigest(),
+    }
 
 
 def _identity_reader(state: dict[str, Any]):  # type: ignore[no-untyped-def]
@@ -128,9 +139,11 @@ def _collect(
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
     overrides=None,
+    state_overrides=None,
 ) -> dict[str, Any]:
     manifest = harness.load_manifest(MANIFEST_PATH)
     state = _state(manifest)
+    state.update(state_overrides or {})
     state_path = tmp_path / "harness_state.json"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.setattr(harness, "STATE_PATH", state_path)
@@ -221,6 +234,90 @@ def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(
         and row["evidence"]["telemetry"]["source"] == "runtime"
         for row in payload["vehicles"]
     )
+
+
+def test_integrated_health_publishes_only_known_ground_collision_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    payload = _collect(
+        tmp_path, monkeypatch, mode="integrated",
+        runtime_telemetry=_runtime_telemetry(manifest),
+        mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"),
+    )
+    expected = json.loads(Path(
+        "docs/simulation/fixtures/ground_reference_simple_recon_v0_1.json"
+    ).read_text(encoding="utf-8"))
+    assert payload["runtime_evidence"]["ground_reference"] == expected
+    assert payload["world_sha256"] == expected["world_sha256"]
+    assert payload["runtime_evidence"]["world_sha256"] == expected["world_sha256"]
+    assert payload["evidence"]["ground_reference_status"] == "available"
+    assert "valid_for_ms" not in expected
+    assert payload["runtime_evidence"]["valid_for_ms"] == 5000
+
+
+@pytest.mark.parametrize("startup_hash", [None, "0" * 64])
+def test_integrated_health_omits_ground_without_matching_startup_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_hash: str | None,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    payload = _collect(
+        tmp_path, monkeypatch, mode="integrated",
+        runtime_telemetry=_runtime_telemetry(manifest),
+        state_overrides={"world_sha256": startup_hash},
+    )
+    assert payload["simulation_status"] == "ready"
+    assert "ground_reference" not in payload["runtime_evidence"]
+    assert "ground_reference_run_world_hash_mismatch" in payload["evidence"]["ground_reference_status"]
+
+
+def test_ground_reference_same_across_lf_and_crlf_checkouts(tmp_path: Path) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    original = harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    canonical = harness.canonical_world_bytes(original)
+    expected = json.loads(Path(
+        "docs/simulation/fixtures/ground_reference_simple_recon_v0_1.json"
+    ).read_text(encoding="utf-8"))
+    for line_ending in (b"\n", b"\r\n"):
+        world_path = tmp_path / ("lf.sdf" if line_ending == b"\n" else "crlf.sdf")
+        world_path.write_bytes(canonical.replace(b"\n", line_ending))
+        variant = {**manifest, "world_path": str(world_path)}
+        assert ground_reference.from_managed_world(variant, _state(variant)) == expected
+
+
+def test_ground_reference_rejects_raw_file_change_after_start(tmp_path: Path) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    canonical = harness.canonical_world_bytes(
+        harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    )
+    world_path = tmp_path / "world.sdf"
+    world_path.write_bytes(canonical)
+    manifest["world_path"] = str(world_path)
+    state = _state(manifest)
+    world_path.write_bytes(canonical.replace(b"\n", b"\r\n"))
+    with pytest.raises(ValueError, match="ground_reference_run_world_file_hash_mismatch"):
+        ground_reference.from_managed_world(manifest, state)
+
+
+@pytest.mark.parametrize("replacement", [
+    "<normal>0 1 0</normal>",
+    '<pose>0 0 1 0 0 0</pose>\n      <static>true</static>',
+])
+def test_ground_reference_rejects_changed_collision_geometry(
+    tmp_path: Path, replacement: str,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    original = harness.resolve_repo_path(str(manifest["world_path"])).read_text(encoding="utf-8")
+    if replacement.startswith("<normal>"):
+        changed = original.replace("<normal>0 0 1</normal>", replacement, 1)
+    else:
+        changed = original.replace("<static>true</static>", replacement, 1)
+    assert changed != original
+    world_path = tmp_path / "changed.sdf"
+    world_path.write_text(changed, encoding="utf-8")
+    manifest["world_path"] = str(world_path)
+    with pytest.raises(ValueError, match="ground_reference_(plane_unsupported|pose_unsupported)"):
+        ground_reference.from_managed_world(manifest, _state(manifest))
 
 
 def test_integrated_health_fails_closed_when_runtime_omits_one_node(
