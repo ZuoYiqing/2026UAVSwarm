@@ -1,0 +1,16 @@
+# 行尾规范 —— 为什么需要它
+#
+# 实测事故：在 Windows 侧 checkout 的 worktree 里，
+# `simulation/px4_gazebo/scripts/start_three_uav.sh` 变成了 CRLF，于是第 2 行
+#     set -euo pipefail
+# 被 bash 读成 `set -euo pipefail\r`，报
+#     set: pipefail: invalid option name
+# 仿真完全起不来。
+#
+# 危险之处在于**症状会骗人**：仿真没起来会表现为标定 FAIL、health not_ready、
+# preflight 的 reason_codes 一堆 *_unavailable —— 看起来像别的地方坏了。
+# （2026-10-12 那轮验收我就差点把它归因成"B 没修好"。）
+#
+# `*.py` 有 CRLF 无害（Python 正常处理 \r\n），**只有 shell 脚本在此致命**。
+# 所以只约束 *.sh，不做全仓规范化 —— 避免一次动到几百个文件的行尾。
+*.sh text eol=lf
