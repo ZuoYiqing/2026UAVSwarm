@@ -126,5 +126,100 @@ for d in /opt /home /srv /data /mnt /media; do
 done
 echo "  （以上为空表示这台机器上还没有我们的东西）"
 
+hr "11. 能力评级与建议用途"
+
+# 判定依据全部来自本项目实测，不是猜的：
+#   · 仿真：相机版三机在 RTX 4050 上 RTF 0.84~0.94；不设 GPU 适配器变量只有 0.175，
+#     而只有核显的机器会掉到同一量级 → 没有独显就没有可用的仿真。
+#   · Runtime：pyproject 要求 python >= 3.10（Ubuntu 20.04 自带 3.8，不够）。
+#   · 前端：主控台纯静态；三维要 WebGL，旧核显驱动（如 2018 年的 Intel 驱动）有白屏风险。
+PY_OK=no
+PV=0.0
+if command -v python3 >/dev/null 2>&1; then
+  PV=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0.0)
+  case "$PV" in
+    3.10|3.11|3.12|3.13|3.14) PY_OK=yes ;;
+  esac
+fi
+GPU_NV=no
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi >/dev/null 2>&1 && GPU_NV=yes
+fi
+MEM_GB=$(awk '/MemTotal/{printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null)
+MEM_GB=${MEM_GB:-0}
+# ⚠️ `df -BG --output=avail /` 会给出 **1K 块数**（不是 GB），而且
+# `tr -dc '0-9'` 会把 "块数 可用" 两列粘成一个天文数字（实测拿到 1007199372GB）。
+# 用 --output=avail 的固定列 + 显式去单位，才稳。
+DISK_GB=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -d ' G')
+DISK_GB=${DISK_GB:-0}
+case "$DISK_GB" in ''|*[!0-9]*) DISK_GB=0 ;; esac
+ARCH=$(uname -m)
+
+# ⚠️ 在 WSL 里，这两个数**不代表真机**：MemTotal 是 WSL2 的内存上限，
+# 而浏览器装在 Windows 侧、WSL 里看不到。所以检测到 WSL 时要明确标注，
+# 免得把"WSL 的限制"当成"这台机器的能力"。
+IS_WSL=no
+grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=yes
+
+echo "  事实: python3=$PV (>=3.10? $PY_OK)  nvidia-smi=$GPU_NV  RAM=${MEM_GB}GB  /可用=${DISK_GB}GB  arch=$ARCH"
+if [ "$IS_WSL" = yes ]; then
+  echo "  ⚠️ 这是 WSL：RAM 是 WSL2 的上限、浏览器在 Windows 侧（这里看不到）。"
+  echo "     判断这台**整机**能不能跑仿真/显示，请以 Windows 侧为准（用 recon-windows.ps1）。"
+fi
+echo
+echo "  --- 各能力判定 ---"
+if [ "$GPU_NV" = yes ] && [ "$MEM_GB" -ge 16 ] && [ "$ARCH" = x86_64 ]; then
+  echo "  [能]   跑仿真 (PX4+Gazebo 相机版三机) —— 有独显且内存够"
+else
+  echo "  [不能] 跑仿真 —— 缺独显或内存不足；核显会掉到 RTF ~0.18（门槛 0.20）"
+fi
+if [ "$PY_OK" = yes ]; then
+  echo "  [能]   跑 Runtime (uav_runtime) —— python $PV 满足 >=3.10"
+else
+  echo "  [不能] 跑 Runtime —— python $PV 不满足 >=3.10（需自带解释器或另装）"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  echo "  [能]   跑前端静态服务 —— python3 可起 http.server"
+fi
+HAS_BROWSER=no
+if command -v firefox >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
+  HAS_BROWSER=yes
+fi
+if [ "$HAS_BROWSER" = yes ]; then
+  echo "  [能]   显示控制台 —— 有浏览器（三维另需 WebGL，见第 7 节）"
+elif [ "$IS_WSL" = yes ]; then
+  echo "  [?]    显示控制台 —— WSL 内看不到浏览器；Windows 侧通常有，以 recon-windows.ps1 为准"
+else
+  echo "  [!]    显示控制台 —— 未发现浏览器，需安装或换机器"
+fi
+if [ "$GPU_NV" = yes ] && [ "$ARCH" = x86_64 ]; then
+  echo "  [能]   当'模拟无人平台' —— 可装 PX4 SITL 假装一台机"
+fi
+
+echo
+echo "  --- 建议用途（按优先级）---"
+if [ "$IS_WSL" = yes ]; then
+  # WSL 的结论**不能代表整机**：RAM 是 WSL2 上限、浏览器在 Windows 侧、
+  # nvidia-smi 看到的是透传的 GPU。所以这里不下结论，明确指向 Windows 侧。
+  echo "    ⚠️ 不下结论：WSL 视图不代表整机。"
+  echo "       请以 Windows 侧为准：powershell -File ops\\recon-windows.ps1"
+  echo "       上面那些 [能]/[不能] 只反映 WSL 这个运行环境，不是这台机器的能力。"
+elif [ "$ARCH" = aarch64 ]; then
+  echo "    1) 机载计算 / 真机侧 Runtime（需 python>=3.10）  2) 模型推理（CUDA/TensorRT）"
+  echo "    x 不要指望它跑仿真：Gazebo 在 Jetson 上既慢又无意义"
+elif [ "$HAS_BROWSER" = yes ]; then
+  if [ "$GPU_NV" = yes ] && [ "$MEM_GB" -ge 16 ]; then
+    echo "    1) 仿真主机（PX4+Gazebo）  2) 前端显示  3) Runtime（若 python>=3.10）"
+  else
+    echo "    1) 前端显示  2) Runtime（若 python>=3.10）  3) 加独显后可升级为仿真主机"
+  fi
+elif [ "$GPU_NV" = yes ] && [ "$MEM_GB" -ge 16 ]; then
+  echo "    1) 仿真主机（PX4+Gazebo，无头也能跑）  2) Runtime"
+  echo "    ! 没有浏览器，显示不了控制台；要么装浏览器，要么把显示交给另一台"
+else
+  echo "    1) 存储 / 中转  2) 加浏览器后可当前端显示"
+  echo "    x 跑不了 Runtime（python 太旧或未装）、跑不了仿真（无独显）、显示不了（无浏览器）"
+fi
+
 hr "报告结束"
-echo "请把整份输出带回来。特别关注第 2 节（Python 版本）与第 4 节（磁盘）。"
+echo "请把整份输出带回来。最要紧的是第 11 节（评级）与第 2 节（Python）。"
