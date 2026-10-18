@@ -230,6 +230,109 @@ foreach ($root in @("$env:USERPROFILE", 'C:\', 'D:\')) {
     } catch { }
 }
 
+Sec "11. CAPABILITY RATING AND SUGGESTED ROLE"
+# Mirrors section 11 of recon-offline-env.sh so Windows and Linux machines can be
+# compared on the same scale. All thresholds come from measurements in this project:
+#   * Simulator: the camera-equipped 3-vehicle SITL ran at RTF 0.84-0.94 on an
+#     RTX 4050; WITHOUT the GPU-adapter variable it collapsed to 0.175, and an
+#     integrated-only machine lands in that same band -- below the 0.20 floor.
+#     So: no discrete GPU => no usable PX4/Gazebo simulation.
+#   * Runtime: pyproject.toml declares requires-python >= 3.10.
+#   * Frontend: swarm-console is static; simulation-3d needs WebGL. Very old
+#     integrated drivers (e.g. Intel 2018) are a white-screen risk.
+
+# --- python >= 3.10 ? ---
+$pyMajor = -1; $pyMinor = -1; $pyExe = $null
+$pc = Get-Command python -ErrorAction SilentlyContinue
+if ($pc) {
+    $pyExe = $pc.Source
+    try {
+        $v = (& $pyExe -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>&1 | Out-String).Trim()
+        if ($v -match '^(\d+)\.(\d+)$') { $pyMajor = [int]$Matches[1]; $pyMinor = [int]$Matches[2] }
+    } catch { }
+}
+$pyOk = ($pyMajor -gt 3) -or ($pyMajor -eq 3 -and $pyMinor -ge 10)
+
+# --- discrete GPU ? ---
+$gpus = @()
+try { $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) } catch { }
+$hasNvidia = @($gpus | Where-Object { $_ -match 'NVIDIA|GeForce|Quadro|RTX|GTX|Tesla' }).Count -gt 0
+$hasAmd    = @($gpus | Where-Object { $_ -match 'Radeon|AMD' }).Count -gt 0
+$hasDgpu   = $hasNvidia -or $hasAmd
+$onlyIntel = ($gpus.Count -gt 0) -and (-not $hasDgpu)
+
+# --- memory ---
+$ramGb = 0
+try { $ramGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 0) } catch { }
+
+# --- browser ? ---
+$hasBrowser = $false
+foreach ($b in @('msedge', 'chrome', 'firefox')) {
+    if (Get-Command $b -ErrorAction SilentlyContinue) { $hasBrowser = $true; break }
+}
+if (-not $hasBrowser) {
+    $cands = @(
+        "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
+    )
+    foreach ($c in $cands) { if (Test-Path $c) { $hasBrowser = $true; break } }
+}
+
+# --- WSL ? (a WSL window would let the bash recon run here too) ---
+$hasWsl2 = $false
+if (Get-Command wsl -ErrorAction SilentlyContinue) {
+    try {
+        $raw = ((cmd /c "wsl -l -v" 2>&1 | Out-String) -replace "`0", "")
+        if ($raw -match 'VERSION' -and $raw -match '\b2\b') { $hasWsl2 = $true }
+    } catch { }
+}
+
+Write-Host ("  facts: python=" + $pyMajor + "." + $pyMinor + " (>=3.10? " + $pyOk + ")  RAM=" + $ramGb + "GB")
+Write-Host ("         GPU: " + $(if ($gpus.Count) { $gpus -join ' | ' } else { '(none detected)' }))
+Write-Host ""
+Write-Host "  --- capability ---"
+if ($hasDgpu -and $ramGb -ge 16) {
+    Write-Host "  [YES] run the simulator (PX4 + Gazebo, 3-vehicle camera build) -- discrete GPU + enough RAM"
+} elseif ($onlyIntel) {
+    Write-Host "  [NO]  run the simulator -- integrated GPU only; expect RTF near 0.18 (floor is 0.20)"
+} else {
+    Write-Host "  [NO]  run the simulator -- no discrete GPU detected or RAM below 16 GB"
+}
+if ($pyOk) {
+    Write-Host ("  [YES] run Runtime (uav_runtime) -- python " + $pyMajor + "." + $pyMinor + " satisfies >=3.10")
+} else {
+    Write-Host "  [NO]  run Runtime -- python >= 3.10 required (Ubuntu 20.04 ships 3.8; Windows needs 3.10+)"
+}
+if ((Get-Command python -ErrorAction SilentlyContinue) -or (Get-Command py -ErrorAction SilentlyContinue)) {
+    Write-Host "  [YES] serve the frontends -- python -m http.server works"
+}
+if ($hasBrowser) {
+    Write-Host "  [YES] display the console -- a browser is present (3D still needs working WebGL)"
+} else {
+    Write-Host "  [!]   display the console -- NO browser found; install one or use another machine"
+}
+if ($hasDgpu) {
+    Write-Host "  [YES] act as a simulated unmanned platform -- could host PX4 SITL"
+}
+if ($hasWsl2) {
+    Write-Host "  [YES] has WSL2 -- the bash recon (recon-offline-env.sh) can also run here"
+}
+
+Write-Host ""
+Write-Host "  --- suggested role, in priority order ---"
+if ($hasDgpu -and $ramGb -ge 16) {
+    Write-Host "    1) simulator host (PX4+Gazebo)   2) frontend display   3) Runtime (if python>=3.10)"
+} elseif ($hasBrowser) {
+    Write-Host "    1) frontend display   2) Runtime (if python>=3.10)   3) add a discrete GPU to become a sim host"
+} else {
+    Write-Host "    1) storage / relay   2) add a browser to use it as a console display"
+}
+Write-Host ""
+Write-Host "  NOTE: an integrated GPU is fine for the 2D console; the risk is only in the 3D view."
+Write-Host "  Compare against the Linux machines using section 11 of recon-offline-env.sh."
+
 Sec "END"
-Write-Host "  Critical sections: 2 (Python), 5 (Disk), 6 (WSL)."
+Write-Host "  Critical sections: 2 (Python), 5 (Disk), 6 (WSL), 11 (rating)."
 Write-Host "  To save: powershell -NoProfile -ExecutionPolicy Bypass -File recon-windows.ps1 *> recon-win.txt"
