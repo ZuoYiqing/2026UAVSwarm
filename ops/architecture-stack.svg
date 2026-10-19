@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1320" viewBox="0 0 1080 1320">
+  <defs>
+    <style type="text/css"><![CDATA[
+      .bg      { fill: #fbfbfd; }
+      .title   { font-family: "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif;
+                 font-size: 26px; font-weight: 700; fill: #1a1f2b; }
+      .sub     { font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 14px; fill: #6b7280; }
+      .bus     { stroke: #334155; stroke-width: 2.5; fill: none; }
+      .arrow   { stroke: #334155; stroke-width: 2.5; fill: none; }
+      .node    { fill: #ffffff; stroke: #334155; stroke-width: 2; }
+      .nodeAlt { fill: #f1f5f9; stroke: #64748b; stroke-width: 2; }
+      .nodeDash{ fill: #ffffff; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 7 5; }
+      .boxTitle{ font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 17px; font-weight: 700; fill: #111827; }
+      .boxSub  { font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 12.5px; fill: #475569; }
+      .tag     { font-family: Consolas,monospace; font-size: 12px; fill: #2563eb; }
+      .warn    { font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 13px; fill: #b45309; font-weight: 700; }
+      .label   { font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 13px; fill: #475569; }
+      .note    { font-family: "Microsoft YaHei","PingFang SC",sans-serif;
+                 font-size: 13px; fill: #64748b; }
+    ]]></style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3.2"
+            orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6.4 L8,3.2 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1080" height="1320"/>
+
+  <!-- ============ 标题 ============ -->
+  <text class="title" x="540" y="52" text-anchor="middle">2026UAVSwarm — 分层堆叠架构</text>
+  <text class="sub" x="540" y="78" text-anchor="middle">按手绘稿的拓扑重绘（三层 fan-out 树：每层一条总线，最左子节点继续下延）</text>
+
+  <!-- ============ 第 0 层：顶部（虚线，待确认） ============ -->
+  <path class="arrow" d="M540,150 L540,116" marker-end="url(#arrowhead)"/>
+  <rect class="nodeDash" x="452" y="150" width="176" height="62" rx="10"/>
+  <text class="boxTitle" x="540" y="176" text-anchor="middle">上层（更多层）</text>
+  <text class="warn" x="540" y="198" text-anchor="middle">手绘处较小，待确认</text>
+  <text class="note" x="652" y="168">← 手稿此处很小、虚线</text>
+
+  <!-- ============ 第 1 层总线 ============ -->
+  <path class="arrow" d="M540,212 L540,262"/>
+  <path class="bus" d="M540,262 L540,286"/>
+  <path class="bus" d="M170,286 L910,286"/>
+  <!-- 三个子节点竖线 -->
+  <path class="bus" d="M300,286 L300,320"/>
+  <path class="bus" d="M540,286 L540,320"/>
+  <path class="bus" d="M780,286 L780,320"/>
+
+  <!-- 子节点 1：地面 Runtime -->
+  <rect class="node" x="190" y="320" width="220" height="86" rx="10"/>
+  <text class="boxTitle" x="300" y="350" text-anchor="middle">Runtime · 地面</text>
+  <text class="boxSub" x="300" y="372" text-anchor="middle">HTTP 桥 + Policy Gate</text>
+  <text class="tag" x="300" y="392" text-anchor="middle">:8765</text>
+
+  <!-- 子节点 2：另一实例 -->
+  <rect class="nodeAlt" x="450" y="320" width="180" height="86" rx="10"/>
+  <text class="boxTitle" x="540" y="350" text-anchor="middle">（另一实例）</text>
+  <text class="boxSub" x="540" y="372" text-anchor="middle">多实例 / 冗余?</text>
+  <text class="warn" x="540" y="392" text-anchor="middle">手稿为空框</text>
+
+  <!-- 子节点 3：虚线更多 -->
+  <rect class="nodeDash" x="690" y="320" width="180" height="86" rx="10"/>
+  <text class="boxTitle" x="780" y="350" text-anchor="middle">…</text>
+  <text class="boxSub" x="780" y="372" text-anchor="middle">还有更多</text>
+
+  <text class="label" x="912" y="300">第 1 层</text>
+
+  <!-- ============ 第 2 层 ============ -->
+  <path class="arrow" d="M300,406 L300,470"/>
+  <path class="bus" d="M300,470 L300,494"/>
+  <path class="bus" d="M300,494 L780,494"/>
+  <path class="bus" d="M300,494 L300,528"/>
+  <path class="bus" d="M540,494 L540,528"/>
+  <path class="bus" d="M780,494 L780,528"/>
+
+  <!-- 子节点 1：中层 Runtime -->
+  <rect class="node" x="190" y="528" width="220" height="96" rx="10"/>
+  <text class="boxTitle" x="300" y="556" text-anchor="middle">Runtime · ？</text>
+  <text class="warn" x="300" y="577" text-anchor="middle">「轨迹」还是「机载」</text>
+  <text class="boxSub" x="300" y="597" text-anchor="middle">手稿字迹待确认</text>
+  <text class="boxSub" x="300" y="615" text-anchor="middle">（数据概念 vs 部署位置）</text>
+
+  <rect class="nodeAlt" x="450" y="528" width="180" height="96" rx="10"/>
+  <text class="boxTitle" x="540" y="566" text-anchor="middle">（另一实例）</text>
+  <text class="boxSub" x="540" y="588" text-anchor="middle">手稿为空框</text>
+
+  <rect class="nodeDash" x="690" y="528" width="180" height="96" rx="10"/>
+  <text class="boxTitle" x="780" y="566" text-anchor="middle">…</text>
+  <text class="boxSub" x="780" y="588" text-anchor="middle">还有更多</text>
+
+  <text class="label" x="912" y="508">第 2 层</text>
+
+  <!-- ============ 第 3 层：UAV 叶子 ============ -->
+  <path class="arrow" d="M300,624 L300,700"/>
+  <path class="bus" d="M300,700 L300,724"/>
+  <path class="bus" d="M140,724 L860,724"/>
+  <path class="bus" d="M220,724 L220,758"/>
+  <path class="bus" d="M390,724 L390,758"/>
+  <path class="bus" d="M560,724 L560,758"/>
+  <path class="bus" d="M760,724 L760,758"/>
+
+  <rect class="node" x="140" y="758" width="160" height="92" rx="10"/>
+  <text class="boxTitle" x="220" y="790" text-anchor="middle">UAV-01</text>
+  <text class="boxSub" x="220" y="812" text-anchor="middle">sysid 1</text>
+  <text class="tag" x="220" y="832" text-anchor="middle">udp:14540</text>
+
+  <rect class="node" x="310" y="758" width="160" height="92" rx="10"/>
+  <text class="boxTitle" x="390" y="790" text-anchor="middle">UAV-02</text>
+  <text class="boxSub" x="390" y="812" text-anchor="middle">sysid 2</text>
+  <text class="tag" x="390" y="832" text-anchor="middle">udp:14541</text>
+
+  <rect class="node" x="480" y="758" width="160" height="92" rx="10"/>
+  <text class="boxTitle" x="560" y="790" text-anchor="middle">UAV-03</text>
+  <text class="boxSub" x="560" y="812" text-anchor="middle">sysid 3</text>
+  <text class="tag" x="560" y="832" text-anchor="middle">udp:14542</text>
+
+  <rect class="nodeDash" x="680" y="758" width="160" height="92" rx="10"/>
+  <text class="boxTitle" x="760" y="790" text-anchor="middle">…</text>
+  <text class="boxSub" x="760" y="812" text-anchor="middle">更多机</text>
+
+  <text class="label" x="912" y="806">第 3 层（叶子）</text>
+
+  <!-- ============ 右侧：每层实际对接的东西 ============ -->
+  <rect class="nodeAlt" x="70" y="900" width="940" height="268" rx="12"/>
+  <text class="boxTitle" x="96" y="932">每层在真实系统里对应什么（来自代码，不是推测）</text>
+
+  <text class="label" x="96"  y="968">第 3 层 · 叶子</text>
+  <text class="boxSub" x="250" y="968">三架无人机 = 三条独立 MAVLink 长期会话；每机有独立 sysid/compid，动作前必须核验（防串号）</text>
+
+  <text class="label" x="96"  y="1004">第 2 层 · 待确认</text>
+  <text class="boxSub" x="250" y="1004">如果是「机载」→ 对应 Jetson/工控机上的 Runtime，用 ROS 读位姿/雷达/相机</text>
+  <text class="boxSub" x="250" y="1026">如果是「轨迹」→ 对应规划/航迹层，不是 Runtime 实例（那这层应画成数据流而非节点）</text>
+
+  <text class="label" x="96"  y="1062">第 1 层 · 地面</text>
+  <text class="boxSub" x="250" y="1062">地面 Runtime :8765 = Policy Gate + 动作生命周期 + 审计 JSONL + 回放；主控台 5178 / 三维 5179 挂在它上面</text>
+
+  <text class="label" x="96"  y="1098">第 0 层 · 上层</text>
+  <text class="boxSub" x="250" y="1098">手稿只画了一个向上箭头和一小组虚线 —— 按"更多层级"理解，可能是云端/指挥所/多车协同</text>
+
+  <text class="note" x="96"  y="1140">注：虚线框 = 手稿里的"还有更多"，本图保留该语义。</text>
+  <text class="note" x="96"  y="1162">    当前仓库实测只支持 3 机（three_uav_*_sitl.json），扩展需改 manifest。</text>
+
+  <!-- 图例（放在方框外，避免压边） -->
+  <text class="label" x="70" y="1210">图例：</text>
+  <rect class="node" x="124" y="1196" width="26" height="16" rx="3"/>
+  <text class="boxSub" x="158" y="1209">已实测存在</text>
+  <rect class="nodeAlt" x="274" y="1196" width="26" height="16" rx="3"/>
+  <text class="boxSub" x="308" y="1209">手稿为空框 / 含义待定</text>
+  <rect class="nodeDash" x="494" y="1196" width="26" height="16" rx="3"/>
+  <text class="boxSub" x="528" y="1209">虚线 = 还有更多</text>
+  <text class="warn" x="690" y="1209">橙色 = 需要你确认的地方</text>
+
+  <text class="note" x="70"  y="1250">重绘依据：手绘稿（2026-10-19 23:22 拍摄）+ 仓库实测（Runtime 13,554 行 / adapters 5,000+ 行 / 3 机 manifest）</text>
+  <text class="note" x="70"  y="1276">当前实现是"单层 Runtime + 多机会话"，手稿的两层 Runtime 是目标形态，尚未实现。</text>
+</svg>
