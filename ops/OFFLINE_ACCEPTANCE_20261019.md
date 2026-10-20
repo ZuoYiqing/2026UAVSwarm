@@ -20,6 +20,70 @@
 
 **这一批的目标（"证明浏览器能渲染出界面和三维，并能连上 Runtime"）已达成。**
 
+---
+
+## 补充：Runtime 的能力在无硬件条件下也能被验证（实测）
+
+部署成功只证明"能启动"。**Runtime 的真正价值（策略裁决 / 审计 / 回放）
+可以在没有 PX4、没有飞机的情况下用 CLI 验证** —— 以下命令均已实测通过。
+
+> 说明：这一路径的"执行"是 `adapter: "fake"`、`detail: "simulated"`，
+> **没有真机动作**。它证明的是**治理链路**，不是飞行能力。
+
+### 1. 列出能力注册表
+
+```bash
+PYTHONPATH=src python3 -m uav_runtime.console.cli list-capabilities --pretty
+```
+
+返回每个动作的 `risk_level` / `allowed_link_states` / `policy_default` /
+`requires_confirmation_by_default` / `supported_adapters`。
+
+### 2. 策略门确实会拒绝（实测对照）
+
+```bash
+PYTHONPATH=src python3 -m uav_runtime.console.cli submit-action land \
+  --demo-link-state lost --pretty
+```
+
+| 场景 | `decision_code` | `status` | 理由码 |
+| --- | --- | --- | --- |
+| `land` @ healthy | `allow` | `accepted` | — |
+| `land` @ degraded | `allow` | `accepted` | — |
+| **`land` @ lost** | **`deny`** | **`blocked`** | `REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED` + `REASON_CODE_LINK_LOST_SCOPE_RESTRICTED` |
+| `goto` @ healthy | `allow` | `accepted` | — |
+| **`goto` @ lost** | **`deny`** | **`blocked`** | 同上 |
+
+**这是"策略门不是装饰"的直接证据** —— 链路丢失时动作被挡下，并给出结构化理由码。
+
+### 3. 审计落盘（每次动作 2 条记录）
+
+```
+audit/runtime.audit.jsonl
+  1: {"type": "policy_decision_event", "action_type": "takeoff"}
+  2: {"type": "action_result",        "status": "accepted"}
+```
+
+每条含 `policy_trace_id` / `request_id` / `audit_tags`
+（拒绝时是 `["policy","deny","link_lost","fallback_required"]`）。
+
+### 4. 回放
+
+```bash
+PYTHONPATH=src python3 -m uav_runtime.console.cli replay-last --pretty
+```
+
+### 这一节的意义
+
+**"Runtime 部署成功"和"Runtime 有效果"是两件事**：
+
+* 部署成功 = 进程起来了、HTTP 通了、前端连上了 → **本轮已证明**
+* 有效果 = 策略裁决、审计、回放能产生可检查的输出 → **本轮用 CLI 已证明**
+* **仍未证明** = 真实载具上的遥测 / 动作 / 完成判据 → **需要连 PX4 或真机**
+
+---
+
+
 ### 环境实测
 
 ```
@@ -85,7 +149,8 @@ except Exception as exc:
 | | |
 | --- | --- |
 | 服务器 | ✅ 不崩（`ThreadingHTTPServer`，每请求独立线程） |
-| 那一次请求 | ❌ 丢失（前端 2 秒后重试） |
+| **查询请求** | ❌ 该次响应丢失（前端 2 秒后重试，无害） |
+| **动作请求** | ⚠️ **见下方第 ③ 条纠正 —— 不能假定"动作未发生"** |
 | **日志可读性** | ❌ **严重污染** —— 真正的 500 会被这个噪音淹没 |
 | 现场观感 | ⚠️ 容易被误认为系统故障 |
 
@@ -114,18 +179,121 @@ except Exception as exc:
 
 ---
 
+## Runtime 负责人的复核意见（2026-10-20）
+
+> 负责人已完成阅读与代码核对，**未改代码、未跑测试**。
+
+### 结论
+
+| 项 | 复核结果 |
+| --- | --- |
+| 离线界面部署验证 | ✅ **成功** |
+| 断连异常归属 | ✅ **属于 Runtime**，**当前仍未修复** |
+| 根因判断 | ✅ **正确**：`server.py` 把响应写入失败当成内部错误，又向断开的连接发送 500，产生第二次 traceback |
+| 补丁方向 | ⚠️ **对但不完整** —— 见下面三条 |
+
+### ① 补丁必须覆盖完整的响应发送过程
+
+不能只保护 `wfile.write(body)`。**响应头、响应体，以及 `400` / `500` / `OPTIONS` 响应都可能遇到断连。**
+
+所以上面的"改动 1"不够 —— `self.end_headers()`（含 `flush_headers`）同样会抛
+`ConnectionAbortedError`（现场 traceback 里就有这一条：
+`http\server.py:542 in flush_headers → self.wfile.write(...)`）。
+
+**正确的做法**：把**整个响应发送过程**（`send_response` / `send_header` / `end_headers` / `wfile.write`）包在同一个断连保护里，而不是只护最后一步。
+
+### ② 异常处理必须限定在 HTTP 读写处
+
+**不能**用一个宽泛的 `except` 把执行器内部的连接故障一起吞掉。
+
+原因：`dispatch()` 里会走到 adapter / MAVLink 会话。
+那里的 `ConnectionAborted` 类异常**可能是"飞控连接断了"这种真实故障**，
+如果被同一层 `except` 静默忽略，**策略与审计就丢掉了关键信号**。
+
+**正确的做法**：
+- 只在 **HTTP 层读写 socket** 的位置捕获断连异常
+- **执行器 / adapter 抛出的异常必须继续上报**（走 500，并保持 `detail` 可见）
+
+### ③ ⚠️ 「请求丢失、前端重试」只适用于**查询请求**
+
+**这是安全语义问题，必须改口径。**
+
+| 请求类型 | 响应丢失时的正确语义 |
+| --- | --- |
+| **查询**（GET `/api/health`、`/api/vehicle-snapshot` 等） | 响应丢失 = 没拿到数据，**前端重试即可**，无副作用 |
+| **动作**（POST `/api/actions/takeoff`、`land`、`goto`、`return-home`） | **响应丢失 ≠ 动作未发生。动作可能已经执行了。** |
+
+**对动作请求的正确处理**：
+1. **不得**把"没收到响应"当成"动作没有发生"，**更不得据此重发**
+2. 应通过**原请求标识**（`request_id`）**查询**该动作的真实结果
+3. 或者使用**幂等重试**（同一 `request_id` 重复提交，由幂等检查拦掉第二次执行）
+4. 只有确认该 `request_id` 未被执行，才允许重新发起
+
+**这条对飞行安全是硬要求** —— "以为没飞，其实已经飞了"是最危险的一类误判。
+
+> 本报告原文"请求丢失（前端 2 秒后重试）"的表述**仅适用于查询请求**，
+> 对动作请求是错的，已按此纠正。
+
+### 归属与状态
+
+* 缺陷**仍在**，未修复（本轮只做阅读和代码核对）
+* 修复应同时满足上面三条，**不能只按 ① 改**
+* 本仓库**未提交任何 Runtime 代码改动**
+
+
+---
+
 ## 尚未验证（下一轮）
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
 | **真机链路** | ❌ | 只验过 SITL；真机走数传/串口，地址与 `sysid`/`compid` 需重配 |
+| **仿真后端（PX4 + Gazebo）** | ❌ | 需 Linux + 独显。**我方代码在仓库里**（`simulation/px4_gazebo/`，18 文件 684 KB）；**PX4 与 Gazebo 是第三方，需另装** |
 | **`goto` 到达语义** | ⚠️ | 已知未通过（到过 2.9 m 又漂到 37 m），见 `ACCEPTANCE_UAV02_FLIGHT_20261012.md` |
 | **站点符合性** | ❌ | 无 `validated` 生产者，站点证据链未闭环 |
-| **仿真（PX4 + Gazebo）** | ❌ | 需 Linux + 独显；离线搭建走 `MIGRATION_OFFLINE_20261014.md` 第七节 |
 | **三维流畅度** | ⚠️ | 能渲染，但未量化帧率（Intel UHD 620 + 2018 驱动） |
 | **改前端代码后重建** | ❌ | 需解开 `03-node_modules` + `05-node`，未实测 |
+| **Runtime 动作在真机上的端到端** | ❌ | 需先解决本报告记录的 10053 缺陷（含动作语义口径） |
 
 ---
+
+## 仿真：哪些是仓库里的代码，哪些要另外下载
+
+**结论：编排/标定/验收/证据链的代码全在仓库里；PX4 与 Gazebo 是第三方，必须在有网机器上装。**
+
+### 仓库内（`simulation/px4_gazebo/`，18 个文件 / 684 KB）
+
+```
+harness.py               仿真编排入口（起停、健康、场景）
+health.py                健康检查
+calibration.py           标定采样
+ground_reference.py      地面参考（#88 的核心成果）
+evidence.py              证据链
+gazebo_evidence.py       Gazebo 侧证据
+runtime_evidence.py      Runtime 侧证据
+patrol.py                巡逻
+config/three_uav_sitl.json            默认版
+config/three_uav_mono_cam_sitl.json   相机版（三维视图需要）
+scripts/start_three_uav.sh · stop_three_uav.sh
+scripts/health_three_uav.py · patrol_three_uav.py
+scripts/sample_calibration.py · validate_three_uav.py · verify_three_uav_cameras.py
+```
+
+**世界文件也在仓库里**：`scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf`
+
+### 仓库外（第三方，必须另装）
+
+| 组件 | 来源 | 实测基线 |
+| --- | --- | --- |
+| **PX4-Autopilot** | `git clone --recursive` + 编译 | `171f0f38cf` (2026-06-25)，3.3 GB，编译产物 SITL 二进制 57.9 MB |
+| **Gazebo** | apt（OSRF 仓库） | `gz sim 8.14.0` |
+| PX4 工具链 | apt（`Tools/setup/ubuntu.sh`） | gcc-arm-none-eabi / cmake / ninja 等 |
+
+**离线搭建路线见 `ops/MIGRATION_OFFLINE_20261014.md` 第七节**
+（推荐路线 A：目标机先联网装一次；路线 B：Docker 镜像搬迁）。
+
+---
+
 
 ## 关键经验（写下来防复发）
 
