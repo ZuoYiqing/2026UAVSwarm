@@ -89,3 +89,8 @@ by this experiment.
 
 Runtime's platform implementation is being developed in another worktree; the
 adapter has not yet passed a combined Runtime/flight acceptance test.
+
+The already-downloaded MiniCPM5-1B Q4 profile was also attempted separately on
+2026-10-22. Its launcher refused admission **before model loading** because
+available host RAM was about 1.93 GiB, below its 3 GiB safety budget. No
+MiniCPM inference or quality result is claimed, and the guard was not bypassed.
