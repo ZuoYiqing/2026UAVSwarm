@@ -57,7 +57,8 @@ D:\anaconda\python.exe -S -m platform_candidate_lab validate --input platform_ca
 Only the first output may contain a candidate. Unauthorized output and timeout
 must return `no_candidate`; all three keep
 `execution_authorized:false`. The input SHA-256 is over UTF-8 JSON with sorted
-keys, compact separators and non-finite values forbidden.
+keys, compact separators, default ASCII escaping, and non-finite values
+forbidden.
 
 ## Local-only model experiment
 
@@ -89,3 +90,8 @@ by this experiment.
 
 Runtime's platform implementation is being developed in another worktree; the
 adapter has not yet passed a combined Runtime/flight acceptance test.
+
+The already-downloaded MiniCPM5-1B Q4 profile was also attempted separately on
+2026-10-22. Its launcher refused admission **before model loading** because
+available host RAM was about 1.93 GiB, below its 3 GiB safety budget. No
+MiniCPM inference or quality result is claimed, and the guard was not bypassed.
