@@ -109,11 +109,21 @@ foreach ($p in $cands) {
         if (-not (Test-Path $exe)) { continue }
         if ($seen.ContainsKey($exe)) { continue }
         $seen[$exe] = $true
-        try {
-            $v = (& $exe --version 2>&1 | Out-String).Trim()
+        # The Microsoft Store ships a 0-byte "python.exe" alias under WindowsApps that
+        # opens the Store instead of running Python. Calling it writes a Store message
+        # to stderr, which PowerShell 5 surfaces as NativeCommandError and which then
+        # pollutes this report with raw error text (seen on DESKTOP-LOTFUFQ). Detect it
+        # by path and never invoke it.
+        if ($exe -match '\\WindowsApps\\') {
+            Write-Host ("  STUB   " + "Microsoft Store alias - NOT a real python".PadRight(18) + "  " + $exe)
+            continue
+        }
+        # `cmd /c ... 2>nul` keeps a failing interpreter from dumping stderr into the report.
+        $v = (cmd /c "`"$exe`" --version 2>nul" | Out-String).Trim()
+        if ($v -match '^Python ') {
             Write-Host ("  FOUND  " + $v.PadRight(18) + "  " + $exe)
-        } catch {
-            Write-Host ("  FOUND  (version failed)   " + $exe)
+        } else {
+            Write-Host ("  FOUND  " + "(version failed)".PadRight(18) + "  " + $exe)
         }
     }
 }
@@ -242,16 +252,19 @@ Sec "11. CAPABILITY RATING AND SUGGESTED ROLE"
 #     integrated drivers (e.g. Intel 2018) are a white-screen risk.
 
 # --- python >= 3.10 ? ---
+# Only a REAL interpreter counts. The Store alias must not be invoked (it opens the
+# Store and writes a message to stderr that would land in this report).
 $pyMajor = -1; $pyMinor = -1; $pyExe = $null
 $pc = Get-Command python -ErrorAction SilentlyContinue
-if ($pc) {
+if ($pc -and $pc.Source -notmatch '\\WindowsApps\\') {
     $pyExe = $pc.Source
-    try {
-        $v = (& $pyExe -c "import sys;print('%d.%d'%sys.version_info[:2])" 2>&1 | Out-String).Trim()
-        if ($v -match '^(\d+)\.(\d+)$') { $pyMajor = [int]$Matches[1]; $pyMinor = [int]$Matches[2] }
-    } catch { }
+    $v = (cmd /c "`"$pyExe`" -c `"import sys;print('%d.%d'%sys.version_info[:2])`" 2>nul" | Out-String).Trim()
+    if ($v -match '^(\d+)\.(\d+)$') { $pyMajor = [int]$Matches[1]; $pyMinor = [int]$Matches[2] }
 }
 $pyOk = ($pyMajor -gt 3) -or ($pyMajor -eq 3 -and $pyMinor -ge 10)
+# Serving the frontends only needs "some real python 3" (3.8 is fine for http.server),
+# which is a weaker requirement than running Runtime.
+$pyServeOk = ($pyMajor -ge 3)
 
 # --- discrete GPU ? ---
 $gpus = @()
@@ -274,10 +287,27 @@ if (-not $hasBrowser) {
     $cands = @(
         "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe",
         "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "$env:LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe",
         "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-        "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe"
     )
     foreach ($c in $cands) { if (Test-Path $c) { $hasBrowser = $true; break } }
+}
+# Last resort: the Windows "App Paths" registry keys survive path changes and
+# per-user installs. This is how a stripped image with a moved browser still shows up.
+if (-not $hasBrowser) {
+    foreach ($k in @('msedge.exe', 'chrome.exe', 'firefox.exe')) {
+        $rk = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$k"
+        if (Test-Path $rk) { $hasBrowser = $true; break }
+    }
+}
+if (-not $hasBrowser) {
+    # Windows 10 always ships *some* Edge; if nothing was found, say so explicitly
+    # rather than silently concluding "no browser".
+    if (Test-Path 'C:\Windows\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe') { $hasBrowser = $true }
 }
 
 # --- WSL ? (a WSL window would let the bash recon run here too) ---
@@ -305,8 +335,11 @@ if ($pyOk) {
 } else {
     Write-Host "  [NO]  run Runtime -- python >= 3.10 required (Ubuntu 20.04 ships 3.8; Windows needs 3.10+)"
 }
-if ((Get-Command python -ErrorAction SilentlyContinue) -or (Get-Command py -ErrorAction SilentlyContinue)) {
-    Write-Host "  [YES] serve the frontends -- python -m http.server works"
+if ($pyServeOk) {
+    Write-Host ("  [YES] serve the frontends -- python " + $pyMajor + "." + $pyMinor + " can run -m http.server")
+} else {
+    Write-Host "  [NO]  serve the frontends -- no real python found (the Microsoft Store alias does not count)"
+    Write-Host "        workaround: serve from another machine, or drop in the portable python zip"
 }
 if ($hasBrowser) {
     Write-Host "  [YES] display the console -- a browser is present (3D still needs working WebGL)"
