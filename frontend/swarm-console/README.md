@@ -73,12 +73,22 @@ http://127.0.0.1:8765/api
 
 顶部状态栏显示：
 
-- `Runtime API 连接中`：页面正在探测 `/api/health`。
-- `Runtime API LIVE`：浏览器可以访问 HTTP bridge。
-- `Runtime API OFFLINE`：HTTP bridge 未启动、地址错误或请求超时。
-- `数据源 LIVE`：Telemetry 快照新鲜。
-- `数据源 STALE`：Runtime API 断开或 Telemetry 已过期，页面保留最后快照。
-- `数据源 无数据`：Runtime 可达但还没有 Telemetry，或 Runtime 完全不可达且无缓存。
+- `HTTP（浏览器→网关）连接中 / LIVE / OFFLINE`：只描述浏览器到 HTTP bridge 的可达性；HTTP 错误响应仍证明网关可达，不证明平台地面链路、任务或飞控就绪。
+- `平台观测 LIVE`：关键状态接口均返回可用结构且 Telemetry 状态为 `ok`；单机是否过期还按平台上报值显示。
+- `平台观测 STALE`：观测不可用或 Telemetry 已过期，页面保留最后上报状态，当前状态未知。没有缓存时显示“无数据”及 `unknown`。
+
+### 断联与恢复（现有 API）
+
+- 浏览器 HTTP 失败不改写最后平台 `connected / stale`、任务快照或动作结论；`observationStale` 是前端观测标记，不是 Runtime 新字段。页面显示 STALE、最后完整新鲜状态的本地接收时间 `lastObservationAt`，以及单机平台采样时间 `last_seen`（若无则 `unknown`）。上报的 sample age 明确标为“上报时”，不冒充当前年龄。
+- `/health` 或 `/events` 恢复不解除观测过期。只有 Registry、Telemetry、vehicle snapshot 的本轮关键 GET 全部成功、结构可用且 Telemetry 状态为 `ok` 才恢复新鲜状态；部分 GET 成功不能覆盖最后完整的关键快照。
+- 动作准入相对旧行为是收紧：即使 HTTP 已恢复，观测尚未完整同步时 TAKEOFF/LAND 都不开放。保留平台 `connected=true` 不放宽操作权限，也不修改飞行验收判据。已授权的平台任务是否继续执行由平台决定，前端不自动取消。
+- 恢复沿用生命周期与动作查询 GET、原 request/action 身份和持久 pending 记录；不自动重发任何任务或动作 POST。原记录丢失仍显示结果未知。
+- 给三维子页的新鲜快照原样转发；观测过期时仅在派生视图标记 `telemetry.stale=true`，不改写 `connected`、坐标、采样时间和原始缓存；不修改 `simulation-3d/`。
+- 断联提示也会在输入框编辑期间刷新。页面的“平台任务状态尚未接入”不是平台任务失败；现有动作生命周期不能代替独立平台任务状态。
+
+平台代理的 `ground_link`（网关后台心跳）、任务版本、执行实例、事件游标、SSE 和补报去重，等待 Runtime 实现及 fixture 后另行接入。本轮没有新增 `/api/platform/*` 调用，也未将接口提案称为已实现。跨 Windows/Linux 部署时浏览器的 `127.0.0.1` 指向浏览器所在主机，需使用实际可达网关或同源代理；前端不直连平台代理执行器、不保存平台密钥。
+
+本轮回归入口为 `tests/action-ui.test.js` 的 `installStateFixture()`（仅模拟既有 GET），可用 `node --test tests/action-ui.test.js tests/console-model.test.js` 运行。它覆盖断联、部分恢复、200 响应契约错误、GET 对账无 POST 重放和过期三维派生视图；不代表平台任务/event_seq 接入、跨线端到端或真实飞行验收。
 
 ## 前端期望的后端接口
 
