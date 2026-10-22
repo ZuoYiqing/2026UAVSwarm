@@ -37,7 +37,7 @@ def _reject_constant(value: str) -> None:
 
 def canonical_json(value: Any) -> str:
     try:
-        return json.dumps(value, sort_keys=True, ensure_ascii=False,
+        return json.dumps(value, sort_keys=True, ensure_ascii=True,
                           separators=(",", ":"), allow_nan=False)
     except (ValueError, TypeError, RecursionError) as exc:
         raise ContractError("INVALID_JSON_VALUE") from exc

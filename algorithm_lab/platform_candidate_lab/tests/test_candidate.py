@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import threading
 import unittest
@@ -185,6 +186,15 @@ class CandidateTests(unittest.TestCase):
         request["observation"]["sample_timestamp"] = "2026-10-22T20:00:00+08:00"
         with self.assertRaises(ContractError):
             decide(request, FakeClient(), now=NOW, allow_fake=True)
+
+    def test_input_hash_matches_runtime_serialization_with_unicode_identity(self):
+        request = request_fixture()
+        request["authorization"]["operator_id"] = "操作员-01"
+        expected = hashlib.sha256(
+            json.dumps(request, sort_keys=True, separators=(",", ":"),
+                       allow_nan=False).encode("utf-8")).hexdigest()
+        result = decide(request, FakeClient(), now=NOW, allow_fake=True)
+        self.assertEqual(result["evidence"]["input_sha256"], expected)
 
     def test_loopback_model_endpoint_refuses_remote_and_credentials(self):
         for url in ("http://example.com:18080/v1/chat/completions",

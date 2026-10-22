@@ -57,7 +57,8 @@ D:\anaconda\python.exe -S -m platform_candidate_lab validate --input platform_ca
 Only the first output may contain a candidate. Unauthorized output and timeout
 must return `no_candidate`; all three keep
 `execution_authorized:false`. The input SHA-256 is over UTF-8 JSON with sorted
-keys, compact separators and non-finite values forbidden.
+keys, compact separators, default ASCII escaping, and non-finite values
+forbidden.
 
 ## Local-only model experiment
 
