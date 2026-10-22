@@ -1,0 +1,26 @@
+{
+  "version": "0.1",
+  "simulation_manifest": "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "command_owner": {
+    "UAV-01": "ground_runtime",
+    "UAV-02": "onboard_agent",
+    "UAV-03": "ground_runtime"
+  },
+  "fault_domain": {
+    "node_id": "UAV-02",
+    "link": "ground_runtime_to_onboard_agent",
+    "preserved_links": ["onboard_agent_to_px4", "onboard_agent_to_camera"]
+  },
+  "onboard_inputs": {
+    "px4_telemetry": "owned_mavlink_session",
+    "camera_image_topic": "/world/simple_recon_v0_1/model/x500_mono_cam_1/link/camera_link/sensor/camera/image",
+    "camera_info_topic": "/world/simple_recon_v0_1/model/x500_mono_cam_1/link/camera_link/sensor/camera/camera_info"
+  },
+  "evaluation_only": [
+    "gazebo_world_pose",
+    "gazebo_target_ground_truth",
+    "gazebo_derived_scene_calibration"
+  ]
+}
