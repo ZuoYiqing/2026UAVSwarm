@@ -18,6 +18,8 @@ const navItems = [
 
 const ACTION_STORAGE_KEY = "swarm-console.pending-actions.v1";
 let vehicleContractModule;
+let platformObserver;
+let platformObserverSource;
 
 const state = {
   page: "overview",
@@ -235,7 +237,65 @@ function observationNotice() {
   return `HTTP（浏览器→网关）：${api.label}；平台观测：${dataSourceStatus().label}；`
     + `最后完整新鲜状态接收：${state.lastObservationAt || "unknown"}。`
     + (state.observationStale ? "任务/飞控仅保留最后确认值，当前未知；HTTP 不可达不等于平台任务失败，也不能证明平台地面链路已断。" : "")
-    + " 独立平台任务状态尚未接入，动作记录不等于任务结论。";
+    + " 独立平台任务见 Agent Runtime 的只读平台面板，动作记录不等于任务结论。";
+}
+
+async function syncPlatformState() {
+  const api = window.SwarmRuntimeApi;
+  if (!window.SwarmPlatformObserver || !api?.platformStatus) return;
+  if (!platformObserver || platformObserverSource !== state.apiBaseUrl) {
+    platformObserver?.dispose();
+    platformObserver = window.SwarmPlatformObserver.createObserver(api);
+    platformObserverSource = state.apiBaseUrl;
+  }
+  await platformObserver.refresh();
+}
+
+async function refreshPlatformState() {
+  await syncPlatformState();
+  renderRuntimeUpdate();
+}
+
+function platformPanel() {
+  const observation = platformObserver?.state;
+  const status = observation?.status;
+  const task = observation?.task;
+  const fresh = observation?.observation === "live";
+  const groundLink = status?.ground_link;
+  const px4 = status?.platform_observation;
+  const mode = status?.execution_mode;
+  const label = observation?.observation?.toUpperCase() || "UNKNOWN";
+  const rows = observation?.events || [];
+  const field = (name, value) => `<tr><th>${esc(name)}</th><td>${esc(value ?? "unknown")}</td></tr>`;
+  return panel(`平台任务与链路（只读） ${badge(label, fresh ? "green" : "amber")}`, `
+    <div class="control-notes"><button class="button" onclick="refreshPlatformState()">刷新平台观测</button>
+      ${badge(mode === "fake" ? "FAKE · 非飞行证据" : mode === "sitl" ? "SITL · 不等于真机验收" : "模式 UNKNOWN", "amber")}
+      <span class="small">这里只查询状态，不提交任务、取消、reconcile 或发送 heartbeat。浏览器关闭不代表平台地面链路丢失。</span></div>
+    <table class="table"><tbody>
+      ${field("平台节点", status?.node_id)}
+      ${field("模型已配置（平台上报，不代表任务成功）", status?.model_configured)}
+      ${field("观测最后接收", observation?.lastReceivedAt)}
+      ${field("平台地面链路（最后上报）", groundLink?.state)}
+      ${field("平台收到地面心跳时间", groundLink?.last_received_at)}
+      ${field("心跳 age_ms（上报时）", groundLink?.age_ms)}
+      ${field("飞控观测 stale / sample_timestamp", px4 ? `${known(px4.stale)} / ${px4.sample_timestamp || "unknown"}` : null)}
+      ${field("boot_id", status?.boot_id)}${field("store_id", observation?.storeId)}${field("run_id", status?.run_id)}
+      ${field("事件已提交游标 / 平台检查点", status ? `${observation.cursor} / ${status.event_seq}` : null)}
+      ${field("active_task（平台最后上报）", status ? status.active_task?.task_id || "none" : null)}
+      ${field("task_id / task_version", task ? `${task.task_id} / ${task.task_version}` : null)}
+      ${field("execution_id", task?.execution_id)}
+      ${field(fresh ? "任务状态（平台确认）" : "任务状态（最后确认，当前未知）", task?.status)}
+      ${field("current_step", task?.current_step)}${field("failure_reason", task?.failure_reason)}
+    </tbody></table>
+    ${!fresh ? `<div class="small amber">平台观测未完成同步；保留最后确认值，不将任务改判失败。</div>` : ""}
+    ${observation?.error ? `<div class="inline-error">${esc(observation.error)}</div>` : ""}
+    ${observation?.storeChanged ? `<div class="small amber">持久存储已更换，游标按新 store_id 从 0 重建；旧记录不并入新来源。</div>` : ""}
+    ${observation?.restarted ? `<div class="small amber">平台进程已重启；同一存储继续使用原游标，不自动重放任务。</div>` : ""}
+    <details><summary>任务原始快照（最后确认）</summary><pre class="json">${esc(JSON.stringify(task || {status:"unknown"}, null, 2))}</pre></details>
+    ${observation?.previous ? `<details><summary>上一存储的最后确认记录（当前未知）</summary><pre class="json">${esc(JSON.stringify(observation.previous, null, 2))}</pre></details>` : ""}
+    <div class="small">事件窗口最多 100 条；seq 按 store_id 去重。同步从游标 GET 补收，历史回补不会触发动作。</div>
+    <table class="table"><thead><tr><th>seq</th><th>时间</th><th>类型</th><th>任务 / 版本</th><th>执行实例</th></tr></thead>
+      <tbody>${rows.length ? rows.map((event) => `<tr><td>${esc(event.seq)}</td><td>${esc(event.timestamp)}</td><td>${esc(event.event_type)}</td><td>${esc(`${event.task_id} / ${event.task_version}`)}</td><td>${esc(event.execution_id)}</td></tr>`).join("") : `<tr><td colspan="5">尚无已同步的平台事件</td></tr>`}</tbody></table>`);
 }
 
 function applyActionResult(payload, fallback = {}) {
@@ -932,6 +992,7 @@ function runtimePage() {
       ${metric("Planner", agent.planner_version || "--", agent.planner_kind || "unavailable", "green")}
       ${metric("LLM / 实执行", agent.llm_enabled ? "ON" : "OFF", agent.real_execution_enabled ? "REAL" : "DRY / FAKE", "cyan")}
     </div>
+    ${platformPanel()}
     ${runtimeChain()}
     <div class="split-2 h-fill" style="grid-template-columns:1fr .52fr">
       <div class="split-3">
@@ -1120,6 +1181,9 @@ function saveApiBaseUrl(value) {
     return;
   }
   state.apiBaseUrl = window.SwarmRuntimeApi.setConfiguredBaseUrl(value);
+  platformObserver?.dispose();
+  platformObserver = null;
+  platformObserverSource = null;
   state.apiStatus = "checking";
   state.dataStatus = "checking";
   state.observationStale = true;
@@ -2181,6 +2245,7 @@ function route() {
 
 render();
 probeRuntime();
+void syncPlatformState();
 
 app.addEventListener("click", (event) => {
   const target = event.target.closest("[data-vehicle-id]");
@@ -2261,3 +2326,9 @@ setInterval(async () => {
   await syncRuntimeEvents({ notifyFailure: false });
   renderRuntimeUpdate();
 }, 5000);
+
+// 独立平台命名空间不借用旧 snapshot，也不以旧 health/Telemetry 的状态替代。
+setInterval(async () => {
+  await syncPlatformState();
+  renderRuntimeUpdate();
+}, 3000);
