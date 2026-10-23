@@ -81,6 +81,26 @@ def _managed_harness() -> tuple[dict[str, Any], dict[str, Any]]:
     return state, manifest
 
 
+def _validate_token_file(token_file: Path) -> None:
+    if not token_file.is_file():
+        raise DeploymentError("platform_token_file_missing_or_invalid")
+    token = token_file.read_text(encoding="utf-8").strip()
+    if len(token) < 32 or any(character.isspace() for character in token):
+        raise DeploymentError("platform_token_file_missing_or_invalid")
+
+
+def _agent_command(token_file: Path, run_id: str) -> list[str]:
+    return [
+        sys.executable, "-m", "uav_runtime.platform.server",
+        "--node-id", "UAV-02", "--port", str(AGENT_PORT),
+        "--store-dir", str(AGENT_DIR.resolve()),
+        "--token-file", str(token_file.resolve()),
+        "--execution-mode", "fake",
+        "--vehicle-config", str(RUNTIME_VEHICLE_CONFIG.resolve()),
+        "--run-id", run_id,
+    ]
+
+
 def _entry(kind: str, process: subprocess.Popen[Any], runtime_dir: Path,
            run_id: str) -> dict[str, Any]:
     observed = harness.read_process_identity(process.pid)
@@ -157,8 +177,7 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
         raise DeploymentError("deployment_state_already_exists")
     simulation, _manifest = _managed_harness()
     run_id = str(simulation["run_id"])
-    if not token_file.is_file() or token_file.stat().st_size == 0:
-        raise DeploymentError("platform_token_file_missing_or_empty")
+    _validate_token_file(token_file)
     if not _available_tcp(AGENT_PORT) or not _available_tcp(PROXY_PORT):
         raise DeploymentError("application_port_in_use")
     # Fake mode never opens MAVLink. Do not bind even briefly to probe 14541;
@@ -166,14 +185,7 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
     if not (harness.REPO_ROOT / "src/uav_runtime/platform/server.py").is_file():
         raise DeploymentError("runtime_platform_module_missing")
 
-    agent_command = [
-        sys.executable, "-m", "uav_runtime.platform.server",
-        "--node-id", "UAV-02", "--port", str(AGENT_PORT),
-        "--store-dir", str(AGENT_DIR.resolve()),
-        "--token-file", str(token_file.resolve()),
-        "--execution-mode", "fake",
-        "--vehicle-config", str(RUNTIME_VEHICLE_CONFIG.resolve()),
-    ]
+    agent_command = _agent_command(token_file, run_id)
     link_state_path = PROXY_DIR / f"link_state.{run_id}.json"
     proxy_command = [
         sys.executable, str(Path(app_link_proxy.__file__).resolve()), "serve",
