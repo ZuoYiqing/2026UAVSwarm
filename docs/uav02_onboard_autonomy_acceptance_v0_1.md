@@ -21,19 +21,20 @@ UAV-02 有独立的常驻 Agent、任务存储和唯一的 PX4 MAVLink session�
 
 ## 首轮 Runtime 接口提案
 
-Runtime 负责人于 2026-10-22 给出了待实现的 v1.0 接口。下面只作为组合测试的目标，直到其实现 SHA 与 fixture 提交后才算可执行契约。
+Runtime v1.0 实现已固定于 `332b6c4`，可执行示例见 `docs/fixtures/platform_autonomy_v1.json`；下表按该实现核对。真实飞行结果仍须单独验收。
 
-平台代理进程支持 `fake` 和 `sitl` 模式。默认 `fake` 不连接 PX4；`sitl` 只为 UAV-02 独占 `14541`。服务只监听 loopback，所有平台 API 要求本机 token 文件对应的 Bearer token。地面 Runtime 从其三机 manifest 中排除 UAV-02 的接收会话，经带 token 的平台代理调用它。主控台网页断开不构成地面链路故障；地面服务定期发送的 heartbeat 才驱动平台代理的链路状态。
+平台代理进程支持 `fake` 和 `sitl` 模式。默认 `fake` 不连接 PX4；`sitl` 只为 UAV-02 独占 `14541`，并须绑定当前 harness `run_id`。服务只监听 loopback，所有平台 API 要求本机 token 文件对应的 Bearer token。地面 Runtime 从其三机 manifest 中排除 UAV-02 的接收会话，经带 token 的平台代理调用它。主控台网页断开不构成地面链路故障；地面服务定期发送的 heartbeat 才驱动平台代理的链路状态。
 
 | 方法/路径 | 用途 |
 | --- | --- |
 | `POST /api/platform/tasks` | 校验并持久接收任务，返回 HTTP 202；后台 worker 独立于请求生命周期 |
 | `GET /api/platform/tasks/{task_id}` | 查询任务和步骤状态 |
-| `GET /api/platform/status` | 查询 `node_id`、`boot_id`、`store_id`、`execution_mode`、`event_seq`、`ground_link` 和当前任务 |
+| `GET /api/platform/status` | 查询 `node_id`、`boot_id`、`store_id`、`run_id`、`execution_mode`、`event_seq`、`ground_link`、机体观测、`safe_to_stop` 和当前任务 |
 | `GET /api/platform/events?after_seq=N` | 按持久递增序号补取事件 |
 | `GET /api/platform/events/stream` | SSE 事件流；断线后仍须用序号补取 |
 | `POST /api/platform/link/heartbeat` | 地面服务与平台代理之间的链路心跳 |
 | `POST /api/platform/tasks/{task_id}/cancel` | 请求取消；执行状态和终态仍以平台记录为准 |
+| `POST /api/platform/tasks/{task_id}/reconcile` | 重启后的人工核对；须匹配执行 ID，且有新鲜落地、上锁证据，不能自动重放 |
 
 任务 `contract_version=1.0`，包含 `node_id=UAV-02`、`task_id`、`task_version=1`、`request_id`、`trace_id`、`authorization` 和按序的 `steps`。授权包含操作员、ISO-8601 过期时间、`offline_policy=continue_authorized`、最大高度 3 m 和最大保持 10 s。首轮只接受 `takeoff → hold_position → land`。任务状态集合为 `accepted`、`executing`、`succeeded`、`failed`、`cancelled`、`recovery_required`；步骤与事件需要保留 `execution_id` 和版本以便去重。SQLite 持久保存任务、步骤与事件序号。进程重启后未完成任务进入 `recovery_required`，不得自动重放。取消或异常只在已有授权范围内执行 LAND 收束，不发 in-air disarm，也不把任务标成成功。
 
