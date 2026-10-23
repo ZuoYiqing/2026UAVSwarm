@@ -14,6 +14,27 @@ sys.path.insert(0, str(SIM_DIR))
 import onboard_deployment  # noqa: E402
 
 
+def test_agent_cli_passes_simulation_run_id_and_runtime_config(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    command = onboard_deployment._agent_command(token_file, "simulation-run-123")
+    assert command[command.index("--run-id") + 1] == "simulation-run-123"
+    assert command[command.index("--execution-mode") + 1] == "fake"
+    assert command[command.index("--vehicle-config") + 1] == str(
+        onboard_deployment.RUNTIME_VEHICLE_CONFIG.resolve()
+    )
+
+
+@pytest.mark.parametrize("token", ["short", "a" * 31, "a" * 31 + " b"])
+def test_token_preflight_matches_runtime_contract(tmp_path: Path, token: str) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text(token, encoding="utf-8")
+    with pytest.raises(onboard_deployment.DeploymentError,
+                       match="platform_token_file_missing_or_invalid"):
+        onboard_deployment._validate_token_file(token_file)
+    token_file.write_text("a" * 32 + "\n", encoding="utf-8")
+    onboard_deployment._validate_token_file(token_file)
+
+
 def test_start_requires_managed_simulation_before_any_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

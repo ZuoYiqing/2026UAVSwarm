@@ -31,6 +31,8 @@ GPU 适配器选择出现 RTF 0.175；启动进程需设置
 
 Runtime 平台模块可用、密钥文件已由 Runtime 准备后，可先用**不连接 PX4 的 fake
 模式**检查部署与应用断链；以下命令不会发送飞行命令：
+密钥文件须含至少 32 个无空白字符的本地 token；编排器会把当前 harness `run_id`
+传给 Agent 的 `--run-id`，供状态交叉核对。
 
 ```bash
 python3 simulation/px4_gazebo/onboard_deployment.py start-fake \
@@ -57,6 +59,14 @@ run_id；fake 停止复用 harness 的 SIGTERM→超时身份复核→SIGKILL �
 **当前编排器不提供 SITL Agent 的自动 start/stop。** 空的 active_task 不足以证明
 飞机在地面且已上锁；在 Runtime 给出新鲜、单一会话来源的 landed/disarmed 证据
 并由集成方验证安全停止前，不得为追求进度改用 fake 停止路径处理 SITL 进程。
+Runtime 固定的 `GET /api/platform/status` 含 `execution_mode`、`run_id`、
+`platform_observation` 和 `safe_to_stop`。集成方手动启动 SITL Agent 时必须显式
+传 `--execution-mode sitl --vehicle-config <同一 checkout 的 config/vehicles.sitl.json>
+--run-id <当前 harness run_id>`；地面 Runtime 同时使用 `--exclude-node UAV-02`
+及 `--platform-url http://127.0.0.1:8767`。停止前只接受同一 run_id、
+`execution_mode=sitl`、`platform_observation.source=px4_telemetry`、观测未过期、
+`active_task=null` 且 `safe_to_stop=true`，并独立核对 UAV-02 落地/上锁及进程
+身份。fake 的 `safe_to_stop` 不能证明真实飞机安全。此手动流程尚未实飞验收。
 
 ## 传感器与评估真值
 
