@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const model = require("../console-model.js");
+const platformModel = require("../platform-observer.js");
+const {createFixture:platformFixture} = require("./fixtures/platform-read-fixture.js");
 
 function harness(saved = [], { polling = false } = {}) {
   const storage = new Map([["swarm-console.pending-actions.v1", JSON.stringify(saved)]]);
@@ -16,7 +18,7 @@ function harness(saved = [], { polling = false } = {}) {
     localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     document: { getElementById: (id) => id === "app" ? app : null,
       querySelector: () => null, activeElement: null },
-    window: { SwarmRuntimeApi: api, SwarmConsoleModel: model,
+    window: { SwarmRuntimeApi: api, SwarmConsoleModel: model, SwarmPlatformObserver: platformModel,
       location: { href: "http://127.0.0.1:5178/" },
       setTimeout() {}, addEventListener: (name, handler) => { listeners[name] = handler; } },
     setInterval() {},
@@ -201,6 +203,48 @@ test("switching Runtime source clears the previous observation and task cache", 
   assert.equal(h.run("state.observationStale"), true);
   assert.equal(h.run("state.agentStatus"), null);
   assert.equal(h.run("state.fleet.length"), 0);
+});
+
+test("platform UAV-02 remains visible when legacy registry excludes it; platform 503 cannot fail its task", async () => {
+  const h = harness();
+  const fixture = platformFixture();
+  Object.assign(h.api,fixture.api);
+  h.run("state.fleet=state.fleet.filter(vehicle=>vehicle.id!=='UAV-02'); state.selectedUav='UAV-01'");
+  await h.run("syncPlatformState()");
+  const page = h.run("runtimePage()");
+  assert.match(page,/平台任务与链路（只读）/);
+  assert.match(page,/平台节点<\/th><td>UAV-02<\/td>/);
+  assert.match(page,/fixture-execution-a/);
+  assert.match(page,/FAKE · 非飞行证据/);
+  assert.match(page,/ground_link|平台地面链路/);
+  assert.equal(h.run("state.fleet.length"),2);
+  assert.equal(h.run("state.selectedUav"),"UAV-01");
+  fixture.offline=true;
+  await h.run("syncPlatformState()");
+  assert.equal(h.run("state.apiStatus"),"live"); // 网关可达，平台观测不可达。
+  assert.equal(h.run("platformObserver.state.task.status"),"executing");
+  assert.match(h.run("platformPanel()"),/STALE/);
+  assert.match(h.run("platformPanel()"),/任务状态（最后确认，当前未知）/);
+  assert.match(h.run("platformPanel()"),/platform_link_unavailable/);
+  assert.ok(fixture.calls.every((call)=>call.method==='GET'));
+});
+
+test("platform terminal task and execution mode are displayed separately from legacy action success", async () => {
+  const h=harness(); const fixture=platformFixture();
+  fixture.task.status="recovery_required";
+  fixture.task.failure_reason="process_restart_execution_uncertain";
+  fixture.status.active_task=structuredClone(fixture.task);
+  fixture.status.ground_link.state="lost";
+  fixture.status.model_configured=true;
+  Object.assign(h.api,fixture.api);
+  h.run("state.actionRecords=[{node_id:'UAV-02',action_type:'takeoff',status:'succeeded'}]");
+  await h.run("syncPlatformState()");
+  assert.match(h.run("platformPanel()"),/recovery_required/);
+  assert.match(h.run("platformPanel()"),/process_restart_execution_uncertain/);
+  assert.match(h.run("platformPanel()"),/平台地面链路（最后上报）<\/th><td>lost/);
+  assert.match(h.run("platformPanel()"),/FAKE · 非飞行证据/);
+  assert.equal(h.run("platformObserver.state.task.status"),"recovery_required");
+  assert.equal(h.run("selectedAction().status"),"succeeded");
 });
 
 test("Runtime busy terminal response releases only its own pending request", async () => {
