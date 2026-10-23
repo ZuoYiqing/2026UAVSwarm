@@ -17,6 +17,9 @@
  *   POST /api/planner/plan-mission
  *   GET  /api/replay?n=20
  *   GET  /api/capabilities
+ *   GET  /api/platform/status
+ *   GET  /api/platform/tasks/{task_id}
+ *   GET  /api/platform/events?after_seq=N&store_id=S
  *
  * The current Python repository already has CLI/runtime functions for these
  * concepts, but a browser cannot invoke CLI commands directly. A small HTTP
@@ -161,6 +164,10 @@
     vehicleSnapshot: () => request("/vehicle-snapshot"),
     agentStatus: () => request("/agent/status"),
     simulationStatus: () => request("/simulation/status"),
+    // 只经地面网关读取；Bearer 与后台 heartbeat 由 Runtime 配置，不交给浏览器。
+    platformStatus: () => request("/platform/status"),
+    platformTask: (taskId) => request(`/platform/tasks/${encodeURIComponent(taskId)}`),
+    platformEvents: (afterSeq, storeId) => request(`/platform/events?after_seq=${encodeURIComponent(afterSeq)}&store_id=${encodeURIComponent(storeId)}`),
     smokeTakeoffTimeoutMs,
     takeoffTimeoutMs,
     landTimeoutMs,
