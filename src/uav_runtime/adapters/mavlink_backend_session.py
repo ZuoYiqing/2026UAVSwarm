@@ -1350,6 +1350,17 @@ class MavlinkBackendSession:
             _, x, y, z, _received, _timestamp = self._local_positions[-1]
         return (float(x), float(y), float(z))
 
+    def local_position_evidence(self) -> dict[str, Any]:
+        """Read raw per-vehicle position and its own RX age, never scene truth."""
+        with self._rx_condition:
+            if not self._local_positions:
+                return {"sample_timestamp": None, "stale": True, "local_position": {}}
+            sequence, x, y, z, received, timestamp = self._local_positions[-1]
+            age = max(0.0, time.monotonic() - received)
+            return {"sample_timestamp": timestamp, "stale": age > 2.0, "position_age_ms": int(age * 1000),
+                    "position_sequence": sequence, "position_epoch": self._position_epoch,
+                    "local_position": {"x_m": x, "y_m": y, "z_down_m": z, "altitude_m": -z}}
+
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_LAND", 21)
         with self.command_lock:
