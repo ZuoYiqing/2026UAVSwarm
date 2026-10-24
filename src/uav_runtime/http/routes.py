@@ -53,6 +53,7 @@ from uav_runtime.http.preflight import check_preflight
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
+PLATFORM_GATEWAY = None
 BRIDGE_VERSION = "0.1"
 _DEFAULT_VEHICLE_CONFIG = (
     Path(__file__).resolve().parents[3]
@@ -1059,6 +1060,16 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
 
 
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
+    if normalized.startswith("/api/platform/"):
+        from uav_runtime.platform.contract import PlatformError
+        if PLATFORM_GATEWAY is None:
+            return 503, {"error": "platform_not_configured"}
+        try:
+            return PLATFORM_GATEWAY.relay(method, normalized, payload, query)
+        except PlatformError as exc:
+            return exc.status, {"error": exc.code}
+        except Exception:
+            return 503, {"error": "platform_link_unavailable", "observation_status": "unknown"}
     if method == "GET" and normalized == "/api/health":
         return 200, health()
     if method == "GET" and normalized == "/api/preflight":
@@ -1086,8 +1097,20 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
     if method == "POST" and normalized == "/api/plans/execute":
         return 200, plans_execute(payload)
     if method == "POST" and normalized == "/api/simulation/evidence":
-        return 200, publish_simulation_evidence(payload)
+        result = publish_simulation_evidence(payload)
+        if PLATFORM_GATEWAY is not None:
+            try:
+                code, _ = PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
+                result["platform_publication"] = {"http_status": code}
+            except Exception:
+                result["platform_publication"] = {"error": "platform_link_unavailable"}
+        return 200, result
     if method == "POST" and normalized == "/api/coordinates/calibration":
+        if PLATFORM_GATEWAY is not None and payload.get("node_id") == "UAV-02":
+            try:
+                return PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
+            except Exception:
+                return 503, {"error": "platform_link_unavailable"}
         return 200, publish_coordinate_calibration(payload)
     if method == "POST" and normalized == "/api/planner/plan-mission":
         return 200, plan_mission(payload)
