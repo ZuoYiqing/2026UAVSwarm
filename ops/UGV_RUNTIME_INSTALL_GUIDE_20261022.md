@@ -16,7 +16,7 @@
 | CAN | **底盘驱动已经把 CAN 封装了，直接发 topic 就行** |
 
 > ⚠️ 注意：厂家写的是 `iqr_robot_bringup`，而现场 `~/outdoor_start.sh` 里是
-> `tqr_robot_bringup`，launch 名也不同（`bringup.launch` vs `outdoor_bringup.launch`）。
+> `iqr_robot_bringup`，launch 名也不同（`bringup.launch` vs `outdoor_bringup.launch`）。
 > **这两个名称需要现场核实**（很可能是我从屏幕照片上读错了 `iqr` 的 `q`）。
 
 **结论：不需要碰 CAN 协议。控制路径是 ROS + `/cmd_vel`。**
@@ -224,14 +224,14 @@ Runtime 现在会说的：  MAVLink（SET_POSITION_TARGET / COMMAND_LONG ...）
 
 **这一条不解决，`/cmd_vel` 发了车也不动。**
 
-### 2. 核实 `iqr` 还是 `tqr`
+### 2. ~~核实包名~~ **已确认是 `iqr`**（原以为可能是 `tqr`，是我从屏幕照片上读错了）
 
-厂家写 `iqr_robot_bringup`，`~/outdoor_start.sh` 里是 `tqr_robot_bringup`。
+厂家写 `iqr_robot_bringup`，`~/outdoor_start.sh` 里是 `iqr_robot_bringup`。
 
 ```bash
 ls ~/catkin_ws/src/ | grep -i robot_bringup
 rospack find iqr_robot_bringup 2>/dev/null
-rospack find tqr_robot_bringup 2>/dev/null
+rospack find iqr_robot_bringup 2>/dev/null
 ```
 
 哪条能返回路径，就是哪个。**很可能是我从屏幕照片上把 `q` 看成了 `t`。**
@@ -243,7 +243,7 @@ rospack find tqr_robot_bringup 2>/dev/null
 ```
 ① 装 Python 3.11 + 放源码 + 起 Runtime + /api/health        ← 今天就能做完
 ② 追厂家问"自动模式怎么设"                                  ← 卡点
-③ 核实 iqr/tqr                                             ← 一条命令
+③ ~~核实 iqr/tqr~~ 已确认是 iqr
 ④ 挂载 NVMe（放日志和源码，保护 eMMC）                       ← 需要 sudo
 ⑤ 写 /cmd_vel 中继节点（方案 A）                             ← 需要设计确认
 ⑥ 和 Runtime 负责人定"地面车动作集合"                        ← 需要设计确认

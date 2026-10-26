@@ -241,11 +241,11 @@ can0  241   [8]  BA 00 00 00 00 00 00 3E      ← 末字节递增 = 计数/状�
 
 ### 6.2 现场已有的启动脚本
 
-`~/outdoor_start.sh`（现场实拍确认）：
+`~/outdoor_start.sh`（现场实拍确认；包名 `iqr_robot_bringup` 已核实）：
 
 ```bash
 #!/bin/bash
-roslaunch tqr_robot_bringup outdoor_bringup.launch      # ← 厂家写的是 iqr_robot_bringup
+roslaunch iqr_robot_bringup outdoor_bringup.launch
 sleep 5
 roslaunch scout_navigation  localization_run.launch
 sleep 5
@@ -257,20 +257,30 @@ sleep 3
 
 | launch | 作用 |
 | --- | --- |
-| `*qr_robot_bringup` / `outdoor_bringup.launch` | 底盘 + 所有传感器 |
+| `iqr_robot_bringup` / `outdoor_bringup.launch` | 底盘 + 所有传感器 |
 | `scout_navigation` / `localization_run.launch` | **Scout 底盘驱动** + 定位 |
 | `mpc_formation` / `muit_dmpc_with_time_mqtt.launch` | **多机 DMPC 编队控制**，**走 MQTT** |
 
-### 6.3 ⚠️ 两个未确认项
+### 6.3 ⚠️ 仍未确认的一项（关键）
 
 | # | 未确认 | 影响 | 怎么解决 |
 | --- | --- | --- | --- |
 | **1** | **「自动模式」怎么切换？** | **不解决的话，`/cmd_vel` 发了车也不动** | 追问厂家：是 topic / service / 遥控器拨档 / App？ |
-| **2** | `iqr_robot_bringup` 还是 `tqr_robot_bringup`？ | 名字不对 launch 起不来 | `ls ~/catkin_ws/src \| grep -i robot_bringup`<br>`rospack find iqr_robot_bringup`<br>`rospack find tqr_robot_bringup` |
+
+**已排除的疑问**：包名前缀是 **`iqr`**（不是我先前从照片里误读的 `tqr`），已由现场核实。
+
+**唯一的小差异**：厂家说启动用 `bringup.launch`，而 `~/outdoor_start.sh` 里写的是
+`outdoor_bringup.launch` —— 很可能是两个不同的 launch 文件（一个全集、一个室外场景）。
+一条命令可确认：
+
+```bash
+roslaunch iqr_robot_bringup --files 2>/dev/null | head -20
+ls $(rospack find iqr_robot_bringup)/launch/ 2>/dev/null
+```
 
 ### 6.4 其它待确认（已问厂家，等答复）
 
-- `tqr_robot_bringup` / `scout_navigation` 是厂家提供的吗？源码可看吗？
+- `iqr_robot_bringup` / `scout_navigation` 是厂家提供的吗？源码可看吗？
 - `~/catkin_ws/src/swarm_ros` 是做什么的？
 - MQTT broker 地址/端口（`muit_dmpc_with_time_mqtt` 用的）
 - `/dev/nvme0n1p1` 里有数据吗？能否挂载使用？
@@ -372,7 +382,7 @@ Runtime 的动作集是按**无人机**设计的：
 | --- | --- | --- | --- |
 | 1 | 装 Python 3.11 + Runtime + 验 `/api/health` | 无（有网即可） | 现场 |
 | 2 | **追问厂家：「自动模式」怎么切换** | 厂家答复 | 你 |
-| 3 | 核实 `iqr` / `tqr` 包名 | 一条命令 | 现场 |
+| 3 | ~~核实 `iqr` / `tqr` 包名~~ **已确认是 `iqr`** | — | 已解决 |
 | 4 | 查 NVMe 内容 → 决定是否挂载 | `sudo` | 现场 |
 | 5 | 挂载 NVMe 并把审计日志指过去 | `sudo` | 现场 |
 | 6 | `eth2` 固定 IP 或改用热点 | `sudo` | 现场 |
@@ -412,7 +422,7 @@ cat ~/outdoor_start.sh
 # 包名核实
 ls ~/catkin_ws/src | grep -i robot_bringup
 rospack find iqr_robot_bringup 2>/dev/null
-rospack find tqr_robot_bringup 2>/dev/null
+rospack find iqr_robot_bringup 2>/dev/null
 
 # 联网
 curl -sI http://pypi.org | head -1

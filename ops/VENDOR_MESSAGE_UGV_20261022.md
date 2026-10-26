@@ -19,9 +19,9 @@
 2、如果我们这边程序异常退出、不再发 cmd_vel 了，底盘会自己停车，
    还是会保持最后一次指令继续走？有没有急停接口（topic / service / 物理按钮）？
 
-3、包名想核实一下：您写的是 iqr_robot_bringup，
-   但我们车上 ~/outdoor_start.sh 里写的是 tqr_robot_bringup outdoor_bringup.launch。
-   这是同一个包的两种写法，还是确实有两个包？
+3、包名确认是 iqr_robot_bringup 了，谢谢。想再确认 launch 文件名：
+   您说启动用 bringup.launch，但我们车上 ~/outdoor_start.sh 里是 outdoor_bringup.launch。
+   这两个是不同用途（比如一个全集、一个室外场景），还是可以互换？
 
 4、多机编队那个 mpc_formation / muit_dmpc_with_time_mqtt.launch，
    用的 MQTT broker 是哪个？地址和端口是多少？是车自己起还是连外部服务器？
@@ -63,7 +63,7 @@
 | --- | --- | --- |
 | **1** | 自动模式怎么切 | ⚠️ **`/cmd_vel` 发了车不动** —— 直接卡死 |
 | **2** | 丢指令/急停行为 | ⚠️ **安全**：不知道断连后车会不会继续冲 |
-| 3 | `iqr` / `tqr` | launch 起不来，但我们自己一条 `rospack find` 就能验，**可以不等答复** |
+| 3 | ~~`iqr` / `tqr`~~ **已确认 `iqr`** | — |
 | 4 | MQTT broker | 只影响多车协同，**单车主链路不依赖** |
 | 5 | `swarm_ros` 用途 | 只影响我们能不能复用，**不影响开工** |
 | 6 | NVMe | 只影响放日志的位置，**不影响功能** |
