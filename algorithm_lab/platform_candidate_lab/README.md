@@ -69,9 +69,10 @@ authority to change a step or bypass Runtime's 2-second limit and Policy Gate.
 
 See [model-view handoff and validation limits](docs/MODEL_VIEW_V1_20261029.md).
 The historical 2026-10-24 Ubuntu bundle is pinned to older source and is **not**
-modified by this change. Running this new source against its existing engine
-and weight requires a separately recorded validation; no new latency or flight
-result is claimed here.
+modified by this change. Runtime subsequently ran two independently restarted
+**fake** full-task replays using algorithm source `735af74` with the old bundle's
+engine and weight; see the linked handoff for measured results and limits. This
+does not update the old bundle or establish real PX4/UGV flight performance.
 
 ## Reproduce without a model
 
