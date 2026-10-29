@@ -43,6 +43,36 @@ chat endpoint. `/health` reports only that the adapter process is alive, **not**
 that the model is loaded or ready. Model weights, binaries, logs, and experiment
 records stay in ignored D: artifact directories and are not in Git.
 
+## Versioned model decision view
+
+The HTTP contract is unchanged. The adapter first validates and hashes the
+**entire** Runtime request, including identities, authorization and every
+observation field. Only after the source, freshness, expiry and offline-takeoff
+prechecks pass does it build `uav02_candidate_view_v1` for the model. This view
+contains the authorized next action and parameters, authorization limits and
+remaining time, the entire local observation (including optional sensor and
+battery fields), observation age, ground-link state/evidence, and the two fixed
+option IDs. It omits correlation IDs, operator identity, the duplicated step ID,
+and repeated option action/parameter objects. The full contract already proves
+that `execute_authorized_step` equals the authorized `next_step` and
+`abort_to_land` means LAND; the model prompt explains both choices.
+
+Response evidence keeps the original `input_sha256` and adds
+`model_view_version`, `model_view_sha256` and `model_view_at`. The view hash is
+over the canonical UTF-8 model-view JSON; the original input hash still covers
+the whole request. A pre-model rejection has null view evidence because no view
+was sent. View version and evaluation time are needed to reproduce the derived
+freshness and authorization-remaining fields. A lost ground link under
+`offline_policy=continue_authorized` is not by itself a local fault, though
+other observations can still justify an abort candidate. The model never gets
+authority to change a step or bypass Runtime's 2-second limit and Policy Gate.
+
+See [model-view handoff and validation limits](docs/MODEL_VIEW_V1_20261029.md).
+The historical 2026-10-24 Ubuntu bundle is pinned to older source and is **not**
+modified by this change. Running this new source against its existing engine
+and weight requires a separately recorded validation; no new latency or flight
+result is claimed here.
+
 ## Reproduce without a model
 
 From `algorithm_lab`:
