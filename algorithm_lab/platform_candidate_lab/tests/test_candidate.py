@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from platform_candidate_lab.candidate import decide
-from platform_candidate_lab.contracts import ContractError, parse_json
+from platform_candidate_lab.contracts import ContractError, canonical_json, parse_json
 from platform_candidate_lab.local_model import LocalInferenceClient, ModelFailure
 from platform_candidate_lab.server import make_handler
 
@@ -34,9 +34,11 @@ class FakeClient:
         self.content = content
         self.failure = failure
         self.calls = 0
+        self.messages = None
 
     def complete(self, messages, output_schema, *, timeout_s):
         self.calls += 1
+        self.messages = copy.deepcopy(messages)
         if self.failure:
             raise ModelFailure(self.failure)
         assert timeout_s == 2
@@ -66,6 +68,83 @@ class CandidateTests(unittest.TestCase):
         result = decide(request_fixture(), client, now=NOW, allow_fake=True)
         self.assertEqual((result["status"], result["decision"]), ("candidate", "abort_to_land"))
         self.assertFalse(result["execution_authorized"])
+
+    def test_model_sees_versioned_decision_view_not_full_request(self):
+        request = request_fixture()
+        request["authorization"]["operator_id"] = "operator-local-01"
+        request["observation"]["battery"] = {
+            "battery_remaining": 37, "voltage_v": 15.1,
+            "onboard_control_sensors_health": 1,
+        }
+        request["observation"]["velocity_mps"] = 0.4
+        client = FakeClient()
+        result = decide(request, client, now=NOW, allow_fake=True)
+        view = json.loads(client.messages[1]["content"])
+        self.assertEqual(view["view_version"], "uav02_candidate_view_v1")
+        self.assertEqual(view["authorization"], {
+            "expires_in_ms": 299000, "max_altitude_m": 3.0,
+            "max_hold_s": 5.0, "offline_policy": "continue_authorized",
+        })
+        self.assertEqual(view["ground_link"], request["ground_link"])
+        self.assertEqual(view["next_step"], {"action": "hold_position",
+                                               "params": {"hold_s": 3.0}})
+        self.assertEqual(view["observation"], request["observation"])
+        self.assertEqual(view["observation_age_ms"], 1000)
+        self.assertEqual(view["options"], ["execute_authorized_step", "abort_to_land"])
+        for excluded in ("operator-local-01", "candidate-001", "trace-001", "exec-001"):
+            self.assertNotIn(excluded, client.messages[1]["content"])
+        evidence = result["evidence"]
+        self.assertEqual(evidence["model_view_version"], view["view_version"])
+        self.assertEqual(evidence["model_view_at"], "2026-10-22T12:00:01Z")
+        self.assertEqual(evidence["model_view_sha256"], hashlib.sha256(
+            canonical_json(view).encode("utf-8")).hexdigest())
+        self.assertEqual(evidence["input_sha256"], hashlib.sha256(
+            canonical_json(request).encode("utf-8")).hexdigest())
+        self.assertIn("alone is not a fault", client.messages[0]["content"])
+
+    def test_model_view_hash_tracks_decision_state_not_correlation_ids(self):
+        original = request_fixture()
+        renamed = copy.deepcopy(original)
+        renamed.update(task_id="new-task", execution_id="new-execution",
+                       request_id="new-request", snapshot_id="new-request",
+                       trace_id="new-trace")
+        first = decide(original, FakeClient(), now=NOW, allow_fake=True)["evidence"]
+        second = decide(renamed, FakeClient(), now=NOW, allow_fake=True)["evidence"]
+        self.assertNotEqual(first["input_sha256"], second["input_sha256"])
+        self.assertEqual(first["model_view_sha256"], second["model_view_sha256"])
+        changed = copy.deepcopy(original)
+        changed["observation"]["battery"]["battery_remaining"] = 20
+        third = decide(changed, FakeClient(), now=NOW, allow_fake=True)["evidence"]
+        self.assertNotEqual(first["model_view_sha256"], third["model_view_sha256"])
+        later = decide(original, FakeClient(), now=NOW + timedelta(milliseconds=100),
+                       allow_fake=True)["evidence"]
+        self.assertNotEqual(first["model_view_sha256"], later["model_view_sha256"])
+        changes = [
+            lambda r: r["authorization"].update(max_hold_s=4.0),
+            lambda r: r["ground_link"].update(state="healthy"),
+            lambda r: r["next_step"]["params"].update(hold_s=2.0),
+            lambda r: r["observation"]["local_position"].update(z_down_m=-2.0),
+        ]
+        for mutate in changes:
+            with self.subTest(mutate=mutate):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                if changed["next_step"]["params"] != original["next_step"]["params"]:
+                    changed["allowed_options"][0]["params"] = copy.deepcopy(
+                        changed["next_step"]["params"])
+                evidence = decide(changed, FakeClient(), now=NOW,
+                                  allow_fake=True)["evidence"]
+                self.assertNotEqual(first["model_view_sha256"],
+                                    evidence["model_view_sha256"])
+
+    def test_rejected_input_never_builds_a_model_view(self):
+        request = request_fixture()
+        request["observation"]["stale"] = True
+        client = FakeClient()
+        result = decide(request, client, now=NOW, allow_fake=True)
+        self.assertEqual(client.calls, 0)
+        self.assertIsNone(result["evidence"]["model_view_sha256"])
+        self.assertIsNone(result["evidence"]["model_view_at"])
 
     def test_lost_link_prevents_new_takeoff_before_model_call(self):
         request = request_fixture()
@@ -121,6 +200,7 @@ class CandidateTests(unittest.TestCase):
                 self.assertIsNone(result["candidate"])
                 self.assertEqual(result["failure_reason_code"], code)
                 self.assertFalse(result["execution_authorized"])
+                self.assertEqual(len(result["evidence"]["model_view_sha256"]), 64)
                 if detail:
                     self.assertEqual(result["evidence"]["reason"], detail)
                     self.assertEqual(len(result["evidence"]["raw_output_sha256"]), 64)
