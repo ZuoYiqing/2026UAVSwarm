@@ -241,11 +241,11 @@ can0  241   [8]  BA 00 00 00 00 00 00 3E      ← 末字节递增 = 计数/状�
 
 ### 6.2 现场已有的启动脚本
 
-`~/outdoor_start.sh`（现场实拍确认）：
+`~/outdoor_start.sh`（现场实拍确认；包名 `iqr_robot_bringup` 已核实）：
 
 ```bash
 #!/bin/bash
-roslaunch tqr_robot_bringup outdoor_bringup.launch      # ← 厂家写的是 iqr_robot_bringup
+roslaunch iqr_robot_bringup outdoor_bringup.launch
 sleep 5
 roslaunch scout_navigation  localization_run.launch
 sleep 5
@@ -257,20 +257,68 @@ sleep 3
 
 | launch | 作用 |
 | --- | --- |
-| `*qr_robot_bringup` / `outdoor_bringup.launch` | 底盘 + 所有传感器 |
+| `iqr_robot_bringup` / `outdoor_bringup.launch` | 底盘 + 所有传感器 |
 | `scout_navigation` / `localization_run.launch` | **Scout 底盘驱动** + 定位 |
 | `mpc_formation` / `muit_dmpc_with_time_mqtt.launch` | **多机 DMPC 编队控制**，**走 MQTT** |
 
-### 6.3 ⚠️ 两个未确认项
+### 6.3 ⚠️ 关键安全事实（厂家 2026-10-22 第二轮确认）
 
-| # | 未确认 | 影响 | 怎么解决 |
-| --- | --- | --- | --- |
-| **1** | **「自动模式」怎么切换？** | **不解决的话，`/cmd_vel` 发了车也不动** | 追问厂家：是 topic / service / 遥控器拨档 / App？ |
-| **2** | `iqr_robot_bringup` 还是 `tqr_robot_bringup`？ | 名字不对 launch 起不来 | `ls ~/catkin_ws/src \| grep -i robot_bringup`<br>`rospack find iqr_robot_bringup`<br>`rospack find tqr_robot_bringup` |
+#### ① 「自动模式」是**遥控器拨杆**，不是 ROS 接口
+
+> 厂家原话：**「遥控器把第二个拨杆拨到最上面就是自动模式，拨到中间就是手动模式」**
+
+| 项 | 结论 |
+| --- | --- |
+| 触发方式 | **物理遥控器（RC）第二个拨杆拨到最上** |
+| 手动模式 | 同一拨杆拨到**中间** |
+| 能否用程序设置 | ❌ **不能** —— 没有 ROS topic / service |
+| 含义 | **必须先有人把车切到自动模式，`/cmd_vel` 才生效** |
+
+**这条推翻了原以为"可能是某个 ROS service"的假设。它带来四个必须处理的问题：**
+
+1. **RC 发射机必须开机、在频、在范围内** —— 否则切不了自动模式
+2. **必须有人在现场（或遥控端）执行切换** —— 无法远程/自动完成
+3. **`/cmd_vel` 会不会被忽略，我们无法从 ROS 侧判断** —— 只能靠底盘反馈或观察车轮
+4. **切回中间 = 立即人工接管** —— 这实际上就是最可靠的急停（见 ③）
+
+**→ 我方流程必须写进一条前置检查：「确认遥控器第二个拨杆在最上面」。**
+
+#### ② 不发 `cmd_vel` 时：**靠惯性滑一小段，不会继续执行上次速度**
+
+> 厂家原话：**「不发的话他会因为惯性走一小段，不会一直执行速度指令」**
+
+| 项 | 结论 |
+| --- | --- |
+| 指令中断后的行为 | ✅ **减速滑行后停止**，不保持速度 |
+| 风险 | 有**滑行距离**，不是立即停 |
+| 对我们的意义 | ✅ **程序崩溃不会导致车辆一直冲** —— 这是重要的安全兜底 |
+
+**但"滑一小段"的距离未知**，需要实测（低速、架空或开阔场地）。
+
+#### ③ ⚠️ **ROS 里目前没有急停功能**
+
+> 厂家原话：**「ros 里面目前没有急停这个功能，你可以设计一个功能就是启动这个功能后会发速度为 0，持续发 1s」**
+
+| 项 | 结论 |
+| --- | --- |
+| ROS 侧急停 | ❌ **不存在** |
+| 厂家建议 | 自己做一个：发布速度为 0，持续 1 秒 |
+| **这个建议的局限** | ⚠️ **它依赖"我们的进程还活着、ROS 还通"** —— 恰恰是故障时最不可靠的假设 |
+
+**我方必须补的设计（三条，缺一不可）：**
+
+| # | 措施 | 作用 |
+| --- | --- | --- |
+| **1** | **遥控器拨回中间 = 人工接管** | ⭐ **真正可靠的急停**，不依赖软件、不依赖网络 |
+| **2** | **看门狗**：以 ≥10 Hz 持续发 `/cmd_vel`，一旦我方逻辑卡住就停止发送 → 靠底盘滑行停车 | 覆盖"进程卡死"场景 |
+| **3** | **主动零速**：急停时以 ≥10 Hz 连发 `linear.x=0, angular.z=0` 持续 ≥1 秒 | 覆盖"需要主动停"场景 |
+
+> **结论：不能把"发 0 持续 1 秒"当作唯一急停手段。**
+> 真正的兜底是 **① 遥控器拨回手动**。这条必须写进操作手册和验收标准。
 
 ### 6.4 其它待确认（已问厂家，等答复）
 
-- `tqr_robot_bringup` / `scout_navigation` 是厂家提供的吗？源码可看吗？
+- `iqr_robot_bringup` / `scout_navigation` 是厂家提供的吗？源码可看吗？
 - `~/catkin_ws/src/swarm_ros` 是做什么的？
 - MQTT broker 地址/端口（`muit_dmpc_with_time_mqtt` 用的）
 - `/dev/nvme0n1p1` 里有数据吗？能否挂载使用？
@@ -372,7 +420,7 @@ Runtime 的动作集是按**无人机**设计的：
 | --- | --- | --- | --- |
 | 1 | 装 Python 3.11 + Runtime + 验 `/api/health` | 无（有网即可） | 现场 |
 | 2 | **追问厂家：「自动模式」怎么切换** | 厂家答复 | 你 |
-| 3 | 核实 `iqr` / `tqr` 包名 | 一条命令 | 现场 |
+| 3 | ~~核实 `iqr` / `tqr` 包名~~ **已确认是 `iqr`** | — | 已解决 |
 | 4 | 查 NVMe 内容 → 决定是否挂载 | `sudo` | 现场 |
 | 5 | 挂载 NVMe 并把审计日志指过去 | `sudo` | 现场 |
 | 6 | `eth2` 固定 IP 或改用热点 | `sudo` | 现场 |
@@ -412,7 +460,7 @@ cat ~/outdoor_start.sh
 # 包名核实
 ls ~/catkin_ws/src | grep -i robot_bringup
 rospack find iqr_robot_bringup 2>/dev/null
-rospack find tqr_robot_bringup 2>/dev/null
+rospack find iqr_robot_bringup 2>/dev/null
 
 # 联网
 curl -sI http://pypi.org | head -1

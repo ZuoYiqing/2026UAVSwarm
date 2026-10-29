@@ -21,7 +21,7 @@
 `outdoor_start.sh` 内容：
 
 ```bash
-roslaunch tqr_robot_bringup outdoor_bringup.launch
+roslaunch iqr_robot_bringup outdoor_bringup.launch
 roslaunch scout_navigation   localization_run.launch
 roslaunch mpc_formation      muit_dmpc_with_time_mqtt.launch
 ```
@@ -62,7 +62,7 @@ roslaunch mpc_formation      muit_dmpc_with_time_mqtt.launch
 
 ### 4. 你们的包源码可以看吗
 
-* `tqr_robot_bringup`、`scout_navigation` 是你们提供的吗？
+* `iqr_robot_bringup`、`scout_navigation` 是你们提供的吗？
 * 可以给我们看 `launch` 文件和 `config` 吗？（我们自己查 topic 名也行，但如果你们直接说更快）
 
 ### 5. `swarm_ros` 是做什么的
