@@ -99,7 +99,8 @@ GET /api/platform/events?after_seq=N&store_id=S
 - 展示平台 `ground_link.state`、最后心跳时间及上报时年龄，另列浏览器观测 LIVE/SYNCING/STALE/UNKNOWN、本地接收时间及飞控采样时间。后台心跳由地面 Runtime 负责，浏览器关闭不代表地面链路断开。
 - `node_id`、`boot_id`、`store_id`、`run_id`、`task_version`、`execution_id` 均显示来源值；任务状态包括 `recovery_required`，不会根据旧动作成功、链路丢失或事件 ACK 推断任务成功。`model_configured` 仅说明平台报告已配置模型，不代表模型执行或任务通过验收。
 - 平台面板不依赖旧 Registry：配置 `--exclude-node UAV-02` 后，旧载具列表可以只有 UAV-01/03，UAV-02 仍从 `/api/platform/status` 展示，不因此被判成 removed 或 failed。旧 snapshot/API 的契约保持不变。
-- 一旦平台状态确认某节点归属平台代理，该节点的旧 TAKEOFF/Smoke/LAND 和 Backend Check 入口禁用；即使旧缓存或融合视图仍有 legacy endpoint，也不向地面旧路由发请求。平台观测过期不会解除已确认归属。该保护不代替 Runtime 对 excluded 节点的服务端拒绝，也不把 LAND 改为 DISARM。
+- 平台状态或原公共响应的 `platform_view` v1.0 元数据确认某节点归属平台代理后，该节点的旧 TAKEOFF/Smoke/LAND 和 Backend Check 入口禁用；不依赖两个接口的到达顺序。即使旧缓存或融合视图仍有 legacy endpoint，也不向地面旧路由发请求。平台观测过期不会解除本 API 来源已确认的归属；切换 API 清理归属缓存并丢弃旧来源迟到的状态响应。该保护不代替 Runtime 对 excluded 节点的服务端拒绝，也不把 LAND 改为 DISARM。
+- 武装状态缺失或节点/地面观测过期时显示 `UNKNOWN`；旧值可标注“最后上报 ARMED/DISARMED”，不显示为当前绿色 DISARMED。汇总存在未知武装状态时显示 `unknown`，不把缺失当作 0 架已武装；这没有修改飞行完成判据。
 - 首次打开从事件游标 0 只读重建；断联后从已提交的 `(store_id, seq)` 继续，按事件序号去重。同一存储的 `boot_id` 改变不清零游标；换库时将旧来源的最后确认记录单独保留，新库从 0 重建。浏览器刷新不持久化这个观测器游标，而是重新 GET 重建，不重放任何命令。
 - 每轮最多取 5 页，保留最近 100 条事件的显示窗口；未追上 `checkpoint_seq/event_seq` 时显示 SYNCING，不冒充完整同步。事件页、任务 GET 和末次状态核对全部成功后才提交本轮游标和结果；请求期间换库、重启、身份不符、事件缺口、游标回退均保留最后确认结果并显示错误。
 - 503 `platform_link_unavailable`、409 游标/存储冲突、404 任务记录缺失只让平台观测 stale/unknown，不将任务改成 failed，也不将旧 HTTP/Telemetry 的健康状态拿来覆盖平台状态。任务终态不被迟到的 executing 响应回退。
@@ -110,6 +111,8 @@ GET /api/platform/events?after_seq=N&store_id=S
 ### Fixture 与回归范围
 
 `tests/fixtures/platform_autonomy_v1.json` 是 Runtime 提供的 `docs/fixtures/platform_autonomy_v1.json` 的消费端副本，保留其 `offline_fixture_not_flight_evidence` 标记。动态 boot/store/execution ID、任务响应和事件分页由 `tests/fixtures/platform-read-fixture.js` 的 `createFixture()` 合成，使用上述生产者字段，不是真实平台采样。
+
+`tests/fixtures/platform-view-v1.json` 原样固定自 Runtime `15889d1` 的 `docs/fixtures/platform_view_v1.json`，只有投影子集，不是完整真实响应。公共视图转发用例的时间、元数据和外壳另行合成；验证 raw local / scene 坐标、不可用位置和 `platform_view` 字段不被主控台改写。主控台保留并转发原始元数据，目前未在 UI 单独列出公共视图的全部 reason/age/store/run；独立平台面板的任务/事件来源保持原契约。`view.fresh` 不能代替位置、标定或武装状态的新鲜证据。
 
 `tests/action-ui.test.js` 的 `installStateFixture()` 覆盖旧 API；`tests/platform-observer.test.js` 覆盖平台断联补收、重复事件、分页预算、换库、重启、缺口、身份冲突、迟到响应和 GET-only 恢复。定向运行：
 
