@@ -150,7 +150,13 @@ def main(argv=None) -> int:
         token = args.platform_token_file.read_text(encoding="utf-8").strip()
         if len(token) < 32 or any(c.isspace() for c in token):
             parser.error("platform token must contain at least 32 non-whitespace characters")
-        gateway = PlatformGateway(args.platform_url, token)
+        # Metadata-only fallback: never start this selected registry/session.
+        # It keeps the registered remote node visible before its first report.
+        remote_registry = select_registry(source, ["UAV-02"])
+        remote_store = RuntimeStateStore(vehicle_registry=remote_registry)
+        defaults = {"telemetry": remote_store.telemetry_latest(), "vehicles": {"vehicles": remote_registry.vehicle_rows()},
+                    "runtime_snapshot": remote_store.runtime_snapshot(), "vehicle_snapshot": remote_store.vehicle_snapshot()}
+        gateway = PlatformGateway(args.platform_url, token, default_projections=defaults)
         routes.PLATFORM_GATEWAY = gateway
     server = create_server()
     leases = []
@@ -169,9 +175,7 @@ def main(argv=None) -> int:
         pass
     finally:
         if gateway:
-            gateway.stop.set()
-            if gateway.thread:
-                gateway.thread.join(timeout=3)
+            gateway.close()
         registry.stop_all()
         for lease in leases:
             lease.close()

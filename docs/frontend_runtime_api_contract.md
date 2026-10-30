@@ -150,6 +150,16 @@ the manifest endpoints `14540/14541/14542`. Each node has one shared MAVLink
 session/RX owner; command ACK and telemetry are dispatched inside Runtime instead
 of using competing receivers.
 
+In the single-platform topology, the ground process excludes UAV-02 and uses
+the authenticated platform's read-only `GET /api/platform/view` producer to
+merge that node into these same public feeds. Ground public snapshot reads
+use cache only. Last-known nodes/poses survive link loss with explicit stale
+and unusable-public-position flags; no browser coordinate offset is needed.
+UAV-02 preflight is forwarded to its owning session and also checks ground-owned
+01/03 isolation. This is diagnostics, never flight permission. See
+`platform_view_contract_v1.md` and `fixtures/platform_view_v1.json` for fields,
+independent freshness rules, errors and a producer-tested example.
+
 ## 12. Multi-Vehicle Runtime v0.1.1 Hardening
 
 HTTP rejects unsupported backend identity and invalid numeric boundaries before
