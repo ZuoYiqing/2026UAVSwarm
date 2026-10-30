@@ -6,6 +6,8 @@ const vm = require("node:vm");
 const model = require("../console-model.js");
 const platformModel = require("../platform-observer.js");
 const {createFixture:platformFixture} = require("./fixtures/platform-read-fixture.js");
+// 原样固定自 Runtime 15889d1:docs/fixtures/platform_view_v1.json；仅生产者投影子集，非现场证据。
+const platformViewFixture = require("./fixtures/platform-view-v1.json");
 
 function harness(saved = [], { polling = false } = {}) {
   const storage = new Map([["swarm-console.pending-actions.v1", JSON.stringify(saved)]]);
@@ -273,6 +275,132 @@ test("platform-owned node cannot use legacy action or backend routes even with c
   assert.equal(h.run("platformObserver.state.task.status"),"executing");
   h.run("selectVehicle('UAV-01')");
   assert.equal(h.run("actionPermission('takeoff').allowed"),true);
+});
+
+test("public view ownership closes legacy routes before platform status and survives stale reads", async () => {
+  for (const source of ["snapshot", "telemetryLatest", "vehicleSnapshot", "vehicles"]) {
+    const h = harness([], {polling:true});
+    const fixture = installStateFixture(h);
+    // 合成公共响应，只验证 15889d1 gateway.cached_view 的归属元数据。
+    fixture.payloads[source].platform_view = {contract_version:"1.0",node_id:"UAV-02",
+      fresh:false,observation_status:"unknown",reason:"platform_view_unavailable"};
+    h.api.platformStatus = async () => { throw new Error("fixture unavailable"); };
+    await h.run("syncPlatformState()");
+    await h.run("syncRuntimeState()");
+    assert.equal(h.run("platformObserver.state.status"), null);
+    assert.equal(h.run("actionPermission('takeoff').allowed"), false, source);
+    assert.match(h.run("backendPage()"), /onclick="checkBackend\(\)" disabled/);
+    const posts = [];
+    h.api.checkBackend = async () => { posts.push("backend"); };
+    await h.run("checkBackend({notifyUser:false})");
+    assert.deepEqual(posts, []);
+    h.run("applyApiFailure('snapshot', {kind:'network',message:'fixture lost'}, false)");
+    delete fixture.payloads[source].platform_view;
+    await h.run("syncRuntimeState()");
+    assert.equal(h.run("actionPermission('land').allowed"), false);
+    // 来源切换只清本来源的归属缓存；不把元数据当动作/飞行许可。
+    h.api.setConfiguredBaseUrl = (value) => value;
+    h.run("saveApiBaseUrl('http://127.0.0.1:9999/api')");
+    await h.run("syncRuntimeState()");
+    assert.equal(h.run("isPlatformControlled()"), false);
+  }
+});
+
+test("armed display distinguishes current telemetry from stale or absent evidence", () => {
+  const h = harness();
+  h.run("state.fleet.forEach(vehicle => {vehicle.armed=false})");
+  assert.equal(h.run("fleetSummary().armed"), 0);
+  assert.match(h.run("vehiclePage()"), /武装状态（最后上报）/);
+  assert.match(h.run("vehiclePage()"), /DISARMED/);
+  h.run("selectedVehicle().stale=true");
+  assert.match(h.run("vehiclePage()"), /UNKNOWN · 最后上报 DISARMED/);
+  assert.equal(h.run("armedObservation(selectedVehicle()).color"), "amber");
+  assert.equal(h.run("fleetSummary().armed"), "unknown");
+  h.run("selectedVehicle().armed=true");
+  assert.match(h.run("vehiclePage()"), /UNKNOWN · 最后上报 ARMED/);
+  h.run("selectedVehicle().armed=null; selectedVehicle().stale=false");
+  assert.match(h.run("vehiclePage()"), /武装状态（最后上报）<\/div>\s*<h2[^>]*>UNKNOWN/);
+  assert.equal(h.run("fleetSummary().armed"), "unknown");
+  h.run("selectedVehicle().armed=false; state.observationStale=true");
+  assert.match(h.run("vehiclePage()"), /UNKNOWN · 最后上报 DISARMED/);
+  assert.match(h.run("vehicleDiagramPanel()"), /UNKNOWN · 最后上报 DISARMED/);
+  assert.match(h.run("backendPage()"), /armed（最后上报）<\/dt><dd>UNKNOWN · 最后上报 DISARMED/);
+});
+
+test("a late public view from the previous API cannot restore its ownership or snapshot", async () => {
+  const h = harness([], {polling:true});
+  const fixture = installStateFixture(h);
+  fixture.payloads.vehicleSnapshot.platform_view = {contract_version:"1.0",node_id:"UAV-02"};
+  let release;
+  h.api.telemetryLatest = () => new Promise(resolve => {release=resolve;});
+  const oldRead = h.run("syncRuntimeState()");
+  h.api.setConfiguredBaseUrl = value => value;
+  h.run("saveApiBaseUrl('http://127.0.0.1:9999/api')");
+  release(fixture.payloads.telemetryLatest);
+  await oldRead;
+  assert.equal(h.run("state.vehicleSnapshot"), null);
+  assert.equal(h.run("state.fleet.length"), 0);
+  assert.equal(h.run("state.platformControlledNodes.size"), 0);
+});
+
+test("public view forwarding preserves producer coordinates, metadata and unusable last-known pose", async () => {
+  const h = harness([], {polling:true});
+  const fixture = installStateFixture(h);
+  const projection = platformViewFixture.response_projection.projections.vehicle_snapshot;
+  const vehicle = fixture.payloads.vehicleSnapshot.vehicles[0];
+  Object.assign(fixture.payloads.vehicleSnapshot, {
+    full_state:projection.full_state,scene_id:projection.scene_id,
+    // 以下元数据、时间和完整响应外壳为本用例合成，不补成真实观测。
+    platform_view:{contract_version:"1.0",node_id:"UAV-02",fresh:true,
+      observation_status:"available",reason:null,source_timestamp:fixture.sampleTime,
+      age_ms:0,store_id:"unit-fixture-store",run_id:"unit-fixture-run"},
+  });
+  vehicle.spatial = structuredClone(projection.vehicles[0].spatial);
+  vehicle.pose.position_m = structuredClone(vehicle.spatial.scene_pose.position_m);
+  h.context.sharedContract = await import("../simulation-3d/src/vehicle-contract.js");
+  const sent = [];
+  const frame = {contentWindow:{postMessage:(message) => sent.push(message)}};
+  h.context.document.getElementById = (id) => id === "simulation-frame" ? frame : null;
+  h.run("vehicleContractModule=Promise.resolve(sharedContract); state.simulationReady=true");
+  await h.run("syncRuntimeState()");
+  await h.run("postVehicleSnapshot()");
+  const original = h.run("state.vehicleSnapshot");
+  const fresh = sent.at(-1).payload;
+  assert.equal(fresh, original);
+  assert.deepEqual(fresh.platform_view, fixture.payloads.vehicleSnapshot.platform_view);
+  assert.equal(fresh.vehicles[0].spatial.raw_vehicle_local_pose.position_m.y, 2);
+  assert.equal(fresh.vehicles[0].spatial.scene_pose.position_m.y, 10);
+  assert.equal(fresh.vehicles[0].pose.position_m.y, 10);
+  assert.equal(h.run("selectedVehicle().armed"), null);
+
+  // 新鲜传输/心跳不能覆盖生产者独立标记的位置 stale 或标定不可用。
+  fixture.payloads.telemetryLatest.status = "stale";
+  Object.assign(fixture.payloads.telemetryLatest.nodes[0], {stale:true,connected:false,armed:false});
+  vehicle.telemetry.stale = true;
+  vehicle.connected = false;
+  vehicle.spatial.public_position_usable = false;
+  vehicle.spatial.calibration_status = "expired";
+  await h.run("syncRuntimeState()");
+  await h.run("postVehicleSnapshot()");
+  const stale = sent.at(-1).payload;
+  assert.equal(stale.platform_view.fresh, true);
+  assert.equal(stale.platform_view.reason, null);
+  assert.equal(stale.platform_view.store_id, "unit-fixture-store");
+  assert.equal(stale.platform_view.run_id, "unit-fixture-run");
+  assert.equal(stale.vehicles[0].telemetry.stale, true);
+  assert.equal(stale.vehicles[0].spatial.public_position_usable, false);
+  assert.equal(stale.vehicles[0].spatial.calibration_status, "expired");
+  assert.equal(stale.vehicles[0].pose.position_m.y, 10);
+  assert.equal(stale.timestamp, fixture.sampleTime);
+  assert.equal(h.run("state.observationStale"), true);
+  assert.match(h.run("armedObservation(selectedVehicle()).label"), /UNKNOWN/);
+
+  Object.assign(fixture.payloads.vehicleSnapshot.platform_view, {fresh:false,
+    observation_status:"unknown",reason:"platform_view_stale",age_ms:4000});
+  await h.run("syncRuntimeState()");
+  await h.run("postVehicleSnapshot()");
+  assert.equal(sent.at(-1).payload.platform_view.reason, "platform_view_stale");
+  assert.equal(sent.at(-1).payload.platform_view.age_ms, 4000);
 });
 
 test("Runtime busy terminal response releases only its own pending request", async () => {

@@ -98,3 +98,26 @@ FAIL: true !== false
 5. 对平台缺失或 stale 的公共坐标明确显示未知，不在前端补偏移；ACK、完成证据、落地和上锁分别判断。
 
 上述事项尚未执行。本记录不授权启动飞行或合并 main。
+
+## Runtime 15889d1 公共视图静态复核及后续补丁（2026-10-30）
+
+只读查阅固定提交 `15889d1d744e43edbb532819285c12cc616ac541` 的 `docs/platform_view_contract_v1.md`、`docs/fixtures/platform_view_v1.json`、`platform/view.py` 和 `platform/gateway.py`。本线仍以 fbdc3b2 + 87b2c08 为开发基线，没有合并 Runtime 或更改它的文件。
+
+生产者源码表明：内部 `/api/platform/view` 不供浏览器直连；地面缓存融合至原 `/api/snapshot`、`/api/vehicle-snapshot`、`/api/telemetry/latest`、`/api/vehicles` 等公共 GET 路由，顶层新增 `platform_view`（包括 node_id、fresh、reason、age_ms、store_id、run_id）。源失联保留 UAV-02 和旧 pose 并标记 stale/不可用；位置和标定分别老化，公共 view 新鲜不表示位置或武装状态新鲜。坐标已由平台完成一次标定转换，主控台不再平移。
+
+本线复现并修补两个消费侧问题：
+
+1. 87b2c08 只认独立 platform/status 的归属。若公共视图先返回 UAV-02、status 尚不可用，旧 endpoint 可使旧动作准入返回 true。新增本 API 来源的归属缓存，接受原公共响应明确的 `platform_view` v1.0 node_id；即使该观测 stale，也保留独占归属并禁用旧动作及 Backend Check。切换来源清空缓存，丢弃旧来源迟到的状态响应；不把 fresh 当飞行许可。
+2. 单机武装卡片原先对旧 `armed=false` 显示绿色 DISARMED，缺失值在汇总中计为 0。现在缺失或节点/地面观测过期时显示 UNKNOWN，可附最后上报值；详情、模块、Backend 及汇总使用一致语义。全部节点新鲜且 armed 布尔值齐全时，仍显示实际计数。
+
+两项回归在修补前均失败，修补后通过。这是旧入口准入和证据展示的收紧，没有修改飞行完成阈值，也没有新增平台动作按钮或把 LAND 改为 cancel/DISARM。
+
+固定生产者 JSON 逐字节复制到 `tests/fixtures/platform-view-v1.json`；其 `producer_projection_fixture_not_flight_evidence` 标记、1970 受控时钟和 map-fixture-1 均保留。它只是子集断言，单元用例的公共响应外壳、时间、store/run 等另行明确合成，没有注入浏览器。
+
+新增 4 项回归覆盖：公共视图与 status 的到达次序/失联归属保留；武装 stale/缺失显示；换来源后旧响应丢弃；原样转发公共元数据与 raw y=2、scene y=10 的生产者坐标，位置不可用/标定过期仍保留旧 pose，HTTP/view 新鲜不洗掉 stale。
+
+本轮 `npm run check` 通过；`npm test` **140 passed / 0 failed**（前次 136）。仅为无网络的前端 unit/fixture 检查。Runtime 报告的 995 passed / 12 skipped 及跨线 fixture 10 passed 未在本线独立重跑，不记为主控台或真实飞行 PASS。
+
+仍有明确限制：原始 `state.vehicleSnapshot` 及 Bridge 保留顶层 platform_view；归一化 fleet 不展开这些字段，主控台 UI 尚未逐项展示公共视图 reason/age/store/run。独立平台面板继续使用原 task/events 命名空间和 store/seq，不拿公共快照覆盖任务结论。三维接收后的归一化及 UI 属于三维线，不由本补丁修改或证明。
+
+本轮未启动任何静态/Runtime/模型/仿真服务、未发飞行动作、未重试被自动审批拒绝的浏览器来源，也没有取得新截图或真实完整公共响应。前文 10:33 的端口/页面探测仅是历史时点，不表示现在仍在线；三维线后续报告其 18:37 探测连接拒绝，属于对方观测，不冒充本线实测。真实同窗观测仍待集成确认版本与恢复窗口，并解决浏览器来源审批。
