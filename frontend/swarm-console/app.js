@@ -147,7 +147,15 @@ function selectedAction() {
   );
 }
 
+function isPlatformControlled(vehicle = selectedVehicle()) {
+  // 已确认的执行归属在观测过期后仍保留，不能回退到旧地面动作路由。
+  return Boolean(vehicle && platformObserver?.state.status?.node_id === vehicle.id);
+}
+
 function actionPermission(actionType) {
+  if (isPlatformControlled()) {
+    return { allowed: false, reason: "所选节点由平台代理独占执行，旧地面动作入口禁用；请查看只读平台面板" };
+  }
   if (state.observationStale) return { allowed: false, reason: "地面观测未同步，当前状态未知" };
   return window.SwarmConsoleModel.actionPermission(
     selectedVehicle(),
@@ -1124,7 +1132,7 @@ function backendPage() {
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.12fr .88fr">
       <div class="grid backend-action-column scroll">
-        ${panel("指定节点动作", `<div class="form-grid"><div class="field"><label for="action-node">目标载具</label><select id="action-node" onchange="selectVehicle(this.value)">${state.fleet.map((item) => `<option value="${esc(item.id)}" ${item.id === state.selectedUav ? "selected" : ""}>${esc(item.id)} · SYS ${item.systemId ?? "-"}</option>`).join("")}</select></div><div class="field"><label for="action-altitude">目标相对高度 altitude_m</label><input id="action-altitude" type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>MAVLink Identity</label><input value="${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}" readonly></div></div><div class="action-buttons"><button class="button" onclick="checkBackend()" ${!vehicle || state.apiStatus !== "live" ? "disabled" : ""}>Check Backend</button><button class="button primary" data-action="takeoff" onclick="runOperationalTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>正式起飞</button><button class="button" data-action="smoke" onclick="runSmokeTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>Smoke Test</button><button class="button warn" data-action="land" onclick="runLand()" ${!lifecycleReady || !landPermission.allowed ? "disabled" : ""}>受控降落</button></div><div class="control-notes">${badge(lifecycleReady ? "LIFECYCLE 1.1" : "正式动作接口暂不支持", lifecycleReady ? "green" : "amber")}<span class="small">TAKEOFF：${esc(takeoffPermission.reason)}</span><span class="small">LAND：${esc(landPermission.reason)}</span><span class="small">保持：${esc(holdState)}</span><span class="small">Smoke 为独立阈值测试；本控制台不请求自动降落。</span></div>`)}
+        ${panel("指定节点动作", `<div class="form-grid"><div class="field"><label for="action-node">目标载具</label><select id="action-node" onchange="selectVehicle(this.value)">${state.fleet.map((item) => `<option value="${esc(item.id)}" ${item.id === state.selectedUav ? "selected" : ""}>${esc(item.id)} · SYS ${item.systemId ?? "-"}</option>`).join("")}</select></div><div class="field"><label for="action-altitude">目标相对高度 altitude_m</label><input id="action-altitude" type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>MAVLink Identity</label><input value="${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}" readonly></div></div><div class="action-buttons"><button class="button" onclick="checkBackend()" ${!vehicle || state.apiStatus !== "live" || isPlatformControlled(vehicle) ? "disabled" : ""}>Check Backend</button><button class="button primary" data-action="takeoff" onclick="runOperationalTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>正式起飞</button><button class="button" data-action="smoke" onclick="runSmokeTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>Smoke Test</button><button class="button warn" data-action="land" onclick="runLand()" ${!lifecycleReady || !landPermission.allowed ? "disabled" : ""}>受控降落</button></div><div class="control-notes">${badge(lifecycleReady ? "LIFECYCLE 1.1" : "正式动作接口暂不支持", lifecycleReady ? "green" : "amber")}<span class="small">TAKEOFF：${esc(takeoffPermission.reason)}</span><span class="small">LAND：${esc(landPermission.reason)}</span><span class="small">保持：${esc(holdState)}</span><span class="small">Smoke 为独立阈值测试；本控制台不请求自动降落。</span></div>`)}
         ${panel(`动作生命周期 ${liveAction ? badge(liveAction.status.toUpperCase(), lifecycleColor(liveAction.status)) : badge("NO ACTION", "amber")}`, `${actionLifecycleView(liveAction)}<div class="action-identity"><span>node ${esc(liveAction?.node_id || "unknown")}</span><span>request ${esc(liveAction?.request_id || "unknown")}</span><span>action ${esc(liveAction?.action_id || "unknown")}</span><span>trace ${esc(liveAction?.trace_id || "unknown")}</span></div>${liveAction?.client_status ? `<div class="small">${esc(liveAction.client_status)}</div>` : ""}${liveAction?.failure_reason ? `<div class="inline-error">${esc(liveAction.failure_reason)}</div>` : ""}`)}
         ${panel(`实时遥测与动作证据 ${badge(state.dataStatus.toUpperCase(), dataSourceStatus().color)}`, telemetryDetail(vehicle, liveAction))}
         ${panel("所选节点 Action JSON", `<pre class="json">${esc(JSON.stringify(liveAction || { data_source: "unavailable", node_id: vehicle?.id || null }, null, 2))}</pre>`, "scroll action-json-panel")}
@@ -1146,6 +1154,10 @@ function adapterTopology() {
 
 async function checkBackend(options = {}) {
   const vehicle = selectedVehicle();
+  if (isPlatformControlled(vehicle)) {
+    notify("旧 Backend 入口禁用", "所选节点由平台代理独占执行；平台面板仅供观测。", "amber");
+    return null;
+  }
   if (!vehicle) {
     notify("无法检查 Backend", "Runtime 没有已注册载具。", "amber");
     return null;

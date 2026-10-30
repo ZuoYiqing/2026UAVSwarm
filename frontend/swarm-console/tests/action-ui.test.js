@@ -247,6 +247,34 @@ test("platform terminal task and execution mode are displayed separately from le
   assert.equal(h.run("selectedAction().status"),"succeeded");
 });
 
+test("platform-owned node cannot use legacy action or backend routes even with cached legacy endpoint", async () => {
+  const h=harness(); const fixture=platformFixture();
+  Object.assign(h.api,fixture.api);
+  const posts=[];
+  for (const name of ["takeoff","land","smokeTakeoff","checkBackend"]) {
+    h.api[name]=async(body)=>{ posts.push({name,body}); return {}; };
+  }
+  // 模拟公共视图融合或旧缓存仍含可用 endpoint；不连接 Runtime/PX4。
+  await h.run("syncPlatformState()");
+  assert.equal(h.run("selectedVehicle().id"),"UAV-02");
+  assert.equal(h.run("actionPermission('takeoff').allowed"),false);
+  assert.match(h.run("actionPermission('land').reason"),/平台代理/);
+  const html=h.run("backendPage()");
+  assert.match(html,/onclick="checkBackend\(\)" disabled/);
+  assert.match(html,/data-action="takeoff"[^>]* disabled/);
+  assert.match(html,/data-action="smoke"[^>]* disabled/);
+  assert.match(html,/data-action="land"[^>]* disabled/);
+  h.run("runOperationalTakeoff(); runSmokeTakeoff(); runLand()");
+  await h.run("checkBackend({notifyUser:false})");
+  assert.deepEqual(posts,[]);
+  fixture.offline=true;
+  await h.run("syncPlatformState()");
+  assert.equal(h.run("actionPermission('takeoff').allowed"),false);
+  assert.equal(h.run("platformObserver.state.task.status"),"executing");
+  h.run("selectVehicle('UAV-01')");
+  assert.equal(h.run("actionPermission('takeoff').allowed"),true);
+});
+
 test("Runtime busy terminal response releases only its own pending request", async () => {
   const h = harness([pending]);
   h.api.takeoff = async (body) => { throw Object.assign(new Error("node_busy"), {
