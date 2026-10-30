@@ -1,5 +1,11 @@
 # 平台公共状态回传契约 v1.0
 
+2026-10-30 兼容扩展：内部 view 新增可选 `runtime_telemetry`，用于 Simulation
+integrated-health 的独立心跳/位置 RX 证据；旧四类 UI projections 不变，诊断对象
+不进入公共 `platform_view` 元数据。新只读 route、fixture、run_id 和原子文件导出见
+[Runtime telemetry health v1.0](runtime_telemetry_health_contract_v1.md)。缺少此扩展时
+旧页面仍可读取，但不得将 UI telemetry/latest 冒充 integrated-health evidence。
+
 日期：2026-10-30。主责：Runtime；消费者：主控制台、三维、Simulation integrated health、集成验收。
 本补丁不改车辆 manifest、端口/sysid、Policy、动作完成判据、模型输入或 Gazebo 生命周期。
 

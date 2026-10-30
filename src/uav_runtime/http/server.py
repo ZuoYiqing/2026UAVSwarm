@@ -134,7 +134,9 @@ def main(argv=None) -> int:
     parser.add_argument("--vehicle-config")
     parser.add_argument("--platform-url")
     parser.add_argument("--platform-token-file", type=Path)
+    parser.add_argument("--run-id", help="Active Simulation harness identity for read-only health evidence")
     args = parser.parse_args(argv)
+    routes.RUNTIME_RUN_ID = args.run_id
     source = VehicleRegistry.from_json(args.vehicle_config) if args.vehicle_config else routes.VEHICLE_REGISTRY
     for excluded in args.exclude_node:
         source.get_vehicle(excluded)

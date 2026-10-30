@@ -12,6 +12,7 @@ VIEW_VALID_MS = 3000
 
 def produce_view(service, dispatch):
     projections = None
+    runtime_telemetry = None
     if service.mode == "sitl" and dispatch is not None:
         before = service.observe()
         projections = {}
@@ -21,6 +22,10 @@ def produce_view(service, dispatch):
                 raise PlatformError("platform_view_unavailable", 503)
             projections[key] = value
         validate_projections(projections)
+        # Optional v1.0 extension, separate from all existing UI projections.
+        code, evidence = dispatch("GET", "/api/simulation/runtime-telemetry")
+        if code == 200:
+            runtime_telemetry = evidence
         # A fresh HEARTBEAT/battery snapshot must not make an old local pose
         # usable. Reuse the owner's per-position sample evidence, not its
         # arbitrary latest telemetry timestamp. Nothing is sent to the model.
@@ -53,7 +58,8 @@ def produce_view(service, dispatch):
     return {"contract_version": "1.0", "node_id": service.node_id,
             "store_id": service.store.store_id, "run_id": service.run_id,
             "execution_mode": service.mode, "source_timestamp": stamp(service.clock()),
-            "valid_for_ms": VIEW_VALID_MS, "execution_authorized": False, "projections": projections}
+            "valid_for_ms": VIEW_VALID_MS, "execution_authorized": False, "projections": projections,
+            "runtime_telemetry": runtime_telemetry}
 
 
 def validate_projections(projections):
@@ -151,7 +157,7 @@ def merge_projection(local, view, key):
             row["spatial"]["calibration_status"] = "scene_mismatch"
     out[rows_key] = sorted([r for r in out.get(rows_key, []) if r.get(identity) != "UAV-02"] + remote_rows,
                            key=lambda r: str(r.get(identity)))
-    out["platform_view"] = {k: v for k, v in view.items() if k != "projections"}
+    out["platform_view"] = {k: v for k, v in view.items() if k not in {"projections", "runtime_telemetry"}}
     if key == "telemetry":
         rows = out["nodes"]
         out["fresh"] = bool(rows) and all(not r.get("stale", True) for r in rows)
