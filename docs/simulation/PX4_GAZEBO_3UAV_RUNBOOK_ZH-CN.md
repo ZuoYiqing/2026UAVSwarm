@@ -253,14 +253,32 @@ collect_health(
 )
 ```
 
-CLI 可读取 Runtime 导出的短期 JSON 快照：
+Runtime `9869e6a` 提供独立的只读健康证据路由。集成 checkout 先吸收该提交，
+地面和平台 Runtime 均使用相同版本与当前 harness `run_id`；地面启动参数增加
+`--run-id <active-harness-run-id>`。`run_id` 只是关联标签，进程身份仍由 harness 独立核验。
+由集成负责人在健康采样期间持续运行以下导出器，路径放在本次运行的忽略目录：
+
+```bash
+SIM_RUN_ID='<active-harness-run-id>'
+PYTHONPATH=src python3 scripts/export_runtime_telemetry.py \
+  --url http://127.0.0.1:8765 --scene-id simple_recon_v0_1 \
+  --run-id "$SIM_RUN_ID" \
+  --output ".runtime/px4_gazebo/health/$SIM_RUN_ID/runtime-telemetry.json" --interval 0.5
+```
+
+CLI 读取该原子替换的短期 JSON 文件：
 
 ```bash
 python3 simulation/px4_gazebo/scripts/health_three_uav.py \
   --mode integrated \
-  --runtime-telemetry /path/to/runtime-three-uav-telemetry.json \
+  --runtime-telemetry ".runtime/px4_gazebo/health/$SIM_RUN_ID/runtime-telemetry.json" \
   --pretty
 ```
+
+导出器失败时旧文件不刷新，心跳最多 2.5 秒、位置最多 1.5 秒、envelope 最多
+5 秒后自然失效；health 在 Gazebo 采样后重读文件。不可用公共
+`/api/telemetry/latest` 代替，也不可修改采样时间来取得 ready。Runtime 的
+1970 受控时钟 fixture 和本线的离线消费者测试均不等于 LIVE 验收。
 
 Runtime telemetry 最小契约：
 
@@ -269,7 +287,7 @@ Runtime telemetry 最小契约：
   "contract_version": "1.0",
   "scene_id": "simple_recon_v0_1",
   "run_id": "<current harness run_id>",
-  "source_timestamp": "<UTC producer sample timestamp>",
+  "source_timestamp": "<UTC envelope assembly timestamp>",
   "valid_for_ms": 5000,
   "vehicles": [
     {
@@ -279,6 +297,8 @@ Runtime telemetry 最小契约：
       "endpoint": "udpin:127.0.0.1:14540",
       "heartbeat_timestamp": "<UTC heartbeat receive timestamp>",
       "position_timestamp": "<UTC LOCAL_POSITION_NED receive timestamp>",
+      "heartbeat_age_ms": 100,
+      "position_age_ms": 100,
       "heartbeat_fresh": true,
       "telemetry_fresh": true,
       "last_seen": "<UTC timestamp>",
