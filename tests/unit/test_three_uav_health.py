@@ -489,6 +489,42 @@ def test_integrated_rejects_unusable_runtime_evidence(tmp_path, monkeypatch, fai
     assert result["system_status"] == "unknown"
 
 
+def test_integrated_rejects_public_telemetry_as_health_evidence(tmp_path, monkeypatch):
+    """The ground public snapshot lacks independent heartbeat/position samples."""
+    public_telemetry = {
+        "version": "1.0", "timestamp": harness.utc_now(), "fresh": True,
+        "nodes": [{"node_id": "UAV-02", "connected": True, "stale": False}],
+    }
+    result = _collect(tmp_path, monkeypatch, mode="integrated",
+                      runtime_telemetry=public_telemetry,
+                      mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"))
+    assert result["simulation_status"] == "ready"
+    assert result["system_status"] == "unknown"
+    assert result["ready"] is False
+
+
+@pytest.mark.parametrize("failure", ["stale_heartbeat", "stale_position", "missing_position", "wrong_endpoint"])
+def test_integrated_requires_independent_runtime_samples(tmp_path, monkeypatch, failure):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    evidence = _runtime_telemetry(manifest)
+    uav02 = evidence["vehicles"][1]
+    if failure == "stale_heartbeat":
+        uav02["heartbeat_timestamp"] = "2020-01-01T00:00:00Z"
+    elif failure == "stale_position":
+        uav02["position_timestamp"] = "2020-01-01T00:00:00Z"
+    elif failure == "missing_position":
+        uav02.pop("position_timestamp")
+    else:
+        uav02["endpoint"] = manifest["vehicles"][0]["command_endpoint"]
+    result = _collect(tmp_path, monkeypatch, mode="integrated",
+                      runtime_telemetry=evidence,
+                      mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"))
+    assert result["simulation_status"] == "ready"
+    assert result["system_status"] == "unknown"
+    assert result["ready"] is False
+    assert result["vehicles"][1]["readiness"] is False
+
+
 def test_integrated_health_cli_never_checks_or_binds_standalone_endpoints(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
