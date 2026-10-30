@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -54,6 +56,20 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
     def _handle_json_request(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if self.command == "POST" and (parsed.path.startswith("/api/platform/") or parsed.path in {
+                    "/api/simulation/evidence", "/api/coordinates/calibration"}):
+                origin = self.headers.get("Origin")
+                if origin is not None and origin not in ALLOWED_ORIGINS:
+                    self._send_json(403, {"error": "origin_not_allowed"})
+                    return
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                    self._send_json(415, {"error": "json_content_type_required"})
+                    return
+            if self.command == "GET" and parsed.path == "/api/platform/events/stream":
+                from uav_runtime.http import routes
+                if routes.PLATFORM_GATEWAY is not None:
+                    routes.PLATFORM_GATEWAY.stream_to(self, self.path)
+                    return
             body = self._read_json_body() if self.command == "POST" else {}
             status, payload = dispatch(self.command, parsed.path, body=body, query=parsed.query)
             self._send_json(status, payload)
@@ -74,13 +90,19 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status: int, payload: Any) -> None:
         body = b"" if status == 204 else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self._send_cors_headers()
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
+        # A browser closing/refreshing aborts header writes as well as body
+        # writes. Handle disconnects here, including 400/500 and OPTIONS, so
+        # no second response is attempted on a closed socket.
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
 
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin")
@@ -100,20 +122,65 @@ def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPSer
     return ThreadingHTTPServer((host, port), RuntimeHttpBridgeHandler)
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    from uav_runtime.http import routes
+    from uav_runtime.http.state_store import RuntimeStateStore
+    from uav_runtime.runtime.vehicle_registry import VehicleRegistry
+    from uav_runtime.platform.deployment import select_registry
+    from uav_runtime.platform.gateway import PlatformGateway
+    from uav_runtime.platform.ownership import TransportLease
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--exclude-node", action="append", default=[])
+    parser.add_argument("--vehicle-config")
+    parser.add_argument("--platform-url")
+    parser.add_argument("--platform-token-file", type=Path)
+    parser.add_argument("--run-id", help="Active Simulation harness identity for read-only health evidence")
+    args = parser.parse_args(argv)
+    routes.RUNTIME_RUN_ID = args.run_id
+    source = VehicleRegistry.from_json(args.vehicle_config) if args.vehicle_config else routes.VEHICLE_REGISTRY
+    for excluded in args.exclude_node:
+        source.get_vehicle(excluded)
+    if args.exclude_node or args.vehicle_config:
+        routes.VEHICLE_REGISTRY = select_registry(source, [h.config.node_id for h in source.list_vehicles()
+                                                          if h.config.node_id not in args.exclude_node])
+        routes.RUNTIME_STATE_STORE = RuntimeStateStore(vehicle_registry=routes.VEHICLE_REGISTRY)
+    registry = routes.VEHICLE_REGISTRY
+    gateway = None
+    if args.platform_url:
+        if not args.platform_token_file or "UAV-02" not in args.exclude_node:
+            parser.error("platform gateway requires --exclude-node UAV-02 and --platform-token-file")
+        token = args.platform_token_file.read_text(encoding="utf-8").strip()
+        if len(token) < 32 or any(c.isspace() for c in token):
+            parser.error("platform token must contain at least 32 non-whitespace characters")
+        # Metadata-only fallback: never start this selected registry/session.
+        # It keeps the registered remote node visible before its first report.
+        remote_registry = select_registry(source, ["UAV-02"])
+        remote_store = RuntimeStateStore(vehicle_registry=remote_registry)
+        defaults = {"telemetry": remote_store.telemetry_latest(), "vehicles": {"vehicles": remote_registry.vehicle_rows()},
+                    "runtime_snapshot": remote_store.runtime_snapshot(), "vehicle_snapshot": remote_store.vehicle_snapshot()}
+        gateway = PlatformGateway(args.platform_url, token, default_projections=defaults)
+        routes.PLATFORM_GATEWAY = gateway
     server = create_server()
+    leases = []
     telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-    if telemetry_enabled:
-        # Registry owns one collector/session lifecycle per node. Endpoint changes
-        # belong in config/vehicles.sitl.json, never in HTTP request handlers.
-        VEHICLE_REGISTRY.start_all()
-    print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
     try:
+        if telemetry_enabled:
+            for handle in registry.list_vehicles():
+                if handle.config.enabled and handle.config.endpoint.startswith("udpin:127.0.0.1:"):
+                    leases.append(TransportLease(handle.config.endpoint))
+            registry.start_all()
+        if gateway:
+            gateway.start()
+        print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        VEHICLE_REGISTRY.stop_all()
+        if gateway:
+            gateway.close()
+        registry.stop_all()
+        for lease in leases:
+            lease.close()
         server.server_close()
     return 0
 
