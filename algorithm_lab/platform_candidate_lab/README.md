@@ -74,6 +74,12 @@ modified by this change. Runtime subsequently ran two independently restarted
 engine and weight; see the linked handoff for measured results and limits. This
 does not update the old bundle or establish real PX4/UGV flight performance.
 
+A separate, versioned Ubuntu CPU archive containing the pinned compact-view
+source is recorded in [the 2026-10-30 offline bundle handoff](docs/OFFLINE_COMPACT_BUNDLE_20261030.md).
+The new archive is a D: ignored artifact, not a Git-tracked model download or
+Jetson package. Its package tests and integrity checks do not replace a real
+PX4 input-size/latency or flight acceptance run.
+
 ## Reproduce without a model
 
 From `algorithm_lab`:
