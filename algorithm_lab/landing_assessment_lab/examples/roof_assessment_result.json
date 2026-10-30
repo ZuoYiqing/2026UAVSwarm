@@ -1,0 +1,31 @@
+{
+  "contract_version": "landing_assessment_proposal_v0.1",
+  "assessment_id": "roof-contact-001",
+  "correlation": {
+    "mission_id": "M-REPLAY",
+    "request_id": "REQ-001",
+    "action_id": null,
+    "trace_id": null
+  },
+  "node_id": "UAV-01",
+  "goal_kind": "scene_ground_contact",
+  "status": "criteria_not_met",
+  "reason_codes": [
+    "GROUND_HEIGHT_MISMATCH"
+  ],
+  "evidence_refs": [
+    "fixture://roof-contact",
+    "fixture://roof-contact/s1",
+    "fixture://roof-contact/s2",
+    "fixture://roof-contact/s3"
+  ],
+  "source_kind": "synthetic_replay",
+  "timebase": "simulation_s",
+  "evaluated_at_s": 10.7,
+  "algorithm": "scene_ground_evidence_baseline/0.1.0",
+  "input_sha256": "92d609c47105510095348571cefb1c02ed2a8f792842f54477b5d421e49882e7",
+  "confidence": null,
+  "surface_safety": "unknown",
+  "execution_authorized": false,
+  "task_completed": false
+}
