@@ -503,7 +503,7 @@ def test_integrated_rejects_public_telemetry_as_health_evidence(tmp_path, monkey
     assert result["ready"] is False
 
 
-@pytest.mark.parametrize("failure", ["stale_heartbeat", "stale_position", "missing_position", "wrong_endpoint"])
+@pytest.mark.parametrize("failure", ["stale_heartbeat", "stale_position", "missing_position", "wrong_endpoint", "unexpected_node"])
 def test_integrated_requires_independent_runtime_samples(tmp_path, monkeypatch, failure):
     manifest = harness.load_manifest(MANIFEST_PATH)
     evidence = _runtime_telemetry(manifest)
@@ -514,8 +514,10 @@ def test_integrated_requires_independent_runtime_samples(tmp_path, monkeypatch, 
         uav02["position_timestamp"] = "2020-01-01T00:00:00Z"
     elif failure == "missing_position":
         uav02.pop("position_timestamp")
-    else:
+    elif failure == "wrong_endpoint":
         uav02["endpoint"] = manifest["vehicles"][0]["command_endpoint"]
+    else:
+        evidence["vehicles"].append({"node_id": "UAV-04"})
     result = _collect(tmp_path, monkeypatch, mode="integrated",
                       runtime_telemetry=evidence,
                       mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"))
