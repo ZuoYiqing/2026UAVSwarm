@@ -147,8 +147,19 @@ The ground facade caps full task/status replies at 8 MiB and model replies at
 The ground gateway returns 503 platform_link_unavailable/unknown on link failure.
 It never rewrites a platform task as failed. Frontends retain last-confirmed
 platform state and mark its observation stale. They must not automatically
-resubmit POST requests on reconnect. Existing /api/snapshot, /api/events and
-legacy action views remain unchanged; platform state is an additive namespace.
+resubmit POST requests on reconnect. Existing /api/events and legacy action views
+remain unchanged; platform state is an additive namespace. The follow-up public
+snapshot fusion preserves existing shapes and includes the remotely owned node.
+
+The authenticated `GET /api/platform/view` publishes platform-owned, calibrated
+read-only projections. Ground polls this independently of its heartbeat and
+merges a freshness-bounded cache into the existing snapshot/telemetry/vehicle
+feeds; it never opens UAV-02's transport or adds its origin offset again.
+Missing/stale views retain the node and last pose, mark public position unusable,
+and never rewrite task terminal state. Fake views cannot become PX4 evidence.
+Ground UAV-02 preflight forwards read-only HOME/RTL diagnostics to the owner and
+rechecks local 01/03 isolation; it remains non-authorizing. Exact fields, TTLs,
+errors, fixture and compatibility: `platform_view_contract_v1.md`.
 
 Runtime owns this contract/fixture and src/uav_runtime changes. Algorithm owns
 candidate service/model artifacts; Simulation owns process topology, sensors,
