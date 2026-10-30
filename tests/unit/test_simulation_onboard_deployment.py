@@ -25,6 +25,26 @@ def test_agent_cli_passes_simulation_run_id_and_runtime_config(tmp_path: Path) -
     sitl = onboard_deployment._agent_command(token_file, "simulation-run-123", "sitl")
     assert sitl[sitl.index("--execution-mode") + 1] == "sitl"
     assert sitl[sitl.index("--run-id") + 1] == "simulation-run-123"
+    assert "--candidate-url" not in sitl
+    with_model = onboard_deployment._agent_command(
+        token_file, "simulation-run-123", "sitl", "http://127.0.0.1:8872/candidate")
+    assert with_model[with_model.index("--candidate-url") + 1] == "http://127.0.0.1:8872/candidate"
+
+
+@pytest.mark.parametrize("url", [
+    "https://127.0.0.1:8872/candidate", "http://localhost:8872/candidate",
+    "http://example.org:8872/candidate", "http://user:pass@127.0.0.1:8872/candidate",
+    "http://127.0.0.1:8872/candidate?token=secret", "http://127.0.0.1:8872/candidate#frag",
+    "http://127.0.0.1/candidate", "http://127.0.0.1:0/candidate",
+    "http://127.0.0.1:8872/candidate\n",
+])
+def test_candidate_url_rejects_non_loopback_or_ambiguous_urls(url: str) -> None:
+    with pytest.raises(onboard_deployment.DeploymentError,
+                       match="candidate_url_requires_explicit_loopback"):
+        onboard_deployment._agent_command(Path("token"), "run", "sitl", url)
+    with pytest.raises(onboard_deployment.DeploymentError, match="candidate_url_requires_sitl"):
+        onboard_deployment._agent_command(Path("token"), "run", "fake",
+                                           "http://127.0.0.1:8872/candidate")
 
 
 @pytest.mark.parametrize("token", ["short", "a" * 31, "a" * 31 + " b"])
@@ -76,11 +96,15 @@ def test_sitl_start_uses_managed_run_without_flight_action(
     monkeypatch.setattr(onboard_deployment, "_entry",
                         lambda kind, process, runtime_dir, run_id: {"kind": kind, "node_id": f"UAV-02-{kind}"})
     state_path = tmp_path / "deployment.json"
-    assert onboard_deployment.start_sitl(token_file=token_file, state_path=state_path)["status"] == "process_ready"
+    assert onboard_deployment.start_sitl(token_file=token_file,
+        candidate_url="http://127.0.0.1:8872/candidate", state_path=state_path)["status"] == "process_ready"
     assert commands[0][commands[0].index("--execution-mode") + 1] == "sitl"
     assert commands[0][commands[0].index("--run-id") + 1] == "managed-run"
+    assert commands[0][commands[0].index("--candidate-url") + 1] == "http://127.0.0.1:8872/candidate"
     assert len(commands) == 2
-    assert json.loads(state_path.read_text(encoding="utf-8"))["execution_mode"] == "sitl"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["execution_mode"] == "sitl"
+    assert state["candidate_url"] == "http://127.0.0.1:8872/candidate"
 
 
 def test_sitl_start_failure_preserves_identity_without_signalling(

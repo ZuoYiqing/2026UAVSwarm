@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -91,8 +92,29 @@ def _validate_token_file(token_file: Path) -> None:
         raise DeploymentError("platform_token_file_missing_or_invalid")
 
 
-def _agent_command(token_file: Path, run_id: str, mode: str = "fake") -> list[str]:
-    return [
+def _validate_candidate_url(candidate_url: str | None) -> None:
+    if candidate_url is None:
+        return
+    if not isinstance(candidate_url, str) or not candidate_url or any(c.isspace() for c in candidate_url):
+        raise DeploymentError("candidate_url_requires_explicit_loopback")
+    try:
+        parsed = urllib.parse.urlsplit(candidate_url)
+        valid = (parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+                 and parsed.port is not None and parsed.port > 0
+                 and not parsed.username and not parsed.password
+                 and not parsed.query and not parsed.fragment)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise DeploymentError("candidate_url_requires_explicit_loopback")
+
+
+def _agent_command(token_file: Path, run_id: str, mode: str = "fake",
+                   candidate_url: str | None = None) -> list[str]:
+    _validate_candidate_url(candidate_url)
+    if mode != "sitl" and candidate_url is not None:
+        raise DeploymentError("candidate_url_requires_sitl")
+    command = [
         sys.executable, "-m", "uav_runtime.platform.server",
         "--node-id", "UAV-02", "--port", str(AGENT_PORT),
         "--store-dir", str(AGENT_DIR.resolve()),
@@ -101,6 +123,9 @@ def _agent_command(token_file: Path, run_id: str, mode: str = "fake") -> list[st
         "--vehicle-config", str(RUNTIME_VEHICLE_CONFIG.resolve()),
         "--run-id", run_id,
     ]
+    if candidate_url is not None:
+        command.extend(["--candidate-url", candidate_url])
+    return command
 
 
 def _entry(kind: str, process: subprocess.Popen[Any], runtime_dir: Path,
@@ -160,6 +185,7 @@ def inspect(state_path: Path = STATE_PATH) -> dict[str, Any]:
             "status": "process_ready" if valid else "not_ready",
             "run_id": state["run_id"], "node_id": "UAV-02",
             "execution_mode": state["execution_mode"],
+            "candidate_url_configured": bool(state.get("candidate_url")),
             "process_identity_valid": valid,
             "application_ports_open": ports_open,
             "agent_api_validated": False,
@@ -174,7 +200,8 @@ def inspect(state_path: Path = STATE_PATH) -> dict[str, Any]:
                 "reason": f"deployment_state_invalid:{type(exc).__name__}:{exc}"}
 
 
-def _start(*, token_file: Path, mode: str, state_path: Path) -> dict[str, Any]:
+def _start(*, token_file: Path, mode: str, state_path: Path,
+           candidate_url: str | None = None) -> dict[str, Any]:
     if mode not in {"fake", "sitl"}:
         raise DeploymentError("unsupported_execution_mode")
     if state_path.exists():
@@ -189,7 +216,7 @@ def _start(*, token_file: Path, mode: str, state_path: Path) -> dict[str, Any]:
     if not (harness.REPO_ROOT / "src/uav_runtime/platform/server.py").is_file():
         raise DeploymentError("runtime_platform_module_missing")
 
-    agent_command = _agent_command(token_file, run_id, mode)
+    agent_command = _agent_command(token_file, run_id, mode, candidate_url)
     link_state_path = PROXY_DIR / f"link_state.{run_id}.json"
     proxy_command = [
         sys.executable, str(Path(app_link_proxy.__file__).resolve()), "serve",
@@ -200,6 +227,7 @@ def _start(*, token_file: Path, mode: str, state_path: Path) -> dict[str, Any]:
     state: dict[str, Any] = {
         "version": "0.1", "run_id": run_id, "node_id": "UAV-02",
         "execution_mode": mode, "link_state_path": str(link_state_path.resolve()),
+        "candidate_url": candidate_url,
         "token_file": str(token_file.resolve()), "processes": [],
     }
     spawned: list[subprocess.Popen[Any]] = []
@@ -242,8 +270,10 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
     return _start(token_file=token_file, mode="fake", state_path=state_path)
 
 
-def start_sitl(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, Any]:
-    return _start(token_file=token_file, mode="sitl", state_path=state_path)
+def start_sitl(*, token_file: Path, candidate_url: str | None = None,
+               state_path: Path = STATE_PATH) -> dict[str, Any]:
+    return _start(token_file=token_file, mode="sitl", state_path=state_path,
+                  candidate_url=candidate_url)
 
 
 def _read_agent_status(token: str) -> tuple[int, dict[str, Any]]:
@@ -355,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     start_parser.add_argument("--token-file", type=Path, required=True)
     sitl_parser = subparsers.add_parser("start-sitl")
     sitl_parser.add_argument("--token-file", type=Path, required=True)
+    sitl_parser.add_argument("--candidate-url")
     subparsers.add_parser("status")
     subparsers.add_parser("stop-fake")
     subparsers.add_parser("stop-sitl")
@@ -366,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "start-fake":
             result = start_fake(token_file=args.token_file)
         elif args.command == "start-sitl":
-            result = start_sitl(token_file=args.token_file)
+            result = start_sitl(token_file=args.token_file, candidate_url=args.candidate_url)
         elif args.command == "stop-sitl":
             result = stop_sitl()
         elif args.command == "link":
