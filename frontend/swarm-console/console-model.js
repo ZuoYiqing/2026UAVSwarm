@@ -89,7 +89,7 @@
   function isFleetReady(fleet) {
     const enabled = asArray(fleet).filter((vehicle) => vehicle.enabled !== false);
     return enabled.length > 0 && enabled.every(
-      (vehicle) => vehicle.connected === true && vehicle.stale === false
+      (vehicle) => vehicle.connected === true && vehicle.stale === false && !vehicle.observationStale
     );
   }
 
@@ -97,6 +97,7 @@
     if (apiStatus !== "live") return { allowed: false, reason: "Runtime API 未连接" };
     if (!vehicle) return { allowed: false, reason: "没有已注册载具" };
     if (!vehicle.enabled) return { allowed: false, reason: `${vehicle.id} 未启用` };
+    if (vehicle.observationStale) return { allowed: false, reason: `${vehicle.id} 地面观测已过期，等待状态同步` };
     if (!vehicle.connected || vehicle.stale) return { allowed: false, reason: `${vehicle.id} 遥测离线或已过期` };
     if (!vehicle.endpoint) return { allowed: false, reason: `${vehicle.id} 缺少传输端点` };
     if (!Number.isInteger(vehicle.systemId) || !Number.isInteger(vehicle.componentId)) {
@@ -108,9 +109,8 @@
   function markFleetStale(fleet) {
     return asArray(fleet).map((vehicle) => ({
       ...vehicle,
-      connected: false,
-      stale: true,
-      connectionStatus: "stale",
+      // 地面不可达不是平台断线证据，保留最后上报的 connected / stale。
+      observationStale: true,
     }));
   }
 
@@ -120,7 +120,7 @@
       ...snapshot,
       vehicles: asArray(snapshot.vehicles).map((vehicle) => ({
         ...vehicle,
-        connected: false,
+        // 这是供三维消费的过期视图，不改写平台 connected 或原始缓存。
         telemetry: { ...(vehicle.telemetry || {}), stale: true },
       })),
     };
@@ -129,6 +129,9 @@
   function buildRuntimeRequest(vehicle, altitudeM, options = {}) {
     if (!vehicle) throw new Error("没有已注册载具");
     if (!vehicle.enabled) throw new Error(`${vehicle.id} 未启用`);
+    if (options.requireConnected !== false && vehicle.observationStale) {
+      throw new Error(`${vehicle.id} 地面观测已过期，等待状态同步`);
+    }
     if (!vehicle.endpoint) throw new Error(`${vehicle.id} 缺少传输端点`);
     if (!Number.isInteger(vehicle.systemId) || !Number.isInteger(vehicle.componentId)) {
       throw new Error(`${vehicle.id} 缺少 MAVLink identity`);

@@ -18,6 +18,8 @@ const navItems = [
 
 const ACTION_STORAGE_KEY = "swarm-console.pending-actions.v1";
 let vehicleContractModule;
+let platformObserver;
+let platformObserverSource;
 
 const state = {
   page: "overview",
@@ -39,6 +41,8 @@ const state = {
   apiLastError: null,
   runtimeHealth: null,
   lastProbeAt: null,
+  lastObservationAt: null,
+  observationStale: true,
   runtimeEventsLoaded: false,
   dataStatus: "checking",
   lastBackendResult: null,
@@ -50,6 +54,7 @@ const state = {
   agentStatus: null,
   simulationStatus: null,
   registryPayload: null,
+  platformControlledNodes: new Set(),
   skillsPayload: null,
   policyDecisions: [],
   recentActions: [],
@@ -91,7 +96,7 @@ function notify(title, body, color = "cyan") {
 function showStatusHelp() {
   notify(
     "状态来源",
-    "LIVE 表示 Runtime API 可达；STALE 表示保留最后快照；PX4 就绪按所选载具遥测判断。",
+    "浏览器到网关的 HTTP 可达不代表平台地面链路、任务或飞控就绪。STALE 保留最后上报状态，当前未知；重连只查询原请求，不自动重发。",
     "cyan"
   );
 }
@@ -143,7 +148,25 @@ function selectedAction() {
   );
 }
 
+function isPlatformControlled(vehicle = selectedVehicle()) {
+  // 已确认的执行归属在观测过期后仍保留，不能回退到旧地面动作路由。
+  return Boolean(vehicle && (platformObserver?.state.status?.node_id === vehicle.id
+    || state.platformControlledNodes.has(vehicle.id)));
+}
+
+function rememberPlatformOwnership(payload) {
+  const view = payload?.platform_view;
+  // 原公共路由的归属元数据独立于 status 到达顺序；fresh 不是动作许可。
+  if (view?.contract_version === "1.0" && typeof view.node_id === "string" && view.node_id) {
+    state.platformControlledNodes.add(view.node_id);
+  }
+}
+
 function actionPermission(actionType) {
+  if (isPlatformControlled()) {
+    return { allowed: false, reason: "所选节点由平台代理独占执行，旧地面动作入口禁用；请查看只读平台面板" };
+  }
+  if (state.observationStale) return { allowed: false, reason: "地面观测未同步，当前状态未知" };
   return window.SwarmConsoleModel.actionPermission(
     selectedVehicle(),
     state.apiStatus,
@@ -193,21 +216,114 @@ function applyApiSuccess(source, payload) {
 function applyApiFailure(source, error, notifyFailure = true) {
   // An HTTP error still proves the bridge is reachable; network and timeout
   // failures mean the browser cannot currently reach the Runtime API.
-  state.apiStatus = error.kind === "http" ? "live" : "offline";
+  state.apiStatus = ["http", "contract"].includes(error.kind) ? "live" : "offline";
   state.apiLastError = `${source}: ${error.message}`;
   if (source === "health" || state.apiStatus === "offline") {
     state.backendConnected = false;
   }
-  if (state.apiStatus === "offline") {
-    state.dataStatus = state.dataStatus === "live" ? "stale" : "unavailable";
-    state.fleet = window.SwarmConsoleModel.markFleetStale(state.fleet);
-    state.vehicleSnapshot = window.SwarmConsoleModel.markVehicleSnapshotStale(state.vehicleSnapshot);
-    postVehicleSnapshot();
+  if (state.apiStatus === "offline" || ["health", "snapshot", "snapshot-contract"].includes(source)) {
+    markObservationStale();
   }
   if (notifyFailure) {
     const title = state.apiStatus === "live" ? "Runtime API 返回错误" : "Runtime API 未连接";
     notify(title, state.apiLastError, state.apiStatus === "live" ? "red" : "amber");
   }
+}
+
+function markObservationStale() {
+  state.observationStale = true;
+  state.dataStatus = state.fleet.length || state.vehicleSnapshot ? "stale" : "unavailable";
+  state.fleet = window.SwarmConsoleModel.markFleetStale(state.fleet);
+  state.backendConnected = false;
+  state.linkIssues = null;
+  // 保留原始平台快照；仅发送给三维的派生视图标记 stale。
+  postVehicleSnapshot();
+}
+
+function vehicleObservationStatus(vehicle) {
+  if (!vehicle) return { label: "UNKNOWN", color: "amber" };
+  if (state.observationStale || vehicle.observationStale || vehicle.stale) {
+    return { label: "STALE · 当前未知", color: "amber" };
+  }
+  return vehicle.connected
+    ? { label: "在线", color: "green" }
+    : { label: "离线（平台上报）", color: "red" };
+}
+
+function armedObservation(vehicle) {
+  const last = vehicle?.armed === true ? "ARMED" : vehicle?.armed === false ? "DISARMED" : null;
+  const current = last && !state.observationStale && !vehicle.observationStale
+    && !vehicle.stale && vehicle.connected;
+  return {
+    label: current ? last : last ? `UNKNOWN · 最后上报 ${last}` : "UNKNOWN",
+    color: current && vehicle.armed === false ? "green" : "amber",
+  };
+}
+
+function observationNotice() {
+  const api = runtimeApiStatus();
+  return `HTTP（浏览器→网关）：${api.label}；平台观测：${dataSourceStatus().label}；`
+    + `最后完整新鲜状态接收：${state.lastObservationAt || "unknown"}。`
+    + (state.observationStale ? "任务/飞控仅保留最后确认值，当前未知；HTTP 不可达不等于平台任务失败，也不能证明平台地面链路已断。" : "")
+    + " 独立平台任务见 Agent Runtime 的只读平台面板，动作记录不等于任务结论。";
+}
+
+async function syncPlatformState() {
+  const api = window.SwarmRuntimeApi;
+  if (!window.SwarmPlatformObserver || !api?.platformStatus) return;
+  if (!platformObserver || platformObserverSource !== state.apiBaseUrl) {
+    platformObserver?.dispose();
+    platformObserver = window.SwarmPlatformObserver.createObserver(api);
+    platformObserverSource = state.apiBaseUrl;
+  }
+  await platformObserver.refresh();
+}
+
+async function refreshPlatformState() {
+  await syncPlatformState();
+  renderRuntimeUpdate();
+}
+
+function platformPanel() {
+  const observation = platformObserver?.state;
+  const status = observation?.status;
+  const task = observation?.task;
+  const fresh = observation?.observation === "live";
+  const groundLink = status?.ground_link;
+  const px4 = status?.platform_observation;
+  const mode = status?.execution_mode;
+  const label = observation?.observation?.toUpperCase() || "UNKNOWN";
+  const rows = observation?.events || [];
+  const field = (name, value) => `<tr><th>${esc(name)}</th><td>${esc(value ?? "unknown")}</td></tr>`;
+  return panel(`平台任务与链路（只读） ${badge(label, fresh ? "green" : "amber")}`, `
+    <div class="control-notes"><button class="button" onclick="refreshPlatformState()">刷新平台观测</button>
+      ${badge(mode === "fake" ? "FAKE · 非飞行证据" : mode === "sitl" ? "SITL · 不等于真机验收" : "模式 UNKNOWN", "amber")}
+      <span class="small">这里只查询状态，不提交任务、取消、reconcile 或发送 heartbeat。浏览器关闭不代表平台地面链路丢失。</span></div>
+    <table class="table"><tbody>
+      ${field("平台节点", status?.node_id)}
+      ${field("模型已配置（平台上报，不代表任务成功）", status?.model_configured)}
+      ${field("观测最后接收", observation?.lastReceivedAt)}
+      ${field("平台地面链路（最后上报）", groundLink?.state)}
+      ${field("平台收到地面心跳时间", groundLink?.last_received_at)}
+      ${field("心跳 age_ms（上报时）", groundLink?.age_ms)}
+      ${field("飞控观测 stale / sample_timestamp", px4 ? `${known(px4.stale)} / ${px4.sample_timestamp || "unknown"}` : null)}
+      ${field("boot_id", status?.boot_id)}${field("store_id", observation?.storeId)}${field("run_id", status?.run_id)}
+      ${field("事件已提交游标 / 平台检查点", status ? `${observation.cursor} / ${status.event_seq}` : null)}
+      ${field("active_task（平台最后上报）", status ? status.active_task?.task_id || "none" : null)}
+      ${field("task_id / task_version", task ? `${task.task_id} / ${task.task_version}` : null)}
+      ${field("execution_id", task?.execution_id)}
+      ${field(fresh ? "任务状态（平台确认）" : "任务状态（最后确认，当前未知）", task?.status)}
+      ${field("current_step", task?.current_step)}${field("failure_reason", task?.failure_reason)}
+    </tbody></table>
+    ${!fresh ? `<div class="small amber">平台观测未完成同步；保留最后确认值，不将任务改判失败。</div>` : ""}
+    ${observation?.error ? `<div class="inline-error">${esc(observation.error)}</div>` : ""}
+    ${observation?.storeChanged ? `<div class="small amber">持久存储已更换，游标按新 store_id 从 0 重建；旧记录不并入新来源。</div>` : ""}
+    ${observation?.restarted ? `<div class="small amber">平台进程已重启；同一存储继续使用原游标，不自动重放任务。</div>` : ""}
+    <details><summary>任务原始快照（最后确认）</summary><pre class="json">${esc(JSON.stringify(task || {status:"unknown"}, null, 2))}</pre></details>
+    ${observation?.previous ? `<details><summary>上一存储的最后确认记录（当前未知）</summary><pre class="json">${esc(JSON.stringify(observation.previous, null, 2))}</pre></details>` : ""}
+    <div class="small">事件窗口最多 100 条；seq 按 store_id 去重。同步从游标 GET 补收，历史回补不会触发动作。</div>
+    <table class="table"><thead><tr><th>seq</th><th>时间</th><th>类型</th><th>任务 / 版本</th><th>执行实例</th></tr></thead>
+      <tbody>${rows.length ? rows.map((event) => `<tr><td>${esc(event.seq)}</td><td>${esc(event.timestamp)}</td><td>${esc(event.event_type)}</td><td>${esc(`${event.task_id} / ${event.task_version}`)}</td><td>${esc(event.execution_id)}</td></tr>`).join("") : `<tr><td colspan="5">尚无已同步的平台事件</td></tr>`}</tbody></table>`);
 }
 
 function applyActionResult(payload, fallback = {}) {
@@ -254,7 +370,7 @@ function backendStatus(vehicle = selectedVehicle()) {
   if (state.apiStatus === "checking") {
     return { label: "探测中", color: "cyan" };
   }
-  if (state.apiStatus !== "live") {
+  if (state.apiStatus !== "live" || state.observationStale) {
     return { label: "未知", color: "amber" };
   }
   const selectedReady = vehicle
@@ -285,7 +401,7 @@ async function syncRuntimeEvents(options = {}) {
   try {
     const payload = await window.SwarmRuntimeApi.events(options.count || 30);
     if (!Array.isArray(payload)) {
-      throw new Error("事件接口返回的不是数组");
+      throw Object.assign(new Error("事件接口返回的不是数组"), { kind: "contract" });
     }
     const normalized = payload
       .slice()
@@ -302,6 +418,7 @@ async function syncRuntimeEvents(options = {}) {
     state.runtimeEventsLoaded = true;
     state.apiStatus = "live";
     state.apiLastError = null;
+    state.lastProbeAt = new Date().toISOString();
   } catch (error) {
     applyApiFailure("events", error, options.notifyFailure === true);
   }
@@ -339,6 +456,7 @@ async function probeRuntime(options = {}) {
 
 async function syncRuntimeState(options = {}) {
   if (state.stateSyncInFlight || !window.SwarmRuntimeApi) return;
+  const sourceBaseUrl = state.apiBaseUrl;
   state.stateSyncInFlight = true;
   try {
     const calls = {
@@ -355,12 +473,19 @@ async function syncRuntimeState(options = {}) {
   };
     const keys = Object.keys(calls);
     const results = await Promise.allSettled(Object.values(calls));
+    if (state.apiBaseUrl !== sourceBaseUrl) return; // 换来源后不收旧来源迟到的归属/快照。
     const resultsByKey = Object.fromEntries(keys.map((key, index) => [key, results[index]]));
     let successCount = 0;
     let firstError = null;
+    const criticalKeys = ["telemetry", "vehicleSnapshot", "registryPayload"];
+    const criticalStateFailed = criticalKeys.some((key) => resultsByKey[key]?.status !== "fulfilled");
     results.forEach((result, index) => {
     if (result.status === "fulfilled") {
-      state[keys[index]] = result.value;
+      if (["runtimeSnapshot", ...criticalKeys].includes(keys[index])) {
+        rememberPlatformOwnership(result.value);
+      }
+      // 关键快照一起更新，避免部分响应覆盖最后完整可信状态。
+      if (!criticalKeys.includes(keys[index])) state[keys[index]] = result.value;
       successCount += 1;
     } else if (!firstError) {
       firstError = result.reason;
@@ -369,20 +494,19 @@ async function syncRuntimeState(options = {}) {
 
     if (successCount > 0) {
     state.apiStatus = "live";
+    state.lastProbeAt = new Date().toISOString();
     state.apiLastError = successCount === keys.length ? null : `${keys.length - successCount} 个状态接口不可用`;
-    const criticalStateFailed = ["telemetry", "vehicleSnapshot", "registryPayload"]
-      .some((key) => resultsByKey[key]?.status !== "fulfilled");
     if (criticalStateFailed) {
-      state.fleet = window.SwarmConsoleModel.markFleetStale(state.fleet);
-      state.vehicleSnapshot = window.SwarmConsoleModel.markVehicleSnapshotStale(
-        state.vehicleSnapshot
-      );
-      state.backendConnected = false;
-      state.dataStatus = "stale";
+      markObservationStale();
       updateSelectedTelemetry();
-      postVehicleSnapshot();
       return;
     }
+    if (!Array.isArray(resultsByKey.telemetry.value?.nodes)
+      || !Array.isArray(resultsByKey.registryPayload.value?.vehicles)
+      || !Array.isArray(resultsByKey.vehicleSnapshot.value?.vehicles)) {
+      throw Object.assign(new Error("关键状态接口缺少 nodes/vehicles 数组，保留最后可信状态"), { kind: "contract" });
+    }
+    for (const key of criticalKeys) state[key] = resultsByKey[key].value;
     state.fleet = window.SwarmConsoleModel.mergeFleet(
       state.registryPayload,
       state.telemetry,
@@ -420,6 +544,9 @@ async function syncRuntimeState(options = {}) {
       : state.telemetry?.status === "stale"
         ? "stale"
         : "unavailable";
+    state.observationStale = state.dataStatus !== "live";
+    if (state.observationStale) markObservationStale();
+    else state.lastObservationAt = new Date().toISOString();
     updateSelectedTelemetry();
     postVehicleSnapshot();
     await recoverPendingActions();
@@ -468,8 +595,10 @@ function formatNumber(value, digits = 1, suffix = "") {
 
 function fleetSummary() {
   const total = state.fleet.length;
-  const online = state.fleet.filter((vehicle) => vehicle.connected && !vehicle.stale).length;
-  const armed = state.fleet.filter((vehicle) => vehicle.armed === true).length;
+  const online = state.observationStale ? "unknown" : state.fleet.filter((vehicle) => vehicle.connected && !vehicle.stale && !vehicle.observationStale).length;
+  const armed = !state.fleet.length || state.observationStale || state.fleet.some((vehicle) =>
+    vehicle.observationStale || vehicle.stale || !vehicle.connected || typeof vehicle.armed !== "boolean")
+    ? "unknown" : state.fleet.filter((vehicle) => vehicle.armed === true).length;
   return { total, online, armed };
 }
 
@@ -558,7 +687,7 @@ function vehicleTableRows() {
   return state.fleet.map((vehicle) => `
       <tr class="selectable-row ${vehicle.id === state.selectedUav ? "selected" : ""}" data-vehicle-id="${esc(vehicle.id)}">
         <td><b>${esc(vehicle.displayName)}</b></td>
-        <td>${badge(vehicle.connected ? "在线" : vehicle.stale ? "过期" : "离线", vehicle.connected ? "green" : vehicle.stale ? "amber" : "red")}</td>
+        <td>${badge(vehicleObservationStatus(vehicle).label, vehicleObservationStatus(vehicle).color)}</td>
         <td>${esc(`${vehicle.systemId ?? "-"}/${vehicle.componentId ?? "-"}`)}</td>
         <td>${esc(vehicle.activeAction || vehicle.flightMode || "--")}</td>
         <td>${esc(formatNumber(vehicle.altitudeM, 1, " m"))}</td>
@@ -576,7 +705,7 @@ function fleetPreview() {
       const row = Math.floor(index / 3);
       const left = 18 + column * 32;
       const top = 24 + row * 34;
-      const color = vehicle.connected ? "green" : vehicle.stale ? "amber" : "red";
+      const color = vehicleObservationStatus(vehicle).color;
       return `<button class="fleet-node ${color} ${vehicle.id === state.selectedUav ? "selected" : ""}" style="left:${left}%;top:${top}%" data-vehicle-id="${esc(vehicle.id)}">
         <span>${esc(vehicle.id)}</span><small>${esc(formatNumber(vehicle.altitudeM, 1, "m"))}</small>
       </button>`;
@@ -612,9 +741,11 @@ async function postVehicleSnapshot() {
     vehicleContractModule ||= import("./simulation-3d/src/vehicle-contract.js");
     const contract = await vehicleContractModule;
     if (document.getElementById("simulation-frame") !== frame) return;
-    const snapshot = state.vehicleSnapshot;
-    // Validate with the shared consumer contract, but forward the original
-    // Runtime object. Never use the normalizer's coordinate conversion here.
+    const snapshot = state.observationStale
+      ? window.SwarmConsoleModel.markVehicleSnapshotStale(state.vehicleSnapshot)
+      : state.vehicleSnapshot;
+    // 新鲜时原样转发；地面观测过期时仅标记派生视图 telemetry.stale。
+    // 不修改平台 connected、采样时间、坐标及原始缓存。
     contract.normalizeVehicleSnapshot(snapshot);
     state.simulationContractError = null;
     frame.contentWindow.postMessage(window.SwarmConsoleModel.createVehicleSnapshotMessage(snapshot), origin);
@@ -712,7 +843,7 @@ function pageTitle(title, subtitle, actions = "") {
     <h1>${esc(title)}</h1>
     <p>${esc(subtitle)}</p>
     <div class="page-actions">${actions}</div>
-  </div>`;
+  </div><div id="observation-notice" class="small amber">${esc(observationNotice())}</div>`;
 }
 
 function runtimeChain(compact = false) {
@@ -821,6 +952,8 @@ function sampleActionRequest() {
 
 function vehiclePage() {
   const vehicle = selectedVehicle();
+  const observation = vehicleObservationStatus(vehicle);
+  const armed = armedObservation(vehicle);
   return `<div class="page">
     ${pageTitle(`单机详情 / ${vehicle?.id || "未选择"}`, "飞控状态 · MAVLink identity · 实时遥测")}
     <div class="split-2" style="grid-template-columns:1fr 1fr">
@@ -831,10 +964,10 @@ function vehiclePage() {
       ${vehicleDiagramPanel()}
       <div class="grid">
         <div class="cols-4">
-          ${statusTile("运行状态", vehicle?.connected ? "在线" : "离线", `${vehicle?.flightMode || "--"} · ${formatNumber(vehicle?.groundSpeedMps, 1, " m/s")}`, vehicle?.connected ? "green" : "red")}
+          ${statusTile("运行状态（最后上报）", observation.label, `${vehicle?.flightMode || "--"} · ${formatNumber(vehicle?.groundSpeedMps, 1, " m/s")}`, observation.color)}
           ${statusTile("MAVLink Identity", `${vehicle?.systemId ?? "--"}/${vehicle?.componentId ?? "--"}`, vehicle?.endpoint || "无端点", "cyan")}
-          ${statusTile("武装状态", vehicle?.armed === true ? "ARMED" : vehicle?.armed === false ? "DISARMED" : "--", vehicle?.activeAction || "无执行中动作", vehicle?.armed ? "amber" : "green")}
-          ${statusTile("遥测新鲜度", vehicle?.stale ? "STALE" : vehicle?.connected ? "FRESH" : "--", formatNumber(vehicle?.telemetryAgeMs, 0, " ms"), vehicle?.stale ? "amber" : "green")}
+          ${statusTile("武装状态（最后上报）", armed.label, vehicle?.activeAction || "无执行中动作", armed.color)}
+          ${statusTile("遥测观测", observation.label, `平台采样：${vehicle?.lastSeen || "unknown"}`, observation.color)}
         </div>
         <div class="cols-4">
           ${telemetryCard("max_altitude_m", formatNumber(state.maxAltitude), "#36c7f4")}
@@ -849,15 +982,14 @@ function vehiclePage() {
 
 function vehicleDiagramPanel() {
   const vehicle = selectedVehicle();
-  const status = vehicle?.connected ? "在线" : vehicle?.stale ? "遥测过期" : "离线";
-  const statusColor = vehicle?.connected ? "green" : vehicle?.stale ? "amber" : "red";
+  const { label: status, color: statusColor } = vehicleObservationStatus(vehicle);
   return panel("单机模块健康", `<div class="vehicle-diagram">
     <div class="drone-arm a"></div><div class="drone-arm b"></div><div class="drone-body"></div>
     <div class="rotor r1"></div><div class="rotor r2"></div><div class="rotor r3"></div><div class="rotor r4"></div>
     <div class="module-tile m1"><b>PX4 飞控</b><br><span class="${statusColor}">${esc(status)}</span><br><span class="small">${esc(vehicle?.flightMode || "无模式数据")}</span></div>
     <div class="module-tile m2"><b>MAVLink</b><br><span class="${statusColor}">${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}</span><br><span class="small">${esc(vehicle?.endpoint || "无端点")}</span></div>
     <div class="module-tile m3"><b>Runtime Action</b><br><span class="cyan">${esc(vehicle?.activeAction || "IDLE")}</span><br><span class="small">${esc(vehicle?.lastError || "无错误")}</span></div>
-    <div class="module-tile m4"><b>电源遥测</b><br><span class="${typeof vehicle?.batteryPercent === "number" ? "green" : "amber"}">${esc(formatNumber(vehicle?.batteryPercent, 0, "%"))}</span><br><span class="small">${vehicle?.armed === true ? "ARMED" : vehicle?.armed === false ? "DISARMED" : "状态未知"}</span></div>
+    <div class="module-tile m4"><b>电源遥测</b><br><span class="${typeof vehicle?.batteryPercent === "number" ? "green" : "amber"}">${esc(formatNumber(vehicle?.batteryPercent, 0, "%"))}</span><br><span class="small">${armedObservation(vehicle).label}</span></div>
   </div>`);
 }
 
@@ -896,6 +1028,7 @@ function runtimePage() {
       ${metric("Planner", agent.planner_version || "--", agent.planner_kind || "unavailable", "green")}
       ${metric("LLM / 实执行", agent.llm_enabled ? "ON" : "OFF", agent.real_execution_enabled ? "REAL" : "DRY / FAKE", "cyan")}
     </div>
+    ${platformPanel()}
     ${runtimeChain()}
     <div class="split-2 h-fill" style="grid-template-columns:1fr .52fr">
       <div class="split-3">
@@ -980,8 +1113,10 @@ function telemetryDetail(vehicle, action) {
   return `<div class="telemetry-detail"><dl>
     <div><dt>node_id</dt><dd>${esc(vehicle?.id || "unknown")}</dd></div>
     <div><dt>endpoint</dt><dd>${esc(vehicle?.endpoint || "unknown")}</dd></div>
-    <div><dt>connected / stale</dt><dd>${esc(`${known(vehicle?.connected)} / ${known(vehicle?.stale)}`)}</dd></div>
-    <div><dt>armed</dt><dd>${esc(known(vehicle?.armed))}</dd></div>
+    <div><dt>connected / stale（平台最后上报）</dt><dd>${esc(`${known(vehicle?.connected)} / ${known(vehicle?.stale)}`)}</dd></div>
+    <div><dt>地面观测</dt><dd>${esc(vehicleObservationStatus(vehicle).label)}</dd></div>
+    <div><dt>最后完整新鲜状态接收</dt><dd>${esc(state.lastObservationAt || "unknown")}</dd></div>
+    <div><dt>armed（最后上报）</dt><dd>${esc(armedObservation(vehicle).label)}</dd></div>
     <div><dt>flight mode</dt><dd>${esc(vehicle?.flightMode || "unknown")}</dd></div>
     <div><dt>目标高度</dt><dd>${esc(known(targetAltitude, " m"))}</dd></div>
     <div><dt>相对高度</dt><dd>${esc(known(vehicle?.altitudeM, " m"))}</dd></div>
@@ -992,8 +1127,8 @@ function telemetryDetail(vehicle, action) {
     <div><dt>max observed (UI session)</dt><dd>${esc(known(stats.maxAltitudeTelemetry, " m"))}</dd></div>
     <div><dt>threshold_reached</dt><dd>${esc(known(stats.thresholdReached))}</dd></div>
     <div><dt>sample time</dt><dd>${esc(vehicle?.lastSeen || "unknown")}</dd></div>
-    <div><dt>sample age</dt><dd>${esc(known(vehicle?.telemetryAgeMs, " ms"))}</dd></div>
-    <div><dt>action status</dt><dd>${esc(action?.status || "unknown")}</dd></div>
+    <div><dt>sample age（上报时）</dt><dd>${esc(known(vehicle?.telemetryAgeMs, " ms"))}</dd></div>
+    <div><dt>action status（最后确认）</dt><dd>${esc(action?.status || "unknown")}</dd></div>
   </dl><table class="table ack-table"><thead><tr><th>ACK stage</th><th>结果</th><th>时间</th></tr></thead><tbody>${ackRows}</tbody></table></div>`;
 }
 
@@ -1025,7 +1160,7 @@ function backendPage() {
     </div>
     <div class="split-2 h-fill" style="grid-template-columns:1.12fr .88fr">
       <div class="grid backend-action-column scroll">
-        ${panel("指定节点动作", `<div class="form-grid"><div class="field"><label for="action-node">目标载具</label><select id="action-node" onchange="selectVehicle(this.value)">${state.fleet.map((item) => `<option value="${esc(item.id)}" ${item.id === state.selectedUav ? "selected" : ""}>${esc(item.id)} · SYS ${item.systemId ?? "-"}</option>`).join("")}</select></div><div class="field"><label for="action-altitude">目标相对高度 altitude_m</label><input id="action-altitude" type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>MAVLink Identity</label><input value="${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}" readonly></div></div><div class="action-buttons"><button class="button" onclick="checkBackend()" ${!vehicle || state.apiStatus !== "live" ? "disabled" : ""}>Check Backend</button><button class="button primary" data-action="takeoff" onclick="runOperationalTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>正式起飞</button><button class="button" data-action="smoke" onclick="runSmokeTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>Smoke Test</button><button class="button warn" data-action="land" onclick="runLand()" ${!lifecycleReady || !landPermission.allowed ? "disabled" : ""}>受控降落</button></div><div class="control-notes">${badge(lifecycleReady ? "LIFECYCLE 1.1" : "正式动作接口暂不支持", lifecycleReady ? "green" : "amber")}<span class="small">TAKEOFF：${esc(takeoffPermission.reason)}</span><span class="small">LAND：${esc(landPermission.reason)}</span><span class="small">保持：${esc(holdState)}</span><span class="small">Smoke 为独立阈值测试；本控制台不请求自动降落。</span></div>`)}
+        ${panel("指定节点动作", `<div class="form-grid"><div class="field"><label for="action-node">目标载具</label><select id="action-node" onchange="selectVehicle(this.value)">${state.fleet.map((item) => `<option value="${esc(item.id)}" ${item.id === state.selectedUav ? "selected" : ""}>${esc(item.id)} · SYS ${item.systemId ?? "-"}</option>`).join("")}</select></div><div class="field"><label for="action-altitude">目标相对高度 altitude_m</label><input id="action-altitude" type="number" min="1" max="120" step="0.5" value="${state.targetAltitude.toFixed(1)}" onchange="setTargetAltitude(this.value)"></div><div class="field"><label>MAVLink Identity</label><input value="${esc(`${vehicle?.systemId ?? "-"}/${vehicle?.componentId ?? "-"}`)}" readonly></div></div><div class="action-buttons"><button class="button" onclick="checkBackend()" ${!vehicle || state.apiStatus !== "live" || isPlatformControlled(vehicle) ? "disabled" : ""}>Check Backend</button><button class="button primary" data-action="takeoff" onclick="runOperationalTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>正式起飞</button><button class="button" data-action="smoke" onclick="runSmokeTakeoff()" ${!lifecycleReady || !takeoffPermission.allowed ? "disabled" : ""}>Smoke Test</button><button class="button warn" data-action="land" onclick="runLand()" ${!lifecycleReady || !landPermission.allowed ? "disabled" : ""}>受控降落</button></div><div class="control-notes">${badge(lifecycleReady ? "LIFECYCLE 1.1" : "正式动作接口暂不支持", lifecycleReady ? "green" : "amber")}<span class="small">TAKEOFF：${esc(takeoffPermission.reason)}</span><span class="small">LAND：${esc(landPermission.reason)}</span><span class="small">保持：${esc(holdState)}</span><span class="small">Smoke 为独立阈值测试；本控制台不请求自动降落。</span></div>`)}
         ${panel(`动作生命周期 ${liveAction ? badge(liveAction.status.toUpperCase(), lifecycleColor(liveAction.status)) : badge("NO ACTION", "amber")}`, `${actionLifecycleView(liveAction)}<div class="action-identity"><span>node ${esc(liveAction?.node_id || "unknown")}</span><span>request ${esc(liveAction?.request_id || "unknown")}</span><span>action ${esc(liveAction?.action_id || "unknown")}</span><span>trace ${esc(liveAction?.trace_id || "unknown")}</span></div>${liveAction?.client_status ? `<div class="small">${esc(liveAction.client_status)}</div>` : ""}${liveAction?.failure_reason ? `<div class="inline-error">${esc(liveAction.failure_reason)}</div>` : ""}`)}
         ${panel(`实时遥测与动作证据 ${badge(state.dataStatus.toUpperCase(), dataSourceStatus().color)}`, telemetryDetail(vehicle, liveAction))}
         ${panel("所选节点 Action JSON", `<pre class="json">${esc(JSON.stringify(liveAction || { data_source: "unavailable", node_id: vehicle?.id || null }, null, 2))}</pre>`, "scroll action-json-panel")}
@@ -1039,7 +1174,7 @@ function backendPage() {
 function adapterTopology() {
   const adapters = [
     ["Runtime HTTP", state.apiStatus === "live" ? "LIVE" : "OFFLINE", state.runtimeHealth?.version || "--", state.apiStatus === "live" ? "green" : "amber"],
-    ["MAVLink Adapter", state.backendConnected ? "CONNECTED" : "IDLE", "px4_sitl", state.backendConnected ? "green" : "amber"],
+    ["MAVLink Adapter", state.observationStale ? "UNKNOWN" : state.backendConnected ? "CONNECTED" : "IDLE", "px4_sitl", !state.observationStale && state.backendConnected ? "green" : "amber"],
     ["Vehicle Registry", `${state.fleet.length} NODES`, state.registryPayload?.source || "--", "cyan"],
   ];
   return `<div class="cols-4" style="grid-template-columns:repeat(3,1fr)">${adapters.map((a) => `<div class="chain-card"><h3>${esc(a[0])}</h3>${badge(a[1], a[3])}<br><span class="small">${esc(a[2])}</span></div>`).join("")}</div>`;
@@ -1047,6 +1182,10 @@ function adapterTopology() {
 
 async function checkBackend(options = {}) {
   const vehicle = selectedVehicle();
+  if (isPlatformControlled(vehicle)) {
+    notify("旧 Backend 入口禁用", "所选节点由平台代理独占执行；平台面板仅供观测。", "amber");
+    return null;
+  }
   if (!vehicle) {
     notify("无法检查 Backend", "Runtime 没有已注册载具。", "amber");
     return null;
@@ -1082,7 +1221,14 @@ function saveApiBaseUrl(value) {
     return;
   }
   state.apiBaseUrl = window.SwarmRuntimeApi.setConfiguredBaseUrl(value);
+  platformObserver?.dispose();
+  platformObserver = null;
+  platformObserverSource = null;
   state.apiStatus = "checking";
+  state.dataStatus = "checking";
+  state.observationStale = true;
+  state.lastObservationAt = null;
+  state.lastProbeAt = null;
   state.runtimeHealth = null;
   state.lastBackendResult = null;
   state.backendConnected = false;
@@ -1092,6 +1238,22 @@ function saveApiBaseUrl(value) {
   state.fleet = [];
   state.nodeStats = {};
   state.vehicleSnapshot = null;
+  state.runtimeSnapshot = null;
+  state.telemetry = null;
+  state.registryPayload = null;
+  state.platformControlledNodes.clear();
+  state.agentStatus = null;
+  state.simulationStatus = null;
+  state.runtimeEvents = [];
+  state.runtimeEventsLoaded = false;
+  state.selectedUav = null;
+  state.missionCount = null;
+  state.linkIssues = null;
+  state.policyBlocks = null;
+  state.lastActionResult = null;
+  state.lastPlanResult = null;
+  updateSelectedTelemetry();
+  events.splice(0);
   notify("Runtime API 已更新", state.apiBaseUrl, "cyan");
   render();
   probeRuntime();
@@ -1187,7 +1349,7 @@ function simulationPage() {
         ${panel("仿真环境", `<div class="cap-grid" style="grid-template-columns:repeat(2,1fr)">
           ${simCard("Gazebo", simulation.reason || "独立状态探测", simulation.status || "unknown", simulation.status === "running" ? "green" : "amber")}
           ${simCard("PX4 SITL + Gazebo", "飞控闭环验证", px4.label, px4.color)}
-          ${simCard("PX4 节点", "Runtime Registry", `${summary.online}/${summary.total} 在线`, summary.online ? "green" : "amber")}
+          ${simCard("PX4 节点", "Runtime Registry", `${summary.online}/${summary.total} 在线`, typeof summary.online === "number" && summary.online > 0 ? "green" : "amber")}
           ${simCard("Cesium", "vehicle snapshot 可视化", state.simulationReady ? "CONNECTED" : "独立服务", state.simulationReady ? "green" : "cyan")}
         </div>`)}
         ${panel(`仿真状态 ${badge(String(simulation.status || "unknown").toUpperCase(), simulation.status === "running" ? "green" : "amber")}`, `<table class="table"><tr><th>来源</th><th>注册</th><th>启用</th><th>连接</th><th>过期</th></tr><tr><td>${esc(simulation.source || "runtime_state_store")}</td><td>${simulation.total_registered_nodes ?? "--"}</td><td>${simulation.total_enabled_nodes ?? "--"}</td><td>${simulation.connected_nodes ?? "--"}</td><td>${simulation.stale_nodes ?? "--"}</td></tr></table>`)}
@@ -2040,6 +2202,8 @@ function updatePageInPlace() {
   if (emptyNote) emptyNote.hidden = state.fleet.length > 0;
   const telemetry = document.getElementById("selected-telemetry");
   if (telemetry) telemetry.innerHTML = telemetrySummary();
+  const notice = document.getElementById("observation-notice");
+  if (notice) notice.textContent = observationNotice();
   const summary = fleetSummary();
   document.querySelectorAll("[data-metric='online']").forEach((node) => {
     node.textContent = `${summary.online}/${summary.total}`;
@@ -2057,7 +2221,9 @@ function topbar() {
   const dataSource = dataSourceStatus();
   const summary = fleetSummary();
   const now = new Date();
-  const fleetState = state.apiStatus === "checking"
+  const fleetState = state.observationStale
+    ? (summary.total ? "STALE" : "UNKNOWN")
+    : state.apiStatus === "checking"
     ? "检查中"
     : summary.total > 0 && summary.online === summary.total
       ? "HEALTHY"
@@ -2071,11 +2237,11 @@ function topbar() {
     <div class="brand"><div class="mark"></div><div class="brand-title">2026UAVSwarm Console</div></div>
     <div class="top-pill profile-pill">Ground Profile</div>
     <div class="top-pill">Fleet Telemetry<strong class="${state.backendConnected ? "green" : "amber"}">${fleetState}</strong></div>
-    <div class="top-pill">在线节点<strong>${summary.online} / ${summary.total}</strong></div>
+    <div class="top-pill">新鲜在线节点<strong>${state.observationStale ? "unknown" : summary.online} / ${summary.total}</strong></div>
     <div class="top-pill">目标载具<strong>${esc(state.selectedUav || "--")}</strong></div>
-    <div class="top-pill">当前 Action<strong>${esc(state.currentAction)}</strong></div>
-    <div class="top-pill">Runtime API<strong class="${api.color}">${api.label}</strong></div>
-    <div class="top-pill">数据源<strong class="${dataSource.color}">${dataSource.label}</strong></div>
+    <div class="top-pill">${state.observationStale || state.lifecycleSupported !== true ? "最后确认 Action" : "当前 Action"}<strong>${esc(state.observationStale && state.currentAction === "IDLE" ? "UNKNOWN" : state.currentAction)}</strong></div>
+    <div class="top-pill">HTTP（浏览器→网关）<strong class="${api.color}">${api.label}</strong></div>
+    <div class="top-pill">平台观测<strong class="${dataSource.color}">${dataSource.label}</strong></div>
     <div class="top-actions">
       <button class="icon-btn" title="三维态势" onclick="setPage('twin')">3D</button><button class="icon-btn" title="状态说明" onclick="showStatusHelp()">?</button><button class="icon-btn" title="刷新 Runtime" onclick="probeRuntime({notifyUser:true})">R</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
@@ -2120,6 +2286,7 @@ function route() {
 
 render();
 probeRuntime();
+void syncPlatformState();
 
 app.addEventListener("click", (event) => {
   const target = event.target.closest("[data-vehicle-id]");
@@ -2127,6 +2294,11 @@ app.addEventListener("click", (event) => {
 });
 
 function renderRuntimeUpdate() {
+  // 状态提示独立更新，即使正在编辑输入框也不能隐藏断联。
+  const topbarSlot = document.getElementById("slot-topbar");
+  if (topbarSlot) topbarSlot.innerHTML = topbar();
+  const notice = document.getElementById("observation-notice");
+  if (notice) notice.textContent = observationNotice();
   if (state.page === "twin") {
     postVehicleSnapshot();
     // 还要做一次**原地**更新。
@@ -2195,3 +2367,9 @@ setInterval(async () => {
   await syncRuntimeEvents({ notifyFailure: false });
   renderRuntimeUpdate();
 }, 5000);
+
+// 独立平台命名空间不借用旧 snapshot，也不以旧 health/Telemetry 的状态替代。
+setInterval(async () => {
+  await syncPlatformState();
+  renderRuntimeUpdate();
+}, 3000);

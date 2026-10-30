@@ -1,5 +1,10 @@
 # Frontend Runtime API Contract
 
+Runtime/Simulation 只读诊断补充（2026-10-30）：
+`GET /api/simulation/runtime-telemetry` 供 integrated health 使用，不替代前端的
+`telemetry/latest` 或快照，也不增加前端动作权限。源字段、版本/时间、fixture
+及导出方式见 [Runtime telemetry health v1.0](runtime_telemetry_health_contract_v1.md)。
+
 ## 1. 前端位置和启动
 
 前端本地路径：
@@ -149,6 +154,16 @@ Missing or stale evidence is `unknown`, never `ready`. The Registry defaults to
 the manifest endpoints `14540/14541/14542`. Each node has one shared MAVLink
 session/RX owner; command ACK and telemetry are dispatched inside Runtime instead
 of using competing receivers.
+
+In the single-platform topology, the ground process excludes UAV-02 and uses
+the authenticated platform's read-only `GET /api/platform/view` producer to
+merge that node into these same public feeds. Ground public snapshot reads
+use cache only. Last-known nodes/poses survive link loss with explicit stale
+and unusable-public-position flags; no browser coordinate offset is needed.
+UAV-02 preflight is forwarded to its owning session and also checks ground-owned
+01/03 isolation. This is diagnostics, never flight permission. See
+`platform_view_contract_v1.md` and `fixtures/platform_view_v1.json` for fields,
+independent freshness rules, errors and a producer-tested example.
 
 ## 12. Multi-Vehicle Runtime v0.1.1 Hardening
 
