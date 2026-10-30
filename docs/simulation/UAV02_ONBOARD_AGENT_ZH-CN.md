@@ -56,17 +56,35 @@ run_id；fake 停止复用 harness 的 SIGTERM→超时身份复核→SIGKILL �
 `start-fake` 只传不含 world/目标真值的只读 `config/vehicles.sitl.json` 给 Agent，
 并对它与相机版 manifest 的 sysid/endpoint 做一致性检查。
 
-**当前编排器不提供 SITL Agent 的自动 start/stop。** 空的 active_task 不足以证明
-飞机在地面且已上锁；在 Runtime 给出新鲜、单一会话来源的 landed/disarmed 证据
-并由集成方验证安全停止前，不得为追求进度改用 fake 停止路径处理 SITL 进程。
-Runtime 固定的 `GET /api/platform/status` 含 `execution_mode`、`run_id`、
-`platform_observation` 和 `safe_to_stop`。集成方手动启动 SITL Agent 时必须显式
-传 `--execution-mode sitl --vehicle-config <同一 checkout 的 config/vehicles.sitl.json>
---run-id <当前 harness run_id>`；地面 Runtime 同时使用 `--exclude-node UAV-02`
-及 `--platform-url http://127.0.0.1:8767`。停止前只接受同一 run_id、
-`execution_mode=sitl`、`platform_observation.source=px4_telemetry`、观测未过期、
-`active_task=null` 且 `safe_to_stop=true`，并独立核对 UAV-02 落地/上锁及进程
-身份。fake 的 `safe_to_stop` 不能证明真实飞机安全。此手动流程尚未实飞验收。
+编排器现提供 `start-sitl` / `stop-sitl` 的受管入口；这只是进程生命周期，
+**尚未经过真实三机 SITL 启停验收**。必须先在同一集成 checkout 启动相机版
+harness，并核对当前 run_id、三机进程身份、资源余量和 14541 唯一接收者。
+`start-sitl` 复用 manifest/Runtime 配置映射及受管进程身份检查，向平台 Agent
+传 `--execution-mode sitl --run-id <当前 harness run_id>`，不发飞行命令。
+
+```bash
+python3 simulation/px4_gazebo/onboard_deployment.py start-sitl \
+  --token-file .runtime/px4_gazebo/platform.token
+python3 simulation/px4_gazebo/onboard_deployment.py status
+# 飞行与最终安全观测由集成窗口执行；只在落地、上锁且无活动任务后：
+python3 simulation/px4_gazebo/onboard_deployment.py stop-sitl
+```
+
+空的 active_task 不足以证明飞机在地面且已上锁。`stop-sitl` 先把受管
+ground→Agent 应用代理置为 `down`，等待地面租约超过 3 秒失联，再绕过代理
+直连本机 8766 的 bearer 认证只读 status。它要求同一 run_id、SITL 模式、
+`ground_link.state=lost`、`active_task=null`、`safe_to_stop=true`，以及来源为
+`px4_telemetry`、位置采样不超过 1.5 秒、landed_fresh、armed=false、
+landed_state=1 的观测。任何条件不满足都保留进程并拒绝信号；成功后仍由
+harness 复核 PID/PGID/starttime/executable/cmdline/cwd/run_id，再执行有序
+SIGTERM→超时 SIGKILL。重复停止安全。启动中途出错的 SITL 进程不会自动清理，
+保留状态供人工核验，不能借 fake 停止路径绕过。受管代理之外持 token 的直连
+调用者不在此编排窗口支持范围，集成方须保证没有此类并发发令者。
+地面 Runtime 同时使用 `--exclude-node UAV-02`、
+`--platform-url http://127.0.0.1:8767` 与相同的 `--run-id`。
+Runtime 的 `GET /api/platform/status` 提供上述停机证据；fake 模式的
+`safe_to_stop` 不能证明真实飞机安全。集成方仍需旁路核对 Gazebo 实际落地，
+并记录关停后的进程、world 与端口状态。新受管流程尚未实飞验收。
 
 ## 传感器与评估真值
 

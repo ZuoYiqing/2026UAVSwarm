@@ -1,7 +1,6 @@
-"""Manage one fake-mode platform Agent and its application-only link proxy.
+"""Manage one platform Agent and its application-only link proxy.
 
-SITL deployment is planned but deliberately cannot be stopped here until a
-fresh landed/disarmed proof is available from the sole Runtime receiver.
+SITL stop requires fresh landed/disarmed proof from the sole Runtime receiver.
 No command in this module binds a MAVLink endpoint or sends a flight action.
 """
 from __future__ import annotations
@@ -13,17 +12,20 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 try:
     from . import app_link_proxy, harness, onboard_topology
-    from .evidence import atomic_json
+    from .evidence import atomic_json, timestamp_seconds
+    from .runtime_evidence import NoRedirect
 except ImportError:  # Direct script execution.
     import app_link_proxy  # type: ignore
     import harness  # type: ignore
     import onboard_topology  # type: ignore
-    from evidence import atomic_json  # type: ignore
+    from evidence import atomic_json, timestamp_seconds  # type: ignore
+    from runtime_evidence import NoRedirect  # type: ignore
 
 
 STATE_PATH = harness.RUNTIME_ROOT / "onboard_deployment_state.json"
@@ -89,13 +91,13 @@ def _validate_token_file(token_file: Path) -> None:
         raise DeploymentError("platform_token_file_missing_or_invalid")
 
 
-def _agent_command(token_file: Path, run_id: str) -> list[str]:
+def _agent_command(token_file: Path, run_id: str, mode: str = "fake") -> list[str]:
     return [
         sys.executable, "-m", "uav_runtime.platform.server",
         "--node-id", "UAV-02", "--port", str(AGENT_PORT),
         "--store-dir", str(AGENT_DIR.resolve()),
         "--token-file", str(token_file.resolve()),
-        "--execution-mode", "fake",
+        "--execution-mode", mode,
         "--vehicle-config", str(RUNTIME_VEHICLE_CONFIG.resolve()),
         "--run-id", run_id,
     ]
@@ -172,7 +174,9 @@ def inspect(state_path: Path = STATE_PATH) -> dict[str, Any]:
                 "reason": f"deployment_state_invalid:{type(exc).__name__}:{exc}"}
 
 
-def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, Any]:
+def _start(*, token_file: Path, mode: str, state_path: Path) -> dict[str, Any]:
+    if mode not in {"fake", "sitl"}:
+        raise DeploymentError("unsupported_execution_mode")
     if state_path.exists():
         raise DeploymentError("deployment_state_already_exists")
     simulation, _manifest = _managed_harness()
@@ -185,7 +189,7 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
     if not (harness.REPO_ROOT / "src/uav_runtime/platform/server.py").is_file():
         raise DeploymentError("runtime_platform_module_missing")
 
-    agent_command = _agent_command(token_file, run_id)
+    agent_command = _agent_command(token_file, run_id, mode)
     link_state_path = PROXY_DIR / f"link_state.{run_id}.json"
     proxy_command = [
         sys.executable, str(Path(app_link_proxy.__file__).resolve()), "serve",
@@ -195,7 +199,7 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
     environment = {**os.environ, "PYTHONPATH": str(harness.REPO_ROOT / "src")}
     state: dict[str, Any] = {
         "version": "0.1", "run_id": run_id, "node_id": "UAV-02",
-        "execution_mode": "fake", "link_state_path": str(link_state_path.resolve()),
+        "execution_mode": mode, "link_state_path": str(link_state_path.resolve()),
         "token_file": str(token_file.resolve()), "processes": [],
     }
     spawned: list[subprocess.Popen[Any]] = []
@@ -215,6 +219,12 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
         app_link_proxy.set_state(link_state_path, run_id=run_id, mode="up")
         return inspect(state_path)
     except Exception:
+        if mode == "sitl" and spawned:
+            # Never signal a SITL receiver on startup failure without a fresh
+            # landed/disarmed proof. Preserve captured identity for recovery.
+            state["unverified_pids"] = [process.pid for process in spawned[len(state["processes"]):]]
+            atomic_json(state_path, state)
+            raise DeploymentError("sitl_startup_failed_manual_intervention")
         if len(spawned) != len(state["processes"]):
             state["unverified_pids"] = [process.pid for process in spawned[len(state["processes"]):]]
             atomic_json(state_path, state)
@@ -226,6 +236,88 @@ def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, 
                 raise DeploymentError("startup_cleanup_identity_or_exit_failure")
         state_path.unlink(missing_ok=True)
         raise
+
+
+def start_fake(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, Any]:
+    return _start(token_file=token_file, mode="fake", state_path=state_path)
+
+
+def start_sitl(*, token_file: Path, state_path: Path = STATE_PATH) -> dict[str, Any]:
+    return _start(token_file=token_file, mode="sitl", state_path=state_path)
+
+
+def _read_agent_status(token: str) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{AGENT_PORT}/api/platform/status", method="GET",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=2) as response:
+        data = response.read(65537)
+        if len(data) > 65536:
+            raise DeploymentError("sitl_stop_status_too_large")
+        value = json.loads(data)
+        if not isinstance(value, dict):
+            raise DeploymentError("sitl_stop_status_invalid")
+        return response.status, value
+
+
+def _sitl_safe_to_stop(state: dict[str, Any], *, sleep=time.sleep) -> None:
+    if state.get("unverified_pids"):
+        raise DeploymentError("unverified_process_requires_manual_intervention")
+    run_id = state.get("run_id")
+    current = harness.read_state() or {}
+    if not run_id or current.get("run_id") != run_id:
+        raise DeploymentError("managed_simulation_run_mismatch")
+    processes = state.get("processes", [])
+    if (not isinstance(processes, list) or len(processes) != 2
+            or any(not isinstance(row, dict) for row in processes)
+            or {(row.get("node_id"), row.get("kind")) for row in processes}
+            != {("UAV-02-agent", "agent"), ("UAV-02-link", "link")}):
+        raise DeploymentError("deployment_process_roles_invalid")
+    decisions = harness._validate_processes(processes, run_id=run_id)
+    if len(decisions) != 2 or any(row.code != harness.IDENTITY_MATCH for row in decisions):
+        raise DeploymentError("deployment_process_identity_invalid")
+    link_path = Path(state["link_state_path"]).resolve()
+    if link_path != (PROXY_DIR / f"link_state.{run_id}.json").resolve():
+        raise DeploymentError("link_state_path_mismatch")
+    app_link_proxy.set_state(link_path, run_id=run_id, mode="down")
+    sleep(3.2)  # Ground lease must expire before observing the final stop state.
+    token_file = Path(state["token_file"])
+    _validate_token_file(token_file)
+    try:
+        code, status = _read_agent_status(token_file.read_text(encoding="utf-8").strip())
+    except Exception as exc:
+        raise DeploymentError("sitl_stop_status_unavailable") from exc
+    observation = status.get("platform_observation") or {}
+    try:
+        sample_age = time.time() - timestamp_seconds(observation.get("sample_timestamp"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DeploymentError("sitl_stop_requires_fresh_landed_disarmed_evidence") from exc
+    if (code != 200 or status.get("contract_version") != "1.0"
+            or status.get("node_id") != "UAV-02" or status.get("run_id") != run_id
+            or status.get("execution_mode") != "sitl" or status.get("safe_to_stop") is not True
+            or (status.get("ground_link") or {}).get("state") != "lost"
+            or status.get("active_task") is not None or observation.get("source") != "px4_telemetry"
+            or observation.get("stale") is not False or observation.get("landed_fresh") is not True
+            or observation.get("armed") is not False
+            or type(observation.get("landed_state")) is not int or observation["landed_state"] != 1
+            or not -0.1 <= sample_age <= 1.5):
+        raise DeploymentError("sitl_stop_requires_fresh_landed_disarmed_evidence")
+
+
+def stop_sitl(state_path: Path = STATE_PATH, *, sleep=time.sleep) -> dict[str, Any]:
+    if not state_path.is_file():
+        return {"status": "stopped", "idempotent": True}
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if state.get("execution_mode") != "sitl":
+        raise DeploymentError("not_a_sitl_deployment")
+    _sitl_safe_to_stop(state, sleep=sleep)
+    decisions = harness._terminate_process_groups(state["processes"], run_id=state["run_id"])
+    if any(row.code != harness.PROCESS_EXITED for row in decisions):
+        raise DeploymentError("stop_refused_process_identity_or_exit_failure")
+    state_path.unlink()
+    return {"status": "stopped", "idempotent": False, "run_id": state["run_id"]}
 
 
 def stop_fake(state_path: Path = STATE_PATH) -> dict[str, Any]:
@@ -261,8 +353,11 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     start_parser = subparsers.add_parser("start-fake")
     start_parser.add_argument("--token-file", type=Path, required=True)
+    sitl_parser = subparsers.add_parser("start-sitl")
+    sitl_parser.add_argument("--token-file", type=Path, required=True)
     subparsers.add_parser("status")
     subparsers.add_parser("stop-fake")
+    subparsers.add_parser("stop-sitl")
     link_parser = subparsers.add_parser("link")
     link_parser.add_argument("--mode", choices=sorted(app_link_proxy.MODES), required=True)
     link_parser.add_argument("--delay-ms", type=int, default=0)
@@ -270,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "start-fake":
             result = start_fake(token_file=args.token_file)
+        elif args.command == "start-sitl":
+            result = start_sitl(token_file=args.token_file)
+        elif args.command == "stop-sitl":
+            result = stop_sitl()
         elif args.command == "link":
             result = set_link(mode=args.mode, delay_ms=args.delay_ms)
         elif args.command == "status":
