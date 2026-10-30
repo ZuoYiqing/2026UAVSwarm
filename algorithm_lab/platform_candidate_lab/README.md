@@ -79,6 +79,10 @@ source is recorded in [the 2026-10-30 offline bundle handoff](docs/OFFLINE_COMPA
 The new archive is a D: ignored artifact, not a Git-tracked model download or
 Jetson package. Its package tests and integrity checks do not replace a real
 PX4 input-size/latency or flight acceptance run.
+After an independent extraction, its included 0.8B model loaded locally and
+returned two bounded candidates on a synthetic UAV-02 HOLD fixture; exact
+timings and the repeated-prompt caveat are in the handoff. This is not a
+Runtime/PX4 or real-telemetry acceptance result.
 
 ## Reproduce without a model
 

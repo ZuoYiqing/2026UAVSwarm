@@ -27,7 +27,9 @@ The new bundle has its own `manifest.json`, `README.md` and internal
 Manifest `schema_version=2.0` identifies the fixed algorithm production
 commit, per-source-file hashes, reused model/engine provenance, and explicitly
 states `new_bundle_model_inference=not_run` and `real_px4_or_ugv_executed=false`.
-Neither hashes nor prior fake replay are execution authorization.
+The `not_run` field records the state **at packaging time** and is intentionally
+immutable inside the archive; subsequent extracted-package inference is recorded
+below. Neither hashes nor prior fake replay are execution authorization.
 
 ## How it was built and checked
 
@@ -52,7 +54,7 @@ The Ubuntu build then completed. Independent checks after creation:
 
 - Windows `Get-FileHash` matched the archive SHA-256 above.
 - `tar -tzf` decoded the entire archive and listed 86 entries.
-- `sha256sum -c bundle/SHA256SUMS --quiet` passed for every staged bundle file. The archive was separately decoded in full, but was not installed on a second machine.
+- `sha256sum -c bundle/SHA256SUMS --quiet` passed for every staged bundle file.
 - Ubuntu `ldd` on the new `llama-server` found no missing dependency; `--version`
   returned `0.4.1-dev build 10964 commit b29c606e2`.
 - From the **new bundle directory**, 16/16 algorithm tests passed in Ubuntu.
@@ -60,16 +62,52 @@ The Ubuntu build then completed. Independent checks after creation:
   three extra tests exercise the builder and are intentionally not claimed as
   part of the fixed `735af74` production-source package.
 
-The new bundle's model was **not loaded** in this round. Runtime's earlier
-12/12 complete fake-task candidate result used the same algorithm production
-source, model weight and engine, but loaded the source separately with
-`--candidate-source`; that result must not be relabeled as a test of this
-new archive. Before a controlled SITL deployment, verify the transferred
-archive and internal hashes on the target, check host RAM and port ownership,
-then test the actual PX4 observation size and two-second latency. The previous
-fake observation has fewer fields than a full PX4 battery/status snapshot.
-Do not turn `--allow-fake` on for SITL or production. No flight command was
-sent and no model service was started during this packaging work.
+## Independent extraction and local model run, 2026-10-30
+
+After packaging, the archive was extracted to a **new** D: directory named
+`verification-extract-20261030`. Every file in this extracted copy passed
+`sha256sum -c SHA256SUMS --quiet`; 16/16 tests passed from the extracted
+`bundle/algorithm_lab`, not the builder's staging directory. The archive was
+not transferred to a second physical machine.
+
+The first host check showed only 854 MiB free, so model loading was deferred.
+After the user freed memory, the immediate pre-load Windows host check showed
+6,345 MiB free (4,823 MiB after loading), above the 3 GiB admission guard.
+Ports 18080/8872 had no listener. The extracted archive's CPU-only
+`llama-server` loaded the included Qwen3.5-0.8B Q4 GGUF on WSL Ubuntu,
+bound only `127.0.0.1:18080`, and `/health` returned `{"status":"ok"}`.
+The server log reported `model loaded` at about 15.8 seconds after launch;
+this cold loading time is **not** included in the request timings below.
+
+`platform_candidate_lab.experiment` was run directly from the independently
+extracted source against that local model. Both calls used its fixed **fake**
+UAV-02 lost-link HOLD fixture with refreshed timestamps; no Runtime, PX4,
+Gazebo or flight hardware participated. The script intentionally passes
+`allow_fake=True` only for this synthetic research run.
+
+| Request | Decision budget | Result | Wall time | Ignored D: record SHA-256 |
+| --- | ---: | --- | ---: | --- |
+| First request after load | 10,000 ms | `candidate: execute_authorized_step` | 1,389.14 ms | `d7890d0f3fd69e0f0dc8acd0ab63cc11baca73b25e17a609f89798ab3c428cbe` |
+| Second, similar request | 2,000 ms | `candidate: execute_authorized_step` | 1,119.47 ms | `bfa49c52620fd2c1a4689d84ba39f2d6addca51717ec3412794e1a13a478a3be` |
+
+Both saved results set `execution_authorized=false`. The records are
+`verification-extract-20261030/synthetic_hold_cold_20261030.json` and
+`verification-extract-20261030/synthetic_hold_2s_20261030.json` beside the
+archive, and are Git-ignored. The two requests are very similar; the model
+server reported prefix-cache reuse on the second one. These measurements
+establish only that this **new extracted package** can load and return a
+bounded synthetic candidate locally, not a diverse-input latency distribution
+or compliance with Runtime's complete two-second end-to-end deadline. The
+temporary model process was stopped; port 18080 then refused connections.
+
+Runtime's earlier 12/12 complete fake-task replay used the same algorithm
+production source, model weight and engine, but loaded the source separately
+with `--candidate-source`; that result remains a separate experiment, not
+evidence of a new-archive Runtime replay. Before a controlled SITL deployment,
+verify the transferred archive and hashes on the target and test actual PX4
+observation size and end-to-end latency. The fake observation has fewer fields
+than a full PX4 battery/status snapshot. Do not turn `--allow-fake` on for
+SITL or production. No flight command was sent in this work.
 
 Ubuntu x86-64 binaries are **not** suitable for Jetson/ARM64 or a physical UGV.
 Those targets require a separately built and measured package. Model weights,
