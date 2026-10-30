@@ -136,6 +136,7 @@ def _collect(
     *,
     mode: str = "standalone",
     runtime_telemetry: dict[str, Any] | None = None,
+    runtime_telemetry_provider=None,  # type: ignore[no-untyped-def]
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
     overrides=None,
@@ -153,6 +154,7 @@ def _collect(
         stability_window_s=10.0,
         mode=mode,
         runtime_telemetry=runtime_telemetry,
+        runtime_telemetry_provider=runtime_telemetry_provider,
         mavlink_probe=mavlink_probe or _mavlink_probe(manifest),
         clock_probe=(overrides or {}).get("clock_probe", lambda world, timeout, **kwargs: {
             "clock_advancing": True,
@@ -221,7 +223,7 @@ def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(
         tmp_path,
         monkeypatch,
         mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         mavlink_probe=forbidden_probe,
     )
 
@@ -242,7 +244,7 @@ def test_integrated_health_publishes_only_known_ground_collision_geometry(
     manifest = harness.load_manifest(MANIFEST_PATH)
     payload = _collect(
         tmp_path, monkeypatch, mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"),
     )
     expected = json.loads(Path(
@@ -263,7 +265,7 @@ def test_integrated_health_omits_ground_without_matching_startup_hash(
     manifest = harness.load_manifest(MANIFEST_PATH)
     payload = _collect(
         tmp_path, monkeypatch, mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         state_overrides={"world_sha256": startup_hash},
     )
     assert payload["simulation_status"] == "ready"
