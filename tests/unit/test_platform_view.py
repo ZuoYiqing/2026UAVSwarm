@@ -199,6 +199,8 @@ def test_authenticated_view_get_does_not_refresh_ground_lease(packet, tmp_path):
                               clock=lambda: clock[0], monotonic=lambda: clock[0], run_id="fixture-run")
     service.heartbeat()
     def dispatch(method, path, **kw):
+        if path == "/api/simulation/runtime-telemetry":
+            return 503, {"error": "runtime_run_id_required"}
         return 200, deepcopy(packet["projections"][next(k for k, v in VIEW_PATHS.items() if v == path)])
     server = PlatformHttpServer(("127.0.0.1", 0), service, "x" * 40, dispatch)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -243,6 +245,8 @@ def test_old_position_cannot_be_refreshed_by_new_heartbeat_projection(packet):
                               observe=lambda: {"source": "px4_telemetry", "sample_timestamp": stamp(996), "stale": True,
                                                "local_position": {"x_m": 1, "y_m": 2, "z_down_m": -3}})
     def dispatch(method, path):
+        if path == "/api/simulation/runtime-telemetry":
+            return 503, {"error": "runtime_run_id_required"}
         return 200, deepcopy(packet["projections"][next(k for k, v in VIEW_PATHS.items() if v == path)])
     result = produce_view(service, dispatch)
     row = result["projections"]["vehicle_snapshot"]["vehicles"][0]
@@ -273,6 +277,8 @@ def test_projection_never_attaches_new_sample_time_to_old_pose(packet, changed):
     service = SimpleNamespace(mode="sitl", node_id="UAV-02", run_id="run-fixture", clock=lambda: 1000,
                               store=SimpleNamespace(store_id="store-fixture"), observe=lambda: next(samples))
     def dispatch(method, path):
+        if path == "/api/simulation/runtime-telemetry":
+            return 503, {"error": "runtime_run_id_required"}
         return 200, deepcopy(packet["projections"][next(k for k, v in VIEW_PATHS.items() if v == path)])
     result = produce_view(service, dispatch)
     row = result["projections"]["vehicle_snapshot"]["vehicles"][0]

@@ -1,5 +1,11 @@
 # Single-platform task execution v1.0
 
+Simulation health handoff now has a dedicated read-only producer and optional
+platform-view extension. Ground additionally supplies `--run-id` when using
+`GET /api/simulation/runtime-telemetry`; existing task routes are unchanged.
+See `runtime_telemetry_health_contract_v1.md` for the exact source clocks,
+fixture and atomic file exporter. This does not constitute LIVE acceptance.
+
 UAV-02's companion is a separate long-lived process with a SQLite task/event
 store and one MAVLink receiver. An HTTP request accepts an immutable bounded
 task; its worker executes independently of ground/browser connections. This

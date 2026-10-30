@@ -1,5 +1,10 @@
 # Frontend Runtime API Contract
 
+Runtime/Simulation 只读诊断补充（2026-10-30）：
+`GET /api/simulation/runtime-telemetry` 供 integrated health 使用，不替代前端的
+`telemetry/latest` 或快照，也不增加前端动作权限。源字段、版本/时间、fixture
+及导出方式见 [Runtime telemetry health v1.0](runtime_telemetry_health_contract_v1.md)。
+
 ## 1. 前端位置和启动
 
 前端本地路径：

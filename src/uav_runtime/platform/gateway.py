@@ -67,6 +67,7 @@ class PlatformGateway:
                 "store_id": (view or {}).get("store_id"), "run_id": (view or {}).get("run_id"),
                 "source_timestamp": (view or {}).get("source_timestamp"), "age_ms": None if received is None else age,
                 "reason": None if fresh else "platform_view_unavailable" if failed else "platform_view_stale",
+                "runtime_telemetry": copy.deepcopy((view or {}).get("runtime_telemetry")),
                 "projections": projections}
 
     def read_preflight(self):

@@ -54,6 +54,7 @@ from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry,
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
 PLATFORM_GATEWAY = None
+RUNTIME_RUN_ID = None
 BRIDGE_VERSION = "0.1"
 _DEFAULT_VEHICLE_CONFIG = (
     Path(__file__).resolve().parents[3]
@@ -927,6 +928,22 @@ def _self_api_base() -> str:
     return f"http://127.0.0.1:{os.environ.get('UAV_RUNTIME_HTTP_PORT', '8765')}/api"
 
 
+def simulation_runtime_telemetry(query: str = "") -> tuple[int, dict[str, Any]]:
+    """Dedicated health evidence, deliberately distinct from UI telemetry/latest."""
+    if query:
+        return 400, {"error": "invalid_query", "flight_command_sent": False}
+    if not isinstance(RUNTIME_RUN_ID, str) or not RUNTIME_RUN_ID.strip():
+        return 503, {"error": "runtime_run_id_required", "flight_command_sent": False}
+    from uav_runtime.http.telemetry_evidence import local_evidence, remote_evidence
+    evidence = local_evidence(VEHICLE_REGISTRY, RUNTIME_RUN_ID)
+    if PLATFORM_GATEWAY is not None:
+        evidence["vehicles"] = [row for row in evidence["vehicles"] if row["node_id"] != "UAV-02"]
+        evidence["vehicles"].append(remote_evidence(PLATFORM_GATEWAY.cached_view(),
+                                                  scene_id=VEHICLE_REGISTRY.scene_id, run_id=RUNTIME_RUN_ID))
+    evidence["vehicles"].sort(key=lambda row: row["node_id"])
+    return 200, evidence
+
+
 def telemetry_latest(query: str = "") -> dict[str, Any]:
     """Return a cached telemetry snapshot without opening a MAVLink session."""
     node_id = parse_qs(query, keep_blank_values=True).get("node_id", [None])[0] or None
@@ -1190,6 +1207,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, skills(query)
     if method == "GET" and normalized == "/api/telemetry/latest":
         return 200, telemetry_latest(query)
+    if method == "GET" and normalized == "/api/simulation/runtime-telemetry":
+        return simulation_runtime_telemetry(query)
     if method == "GET" and normalized == "/api/vehicles":
         return 200, vehicles()
     if method == "GET" and normalized == "/api/snapshot":

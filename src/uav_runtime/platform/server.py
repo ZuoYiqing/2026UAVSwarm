@@ -157,6 +157,7 @@ def main(argv=None):
     if args.execution_mode == "sitl":
         from .deployment import SitlActions
         actions = SitlActions(args.node_id, args.vehicle_config, str(args.store_dir / "actions.audit.jsonl"))
+        actions.routes.RUNTIME_RUN_ID = args.run_id
     service = PlatformService(store, node_id=args.node_id, mode=args.execution_mode,
                               execute=actions.execute if actions else None, observe=actions.observe if actions else None,
                               candidate=(lambda body: candidate.request("POST", body=body)) if candidate else None, run_id=args.run_id)
