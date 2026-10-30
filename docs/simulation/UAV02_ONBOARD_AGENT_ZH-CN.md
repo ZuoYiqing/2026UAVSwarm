@@ -70,6 +70,13 @@ python3 simulation/px4_gazebo/onboard_deployment.py status
 python3 simulation/px4_gazebo/onboard_deployment.py stop-sitl
 ```
 
+上述 `start-sitl` 未传 `--candidate-url`，只启动无模型的平台 Runtime，
+`candidate_url_configured=false`，不能称为机载模型已接入。若本地候选模型服务
+已由算法/集成线单独启动并验证，在**首次启动**时增加
+`--candidate-url http://127.0.0.1:8872/candidate`；仅接受显式
+`http://127.0.0.1:<port>`，拒绝外网、`localhost`、URL 凭据、query 和 fragment。
+受管状态记录该配置，但配置存在本身不证明模型可用或任务已执行。
+
 空的 active_task 不足以证明飞机在地面且已上锁。`stop-sitl` 先把受管
 ground→Agent 应用代理置为 `down`，等待地面租约超过 3 秒失联，再绕过代理
 直连本机 8766 的 bearer 认证只读 status。它要求同一 run_id、SITL 模式、
