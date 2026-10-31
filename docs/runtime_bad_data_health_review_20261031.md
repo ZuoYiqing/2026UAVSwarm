@@ -59,6 +59,39 @@ fail closed。握手身份校验、唯一receiver、Policy、2.5s/1.5s样本限�
 
 ## 下一现场判定
 
+### 第二次现场纠正：UNKNOWN 包装器才是该轮触发类型
+
+集成 fe50d80、新run `3a305b4ce28b453a9eabd3d5c89d3cc2` 实际诊断表明，
+parser_error_count=0，拒绝类型为 UNKNOWN_291、UNKNOWN_380；Runtime 23:28:59+08
+的另一时刻读取还看到 UNKNOWN_8。identity_error 会覆盖为后续错误，所以这些
+是不同时间快照，不应写成“三机均同一类型”或“首次错误类型”。此结果排除了
+BAD_DATA 作为这一轮的直接拒绝原因，前述BAD_DATA修复不能称作已解决该现场。
+
+新诊断文件SHA256（Simulation独立核查）：
+`6c7b376828451feb012d6d257ff5e107f9d213dcfcb07a75a7b063d7ef616511`。
+该新run只确认standalone与诊断文件，不声称已有integrated.json通过/失败记录。
+新run也已由集成安全清理。
+
+读取本机安装的 MAVLink_unknown 和 decode 源码，确认未识别ID会在CRC_extra/
+签名验证、真实header赋值之前返回包装器；其msgId为负sentinel -2，source默认0/0。
+Simulation读取本机PX4 build将291映射为ESC_STATUS、380为TIME_ESTIMATE_TO_TARGET，
+且当前venv v10/v20 dialect map均不含291/380；单设MAVLINK20不能解决。
+不能据包装器或raw header声称该帧CRC/源身份有效。
+
+最小处理不升级离线依赖，也不解码/使用上述负载：只对MAVLink_unknown类、
+负sentinel -2、合法UNKNOWN数字标签三者同时满足的包装器隔离并记录有界
+unsupported计数/type/time。它不进入ACK/遥测/回调/RX cursor/模型，不清已有故障。
+普通解码消息即使名字UNKNOWN_*或source0、以及非负msgId对象仍严格拒绝。
+仅正确源、已识别的HB/LOCAL样本能贡献两类fresh；只有未知帧仍会stale。
+这不是把未知帧当作良性或有效，而是不能让其合成header冒充身份断言。
+ESC/时间估算等未支持负载依然不可用，完整dialect兼容升级是独立后续事项。
+
+新增包装器回归先2项失败复现。修复后Windows专项128 passed、1 skipped（3.82s）；
+Ubuntu真实pymavlink对象/producer/session专项66 passed、0 skipped（12.09s）；
+Windows完整回归1053 passed、8 skipped、0 failed（83.09s），跳过分类同前。
+AST与diff/cached检查通过。下一新run仍需实测unsupported
+计数、身份无误、已识别样本新鲜，再运行integrated health、标定和HOME/RTL。
+
 统一新Runtime版本后，仍由集成唯一启动受管SITL：保持三机disarmed、不加载模型、
 不POST任务。检查计数能观察BAD_DATA且不会污染身份，正常样本持续fresh；若仍有
 source0真实消息，诊断应保留message_type并继续拒绝。然后再刷新health/标定，
