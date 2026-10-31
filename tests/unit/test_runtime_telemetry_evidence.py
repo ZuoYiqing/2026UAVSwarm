@@ -119,6 +119,12 @@ def test_bad_session_never_becomes_fresh(fleet, condition):
         session.dispatch_message(message("LOCAL_POSITION_NED", 2, x=0, y=0, z=0, time_boot_ms=1))
     row = session.telemetry_health_evidence()
     assert not (row["heartbeat_fresh"] and row["telemetry_fresh"])
+    diagnostic = row["session_diagnostics"]
+    assert diagnostic["rx_alive"] is (condition != "rx_stopped")
+    if condition == "wrong_source":
+        assert diagnostic["identity_error"]["observed_system_id"] == 3
+    elif condition == "rx_error":
+        assert diagnostic["last_receive_error"] == "fixture"
 
 
 def test_new_envelope_cannot_rejuvenate_old_samples(fleet):

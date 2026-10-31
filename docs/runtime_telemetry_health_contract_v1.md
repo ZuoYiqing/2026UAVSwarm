@@ -54,6 +54,7 @@ stream request, ARM, other command or new MAVLink receiver operation.
 | heartbeat_sequence / position_sequence | Per-session, not fleet-wide, RX sequences |
 | heartbeat_fresh / telemetry_fresh | Strict booleans: connected RX owner, source identity and age |
 | last_seen | Latest of the two sample times; does not replace either |
+| session_diagnostics | Additive status/RX-alive/identity-error/receive-error evidence; diagnostic only, never relaxes freshness |
 | execution_authorized / flight_command_sent | Both false; not flight authorization |
 
 HEARTBEAT limit is 2500 ms; position limit is 1500 ms, matching Simulation.
