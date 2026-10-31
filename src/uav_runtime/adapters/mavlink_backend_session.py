@@ -1367,7 +1367,8 @@ class MavlinkBackendSession:
             pos_identity = bool(position and pos_source and pos_source == (position[0], *expected))
             hb_age = None if heartbeat is None else (now - heartbeat[2]) * 1000
             pos_age = None if position is None else (now - position[4]) * 1000
-            healthy = (self.status() == "connected" and self.receive_thread_alive()
+            rx_alive = self.receive_thread_alive()
+            healthy = (self.status() == "connected" and rx_alive
                        and not self.identity_error and not self.last_receive_error)
             hb_fresh = bool(healthy and hb_identity and hb_age is not None and 0 <= hb_age <= 2500)
             pos_fresh = bool(healthy and pos_identity and pos_age is not None and 0 <= pos_age <= 1500
@@ -1380,6 +1381,9 @@ class MavlinkBackendSession:
                     "heartbeat_sequence": heartbeat[0] if heartbeat else None,
                     "position_sequence": position[0] if position else None,
                     "heartbeat_fresh": hb_fresh, "telemetry_fresh": pos_fresh,
+                    "session_diagnostics": {"status": self.status(), "rx_alive": rx_alive,
+                                            "identity_error": dict(self.identity_error) if self.identity_error else None,
+                                            "last_receive_error": self.last_receive_error},
                     "last_seen": max((row for row in (heartbeat[3] if heartbeat else None,
                                                        position[5] if position else None) if row), default=None),
                     "reason": "ok" if hb_fresh and pos_fresh else "session_unavailable" if not healthy
