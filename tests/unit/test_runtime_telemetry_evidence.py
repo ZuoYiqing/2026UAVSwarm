@@ -137,6 +137,63 @@ def test_new_envelope_cannot_rejuvenate_old_samples(fleet):
     assert not any(row["heartbeat_fresh"] or row["telemetry_fresh"] for row in last["vehicles"])
 
 
+def test_parser_bad_data_is_not_a_foreign_vehicle_or_sample(fleet):
+    registry, clock = fleet
+    session = registry.get_vehicle("UAV-02").session
+    before = session.telemetry_health_evidence()
+    cursor = session.observation_cursor()
+    session.dispatch_message(message("BAD_DATA", 0))
+    after = session.telemetry_health_evidence()
+    assert session.identity_error is None
+    assert session.observation_cursor() == cursor
+    assert after["heartbeat_timestamp"] == before["heartbeat_timestamp"]
+    assert after["position_timestamp"] == before["position_timestamp"]
+    assert after["heartbeat_fresh"] and after["telemetry_fresh"]
+    assert after["session_diagnostics"]["parser_error_count"] == 1
+    assert after["session_diagnostics"]["last_parser_error_timestamp"] is not None
+
+
+def test_parser_noise_cannot_refresh_old_or_missing_samples(fleet):
+    registry, clock = fleet
+    clock[0] += 4
+    session = registry.get_vehicle("UAV-02").session
+    session.dispatch_message(message("BAD_DATA", 0))
+    row = session.telemetry_health_evidence()
+    assert not row["heartbeat_fresh"] and not row["telemetry_fresh"]
+    assert row["position_timestamp"] == "1970-01-01T00:16:40Z"
+    session._armed_states.clear()
+    session._local_positions.clear()
+    session.dispatch_message(message("BAD_DATA", 0))
+    row = session.telemetry_health_evidence()
+    assert row["heartbeat_timestamp"] is None and row["position_timestamp"] is None
+    assert not row["heartbeat_fresh"] and not row["telemetry_fresh"]
+
+
+@pytest.mark.parametrize("kind", ["HEARTBEAT", "LOCAL_POSITION_NED", "COMMAND_ACK"])
+def test_real_system_zero_messages_still_fail_closed(fleet, kind):
+    registry, _ = fleet
+    session = registry.get_vehicle("UAV-02").session
+    session.dispatch_message(message(kind, 0))
+    assert session.identity_error["observed_system_id"] == 0
+    assert session.identity_error["message_type"] == kind
+    prior_error = dict(session.identity_error)
+    session.dispatch_message(message("BAD_DATA", 0))
+    assert session.identity_error == prior_error  # Never clear a real fault with parser noise.
+    row = session.telemetry_health_evidence()
+    assert not row["heartbeat_fresh"] and not row["telemetry_fresh"]
+
+
+def test_installed_pymavlink_bad_data_has_synthetic_zero_source(fleet):
+    mavutil = pytest.importorskip("pymavlink.mavutil")
+    parser_error = mavutil.mavlink.MAVLink_bad_data(b"fixture", "fixture-only")
+    assert parser_error.get_type() == "BAD_DATA"
+    assert parser_error.get_srcSystem() == 0 and parser_error.get_srcComponent() == 0
+    registry, _ = fleet
+    session = registry.get_vehicle("UAV-02").session
+    session.dispatch_message(parser_error)
+    assert session.identity_error is None
+
+
 @pytest.mark.parametrize("change", ["run", "scene", "version", "ttl", "future", "old", "duplicate", "node", "endpoint", "source", "bool", "missing_time", "stale_hb", "stale_pos", "unavailable", "old_ui"])
 def test_remote_bad_evidence_fails_closed(fleet, change):
     registry, clock = fleet
