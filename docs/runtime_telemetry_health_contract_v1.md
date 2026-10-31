@@ -54,7 +54,7 @@ stream request, ARM, other command or new MAVLink receiver operation.
 | heartbeat_sequence / position_sequence | Per-session, not fleet-wide, RX sequences |
 | heartbeat_fresh / telemetry_fresh | Strict booleans: connected RX owner, source identity and age |
 | last_seen | Latest of the two sample times; does not replace either |
-| session_diagnostics | Additive status/RX-alive/identity-error/receive-error evidence; diagnostic only, never relaxes freshness |
+| session_diagnostics | Additive status/RX-alive/identity-error/receive-error plus parser-error count/time; diagnostic only, never relaxes freshness |
 | execution_authorized / flight_command_sent | Both false; not flight authorization |
 
 HEARTBEAT limit is 2500 ms; position limit is 1500 ms, matching Simulation.
@@ -72,6 +72,13 @@ view retains UAV-02 with false flags and unknown identity/sample values. Older
 views still render but cannot satisfy telemetry health. Four UI projections
 remain unchanged; the diagnostic envelope is not included in public
 `platform_view` metadata.
+
+`BAD_DATA` is pymavlink's parser pseudo-message: its default 0/0 source is not
+a vehicle identity. The dispatcher counts it and records receive time before
+identity checking, without updating telemetry/ACKs/callbacks/RX cursors. Real
+messages from system 0 or a wrong identity remain rejected; existing faults are
+never cleared by parser noise. Real rejections include message_type and source
+system/component. No raw parser payload is published. Only noise still goes stale.
 
 ## Atomic file handoff
 
