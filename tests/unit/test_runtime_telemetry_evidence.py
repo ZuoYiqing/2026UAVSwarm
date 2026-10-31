@@ -23,6 +23,14 @@ def message(kind, number, **fields):
     return SimpleNamespace(get_type=lambda: kind, get_srcSystem=lambda: number, get_srcComponent=lambda: 1, **fields)
 
 
+class MAVLink_unknown:
+    """No-wire fixture for pymavlink's negative-ID undecoded wrapper."""
+    def get_type(self): return "UNKNOWN_291"
+    def get_msgId(self): return -2
+    def get_srcSystem(self): return 0
+    def get_srcComponent(self): return 0
+
+
 @pytest.fixture
 def fleet(monkeypatch):
     clock = [1000.0]
@@ -169,7 +177,7 @@ def test_parser_noise_cannot_refresh_old_or_missing_samples(fleet):
     assert not row["heartbeat_fresh"] and not row["telemetry_fresh"]
 
 
-@pytest.mark.parametrize("kind", ["HEARTBEAT", "LOCAL_POSITION_NED", "COMMAND_ACK"])
+@pytest.mark.parametrize("kind", ["HEARTBEAT", "LOCAL_POSITION_NED", "COMMAND_ACK", "UNKNOWN_291"])
 def test_real_system_zero_messages_still_fail_closed(fleet, kind):
     registry, _ = fleet
     session = registry.get_vehicle("UAV-02").session
@@ -192,6 +200,51 @@ def test_installed_pymavlink_bad_data_has_synthetic_zero_source(fleet):
     session = registry.get_vehicle("UAV-02").session
     session.dispatch_message(parser_error)
     assert session.identity_error is None
+    unsupported = mavutil.mavlink.MAVLink_unknown(291, b"fixture-only")
+    assert unsupported.get_msgId() == -2
+    assert unsupported.get_srcSystem() == unsupported.get_srcComponent() == 0
+    session.dispatch_message(unsupported)
+    assert session.identity_error is None
+
+
+def test_undecoded_wrapper_is_counted_not_identity_or_telemetry(fleet):
+    registry, _ = fleet
+    session = registry.get_vehicle("UAV-02").session
+    before = session.telemetry_health_evidence()
+    cursor = session.observation_cursor()
+    observed = []
+    session.subscribe(observed.append)
+    session.dispatch_message(MAVLink_unknown())
+    after = session.telemetry_health_evidence()
+    assert session.identity_error is None
+    assert session.observation_cursor() == cursor and observed == []
+    assert after["position_timestamp"] == before["position_timestamp"]
+    assert after["heartbeat_fresh"] and after["telemetry_fresh"]
+    assert after["session_diagnostics"]["unsupported_message_count"] == 1
+    assert after["session_diagnostics"]["last_unsupported_message_type"] == "UNKNOWN_291"
+
+
+def test_undecoded_only_cannot_refresh_or_clear_fault(fleet):
+    registry, clock = fleet
+    session = registry.get_vehicle("UAV-02").session
+    clock[0] += 4
+    session.dispatch_message(MAVLink_unknown())
+    row = session.telemetry_health_evidence()
+    assert not row["heartbeat_fresh"] and not row["telemetry_fresh"]
+    session.dispatch_message(message("HEARTBEAT", 3, base_mode=0))
+    error = dict(session.identity_error)
+    session.dispatch_message(MAVLink_unknown())
+    assert session.identity_error == error
+
+
+def test_unknown_wrapper_without_negative_sentinel_is_not_ignored(fleet):
+    registry, _ = fleet
+    candidate = MAVLink_unknown()
+    candidate.get_msgId = lambda: 291
+    session = registry.get_vehicle("UAV-02").session
+    session.dispatch_message(candidate)
+    assert session.identity_error["observed_system_id"] == 0
+    assert session.identity_error["message_type"] == "UNKNOWN_291"
 
 
 @pytest.mark.parametrize("change", ["run", "scene", "version", "ttl", "future", "old", "duplicate", "node", "endpoint", "source", "bool", "missing_time", "stale_hb", "stale_pos", "unavailable", "old_ui"])

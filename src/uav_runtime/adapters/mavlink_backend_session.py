@@ -335,6 +335,9 @@ class MavlinkBackendSession:
     _health_sample_sources: dict[str, tuple[int, int | None, int | None]] = field(default_factory=dict)
     _parser_error_count: int = 0
     _last_parser_error_timestamp: str | None = None
+    _unsupported_message_count: int = 0
+    _last_unsupported_message_type: str | None = None
+    _last_unsupported_message_timestamp: str | None = None
     #: LOCAL_POSITION_NED 样本：(sequence, x_north, y_east, z_down, received_monotonic, received_timestamp)。
     #: 早期的实现只存了 z（起飞高度观测只需要垂直分量），但 goto 的位置到达判据
     #: 需要完整三维坐标，因此改为全量保留。
@@ -529,6 +532,20 @@ class MavlinkBackendSession:
             with self._rx_condition:
                 self._parser_error_count += 1
                 self._last_parser_error_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return
+        # A pymavlink undecoded wrapper returns before CRC/signature and real
+        # header assignment. Its negative sentinel/default 0/0 is not a source
+        # assertion. Do not blanket-ignore a decoded message named UNKNOWN_*.
+        suffix = kind.removeprefix("UNKNOWN_")
+        undecoded = (kind.startswith("UNKNOWN_") and suffix.isascii() and suffix.isdigit()
+                     and len(suffix) <= 8 and int(suffix) <= 0xFFFFFF
+                     and type(message).__name__ == "MAVLink_unknown"
+                     and callable(getattr(message, "get_msgId", None)) and message.get_msgId() == -2)
+        if undecoded:
+            with self._rx_condition:
+                self._unsupported_message_count += 1
+                self._last_unsupported_message_type = kind
+                self._last_unsupported_message_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
             return
         msg_system, msg_component = _source_ids(message)
         if msg_system is not None and self.expected_target_system is not None and msg_system != self.expected_target_system:
@@ -1398,7 +1415,10 @@ class MavlinkBackendSession:
                                             "identity_error": dict(self.identity_error) if self.identity_error else None,
                                             "last_receive_error": self.last_receive_error,
                                             "parser_error_count": self._parser_error_count,
-                                            "last_parser_error_timestamp": self._last_parser_error_timestamp},
+                                            "last_parser_error_timestamp": self._last_parser_error_timestamp,
+                                            "unsupported_message_count": self._unsupported_message_count,
+                                            "last_unsupported_message_type": self._last_unsupported_message_type,
+                                            "last_unsupported_message_timestamp": self._last_unsupported_message_timestamp},
                     "last_seen": max((row for row in (heartbeat[3] if heartbeat else None,
                                                        position[5] if position else None) if row), default=None),
                     "reason": "ok" if hb_fresh and pos_fresh else "session_unavailable" if not healthy

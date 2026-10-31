@@ -80,6 +80,17 @@ messages from system 0 or a wrong identity remain rejected; existing faults are
 never cleared by parser noise. Real rejections include message_type and source
 system/component. No raw parser payload is published. Only noise still goes stale.
 
+The same exclusion applies only to pymavlink's `MAVLink_unknown` class with
+negative msgId sentinel -2 and a valid UNKNOWN_<numeric-id> label. Installed
+decode source returns this wrapper before CRC/signature and real-header
+assignment; its synthetic 0/0 cannot establish a vehicle identity. Bounded
+unsupported_message_count/last_unsupported_message_type/time record it separately.
+No payload, raw header, CRC/signature claim or unsupported sensor value is
+published as trusted data. No telemetry/ACK/callback/cursor is updated. A decoded
+message merely named UNKNOWN_* or a nonnegative-ID object is NOT excluded and
+still fails normal source checks. Existing faults remain; missing recognized
+samples still expire. This is not a dialect upgrade or permission expansion.
+
 ## Atomic file handoff
 
 Simulation's `--mode integrated --runtime-telemetry <file>` or
