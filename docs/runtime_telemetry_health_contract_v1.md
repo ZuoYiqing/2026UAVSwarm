@@ -149,3 +149,15 @@ Simulation also consumed the fixture in its own worktree at controlled time:
 3/3 node probes reason=ok (reported by Simulation, not a LIVE pass). Actual
 multi-process PX4/Gazebo/model and console/Cesium acceptance remains pending a
 managed, resource-admitted window. Do not mark the PR Ready from these results.
+
+2026-11-01 update: managed integration `5b7936c` (Runtime `73dc599`) completed
+the real three-PX4 **read-only** window. Three same-run integrated-health samples
+were ready, all nodes supplied recognized fresh heartbeat/position evidence
+without identity errors despite isolated UNKNOWN wrappers, calibration published
+3/3, and UAV-02 HOME/RTL preflight was ready with execution_authorized=false and
+flight_command_sent=false. The operator then stopped the owned services safely.
+Evidence hashes, the earlier stale preflight, exact time/version boundaries and
+limitations are in `runtime_bad_data_health_review_20261031.md`. Those saved
+samples are expired historical evidence, not current readiness. No model,
+frontend, task, flight or loss-of-link execution was tested in that window;
+joint action acceptance and Draft status remain unchanged.

@@ -96,3 +96,87 @@ AST与diff/cached检查通过。下一新run仍需实测unsupported
 不POST任务。检查计数能观察BAD_DATA且不会污染身份，正常样本持续fresh；若仍有
 source0真实消息，诊断应保留message_type并继续拒绝。然后再刷新health/标定，
 读取HOME/RTL，不据解析过滤直接宣称preflight ready。PR继续Draft，不合并main。
+
+## 第三轮真实 SITL 只读复验（2026-11-01）
+
+本节是后续实测，前文的失败和当时“待复验”结论保留为历史记录。
+集成负责人于08:44–09:03（Asia/Shanghai）恢复并独占操作受管run
+`85051379fdde404c87c06ddeb545c143`，固定集成提交`5b7936c`，包含Runtime
+`73dc599b3ac44ff95fc69424bec22717d4addd23`。Runtime负责人于14:08后只读
+核对原始JSON、集成对话中的实际命令/输出和本机停止状态；没有重新启动仿真。
+
+### 已通过的范围
+
+- `integrated.json`（08:54:32）、`integrated-published.json`（08:57:06）、
+  `integrated-preflight.json`（08:59:10）均为同run、mode=integrated、ready=true，
+  三节点heartbeat_fresh/telemetry_fresh/process_identity_valid均true、reason=ok。
+  这三个时间点的RTF分别约0.556/0.561/0.537；不能据此声称全负载性能或飞行性能。
+- 最后保存的`runtime-telemetry.json`时间为08:59:42，源为runtime_session_rx，
+  sysid1/2/3、compid1、端口14540/41/42，三会话connected、RX alive，
+  identity_error/last_receive_error均null，parser_error_count均0。
+  unsupported_message_count分别5569/5998/5552，最后类型均UNKNOWN_291；
+  同时只有已识别样本提供freshness。各机heartbeat age约1510/745/2214ms，
+  position age约6/505/75ms，仍使用原2500/1500ms限制。
+  大量未知包装器仍被隔离，但不再冒用合成0/0污染会话身份。
+- 08:59:03静态标定报告status=PASS、mode=read_only_no_mavlink，三机各13个
+  配对样本、跨度约1.088s，最大残差分别0.0105/0.0131/0.0185m，发布3/3成功。
+  未激励物理轴运动；不能写成完整动态坐标标定或机载感知验证。
+- 随后实际`GET /api/preflight?node_id=UAV-02`于08:59:10返回ready、
+  reason_codes=[]，三机fresh_disarmed=true、landed_state=1、busy=false。
+  HOME证据verified=true，global/local XY交叉误差约0.0041m；
+  RTL_TYPE=0、rally count=0、rtl_destination_evidence.verified=true。
+  HOME请求的ACK为command512/result0，是只读信息请求，不是起降执行ACK。
+  响应明确execution_authorized=false、flight_command_sent=false。
+
+### 没有掩盖的失败/边界
+
+08:57:57第一次预检为not_ready：ground_reference_unavailable及
+home_or_rtl_not_checked；当时health年龄约51s，且08:54:58发布的标定也早已
+超过60s。刷新标定和动态health后，08:59:10才ready。该对比同时改变了两个
+过期条件，**不能用于证明静态ground_reference被health TTL错误失效，也不能
+用于证明其长期有效性**；静态几何、动态健康、标定生命周期须继续分别判断。
+上述ready仅是各采样时刻的证据，保存文件现在已过期，不可重新发布成当前证据。
+
+本轮没有任务POST、ARM/TAKEOFF/LAND，没有加载模型、主控台或三维前端。
+因此没有飞行命令ACK、起飞稳定高度、实际LAND完成、切链期间任务继续、
+模型与仿真同负载、双前端一致性或屋顶反例验收。先前模型+fake任务的通过
+不能与本轮真实遥测拼接成一次完整飞行成功。PR #97/#93继续Draft，不合并main。
+
+### 原始证据及安全收尾
+
+原始JSON保留在固定集成checkout的忽略目录：
+`D:/2026UAVSwarm/.runtime/uav02-autonomy-integration/.runtime/px4_gazebo/health/85051379fdde404c87c06ddeb545c143/`。
+以下SHA256由Runtime负责人在2026-11-01独立读取文件计算，不提交运行产物：
+
+| 文件 | SHA256 |
+| --- | --- |
+| integrated.json | `cbd0d2765ae8c763e558e1cdb01ec4ceb3653171bbe3a636db69a06909b1058a` |
+| integrated-published.json | `7e0498d11e3734fdd7a9e609313fa0883e21c07530acbd3629267c77c9cb3252` |
+| integrated-preflight.json | `3d08628b0bea389f5a24068503a6ef25b3ea4d6a00ff0a36aec0e8afd37384e9` |
+| calibration-preflight.json | `9140229210a8c68f7a50a5df9ab2930811b3bbc84be18c133944c1b73c52fa1b` |
+| runtime-telemetry.json | `321bb78d9f470581c74d525e95e68dff35abe5b9542cf1f583496765a80c412a` |
+
+预检响应及停止命令输出保留在集成负责人对话
+`019ff00c-d362-7022-9f2a-4b3af2935b4b`的任务
+`01a19490-7e74-74d1-ae6f-def18fd75484`；本目录没有单独保存preflight响应JSON，
+不将integrated-preflight.json误称为该HTTP响应。
+
+集成先正常退出导出器/地面Runtime，再执行受管`onboard_deployment.py stop-sitl`
+和`stop_three_uav.sh`，均exit0；stop-sitl返回同run的stopped，Harness返回
+cleanup.clean=true、world_stopped=true、ports_released=true。Gazebo子进程短暂
+退出中后自行消失，后续进程/监听复核为空，没有据旧PID强杀。
+14:08本线复核默认Ubuntu为Stopped、两个受管state不存在、相关Windows TCP
+监听为空、主机可用内存3.62GiB。该检查不是新的在线健康或飞行验收。
+
+### 本线归档复核
+
+2026-11-01在Runtime独立工作区执行：
+
+```text
+python -B -m pytest -q -rs -p no:cacheprovider tests/unit/test_runtime_telemetry_evidence.py tests/unit/test_platform_view.py tests/unit/test_mavlink_backend_session.py tests/unit/test_vehicle_registry.py --basetemp .tmp_runtime_readonly_review_20261101
+```
+
+结果128 passed、1 skipped、0 failed（3.88s）。Windows未安装pymavlink，真实
+解析对象测试跳过；前文Ubuntu实际安装环境66 passed的历史结果仍有其原版本
+边界，不当成本轮重跑。本轮仅更新两份Runtime主责文档，未修改执行代码、
+接口字段、TTL、配置或依赖；未重新运行全仓测试，不将先前1053 passed写成新结果。
