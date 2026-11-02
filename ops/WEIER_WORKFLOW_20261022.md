@@ -27,30 +27,58 @@
 
 ## 1. 角色分工（3 台怎么用）
 
-**先说清一件事：`Runtime` 目前一个实例管一个 manifest（三机），
-它本身没有"多实例互相协同"的能力。** 所以"集群"有三种形态，选一种：
+### 1.1 ⚠️ 先看清两条硬限制（决定了哪些分工**现在做不了**）
 
-| 形态 | 谁干什么 | 需要什么 | 推荐度 |
-| --- | --- | --- | --- |
-| **A. 分工形态** | 一台跑 Runtime，一台跑前端显示，一台做备份/压测 | 只需 Runtime + 前端 | ⭐⭐⭐ **先做这个** |
-| **B. 压测形态** | 每台跑 1~3 个 Runtime 实例，各管一批假载具 | 只需 Runtime + fake adapter | ⭐⭐ 验证规模 |
-| **C. 仿真形态** | 一台跑 PX4+Gazebo 三机仿真，其余显示/分析 | **需要 Gazebo（最难）** | ⭐ 最后做 |
-
-### 建议的起步安排（形态 A）
-
-| 机器 | 角色 | 跑什么 |
+| 限制 | 依据 | 后果 |
 | --- | --- | --- |
-| **weier-1** | **Runtime 主机** | Runtime `:8765`（后期再加实例） |
-| **weier-2** | **显示主机** | 主控台 `5178` + 三维 `5179`（3080 渲染） |
-| **weier-3** | **备用 / 压测** | 同上，或跑第二个 Runtime 实例 |
+| **Runtime 只监听 `127.0.0.1:8765`，且不可配置** | `server.py:104` 调 `create_server()` 不传参 | **别的机器连不上这台 Runtime**；也**跑不了第二个实例** |
+| **`ALLOWED_ORIGINS` 只有 `localhost` / `127.0.0.1`，没有 IP** | `server.py:21` | 从别的机器用 IP 打开主控台 → **跨域被拒 → 显示"后端不可达"** |
 
-**好处**：三台机器各自独立可验证，一台出问题不影响结论；**而且完全不需要 Gazebo。**
+**→ 结论：现在唯一能跑通的是「每台机器自己一整套，本机浏览器访问」。
+"一台 Runtime 服务多台显示"要等那个 4 行补丁（见 `WEIER_ENVIRONMENT_20261022.md` §5.3）。**
 
-> ⚠️ **重要判断**：如果你说的"集群"是指**多机协同逻辑、策略、任务分配、界面规模**，
-> 那 **不需要 Gazebo** —— Runtime 的 `fake_adapter` 就能造出任意数量的假载具。
-> Gazebo 只在需要**真实飞行物理/相机画面**时才必须。
->
-> **这一点决定了 weier 能不能"马上开始"和"要等很久"。**
+### 1.2 三种角色（**每台机器都装全套，按需启动**）
+
+你说"每台都装所有东西，后面看情况去用" —— 正合适。装完之后同一台机器可以扮演不同角色，
+**区别只在于启动哪几个进程**：
+
+| 角色 | 怎么启动 | 现在能做吗 |
+| --- | --- | --- |
+| **① 地面站**（Runtime + 前端） | 起 Runtime `:8765` + 两个静态服务 `:5178/:5179`，本机浏览器看 | ✅ **可以，已实测** |
+| **② 无人平台仿真**（PX4 + Gazebo） | 需要 Gazebo | ❌ **装不上**（离线 apt 依赖地狱） |
+| **③ 两者都当**（地面站 + 无人平台） | 需要 Gazebo | ❌ 同上，缺那一半 |
+
+### 1.3 ⭐ 关于"无人平台"的一个替代方案
+
+**如果"无人平台"只是要"有载具在动、能验证策略与界面规模"**，
+那不需要 Gazebo —— 用 **`fake_adapter`** 造即可：
+
+```cmd
+:: 造几个假载具（不需要任何仿真器）
+D:\tools\python\python.exe -m uav_runtime.console.cli submit-action takeoff --adapter fake --demo-link-state healthy
+```
+
+| 你要验证的 | fake adapter 够吗 | 需要 Gazebo 吗 |
+| --- | --- | --- |
+| 策略门裁决 | ✅ 够 | ❌ 不需要 |
+| 审计 / 回放 | ✅ 够 | ❌ 不需要 |
+| 动作生命周期 | ✅ 够 | ❌ 不需要 |
+| 界面规模（多载具显示） | ✅ 够（假数据） | ❌ 不需要 |
+| **真实飞行物理** | ❌ 不够 | ✅ **需要** |
+| **相机画面 / 视觉证据** | ❌ 不够 | ✅ **需要** |
+
+### 1.4 建议的起步安排
+
+| 机器 | 建议角色 | 装什么 |
+| --- | --- | --- |
+| **weier-1** | **地面站**（Runtime + 前端，本机看） | 全套（本来就都装） |
+| **weier-2** | **地面站**（同上，独立一套） | 全套 |
+| **weier-3** | **备用 / 压测准备** | 全套 |
+
+**每台都是独立可验证的一整套** —— 一台出问题不影响结论，也不需要 Gazebo。
+
+> ⚠️ 如果你确实需要"一台 Runtime、多台看同一个态势"，那必须先把
+> `UAV_RUNTIME_HTTP_HOST` / `_PORT` 那个补丁合入，否则跨机一定连不上。
 
 ---
 
@@ -167,47 +195,44 @@ exit
 
 ---
 
-## 4. 阶段 C：WSL 里装 Runtime（**不用 apt、不用 root 改系统**）
+## 4. 阶段 C：装 Runtime（**Windows 原生，已实测**）
 
-### 4.1 装便携 Python 3.11
+> **⚠️ 2026-10-22 更新：本阶段已改为 Windows 原生，不再需要 WSL。**
+>
+> 实测证明 Runtime 在 Windows 上完全正常（`WEIER_ENVIRONMENT_20261022.md` §5.1.1），
+> 所以只要解压便携 Python 就能跑。**WSL 那条路保留在第 3 节，仅在将来要 ROS 时才用。**
+>
+> 需要的文件从 3 个降到 **1 个**：`cpython-...-x86_64-pc-windows-msvc-install_only.tar.gz`
 
-进 WSL：
+### 4.1 解压便携 Python
 
 ```cmd
-wsl -d Ubuntu2204
+mkdir D:\tools
+tar -xf D:\weier-offline\cpython-3.11.18+20261026-x86_64-pc-windows-msvc-install_only.tar.gz -C D:\tools
+D:\tools\python\python.exe --version
 ```
 
-```bash
-# 假设离线包挂在 /mnt/d/offline
-mkdir -p ~/tools
-tar -xzf /mnt/d/offline/cpython-3.11.*-x86_64-unknown-linux-gnu-install_only.tar.gz -C ~/tools
-~/tools/python/bin/python3 --version
-```
-
-**期望**：`Python 3.11.x`
-
-```bash
-# 确认系统 Python 没被动过
-/usr/bin/python3 --version
-```
+**期望**：`Python 3.11.18`
 
 ### 4.2 放源码
 
-```bash
-mkdir -p ~/uavswarm
-tar -xzf /mnt/d/offline/01-source.tar.gz -C ~/uavswarm
-tar -xzf /mnt/d/offline/02-frontend-3d-dist.tar.gz -C ~/uavswarm/frontend/swarm-console/simulation-3d
-ls ~/uavswarm/src/uav_runtime/http/server.py
-ls ~/uavswarm/frontend/swarm-console/simulation-3d/dist/index.html
+```cmd
+mkdir D:\uavswarm
+tar -xzf D:\weier-offline\01-source.tar.gz -C D:\uavswarm
+tar -xzf D:\weier-offline\02-frontend-3d-dist.tar.gz -C D:\uavswarm\frontend\swarm-console\simulation-3d
+
+dir D:\uavswarm\src\uav_runtime\http\server.py
+dir D:\uavswarm\frontend\swarm-console\simulation-3d\dist\index.html
 ```
 
-**两条都必须打印出路径。**
+**两条都必须找到文件。**
 
 ### 4.3 起 Runtime
 
-```bash
-cd ~/uavswarm
-PYTHONPATH="$PWD/src" ~/tools/python/bin/python3 -m uav_runtime.http.server
+```cmd
+cd /d D:\uavswarm
+set PYTHONPATH=%CD%\src
+D:\tools\python\python.exe -m uav_runtime.http.server
 ```
 
 **期望**：
@@ -215,12 +240,42 @@ PYTHONPATH="$PWD/src" ~/tools/python/bin/python3 -m uav_runtime.http.server
 uav_runtime_http_bridge listening on http://127.0.0.1:8765/api
 ```
 
-> **不需要 pymavlink！** Runtime 的 `dependencies = []`。
-> 只有要连 PX4/MAVLink 时才需要（阶段 C/Gazebo 才用到 `04-wheelhouse`）。
+> **不需要 pymavlink！** Runtime 的 `dependencies = []`，实测在 Windows 上
+> 不装 pymavlink 也能起（`adapters` 是惰性导入）。
+> 只有要连 PX4/MAVLink 时才需要 `04-wheelhouse`。
 
-### 4.4 验证（Windows 侧或 WSL 另一个窗口）
+> **⚠️ 窗口别关。** `set` 只对当前窗口有效，关掉要重设。
 
-```bash
+### 4.4 验证（另一个 cmd 窗口）
+
+```cmd
+curl http://127.0.0.1:8765/api/health
+```
+
+**期望**：`{"status": "ok", "service": "uav_runtime_http_bridge", ...}`
+
+---
+
+## 4b. 阶段 C-备用：WSL 路线（仅当将来需要 ROS 时）
+
+> 如果确实需要在 weier 上跑 Linux/ROS，再按第 3 节装 WSL2；
+> 装完后：
+>
+> ```bash
+> mkdir -p ~/tools
+> tar -xzf /mnt/d/weier-offline/cpython-3.11.*-x86_64-unknown-linux-gnu-install_only.tar.gz -C ~/tools
+> mkdir -p ~/uavswarm
+> tar -xzf /mnt/d/weier-offline/01-source.tar.gz -C ~/uavswarm
+> tar -xzf /mnt/d/weier-offline/02-frontend-3d-dist.tar.gz -C ~/uavswarm/frontend/swarm-console/simulation-3d
+> cd ~/uavswarm
+> PYTHONPATH="$PWD/src" ~/tools/python/bin/python3 -m uav_runtime.http.server
+> ```
+>
+> **⚠️ WSL 里起前端必须 `--bind 0.0.0.0`**（WSL2 是 NAT）。
+
+### 4.4 验证（另一个 cmd 窗口）
+
+```cmd
 curl http://127.0.0.1:8765/api/health
 ```
 
@@ -230,35 +285,62 @@ curl http://127.0.0.1:8765/api/health
 
 ## 5. 阶段 D：起前端并显示（**这一步能看到东西才算成功**）
 
-### 5.1 在 WSL 里起两个静态服务
+> **⚠️ 2026-10-22 更新：前端也走 Windows 原生，不要放进 WSL。**
+>
+> 原因：Runtime 已在 Windows 原生实测跑通（见 `WEIER_ENVIRONMENT_20261022.md` §5.1.1），
+> 便携 Python 同时提供 `python.exe`，所以 `python -m http.server` 直接在 Windows 跑即可。
+> **放进 WSL 只有一个坏处**：要多一层 `--bind 0.0.0.0` 与 WSL 网络转发，没有必要。
+>
+> **两边都保留**：如果哪台机器 WSL 已经装好了，用 WSL 起前端也能工作（见 5.6）。
 
-**⚠️ 关键：必须 `--bind 0.0.0.0`，不能 `127.0.0.1`** —— 否则 Windows 侧访问不到。
+### 5.1 Windows 原生起两个静态服务（推荐）
 
-```bash
-cd ~/uavswarm
+**开两个 cmd 窗口**，各跑一个：
 
-# 主控台 5178
-~/tools/python/bin/python3 -m http.server 5178 --bind 0.0.0.0 \
-  --directory frontend/swarm-console &
-
-# 三维 5179
-~/tools/python/bin/python3 -m http.server 5179 --bind 0.0.0.0 \
-  --directory frontend/swarm-console/simulation-3d/dist &
+**窗口 A —— 主控台 5178**
+```cmd
+cd /d D:\uavswarm
+D:\tools\python\python.exe -m http.server 5178 --bind 127.0.0.1 --directory frontend/swarm-console
 ```
 
-### 5.2 从 Windows 浏览器访问
-
-WSL2 有 **localhost 转发**，所以 Windows 上直接打开：
-
-```
-http://localhost:5178/     主控台
-http://localhost:5179/     三维
+**窗口 B —— 三维 5179**
+```cmd
+cd /d D:\uavswarm
+D:\tools\python\python.exe -m http.server 5179 --bind 127.0.0.1 --directory frontend/swarm-console/simulation-3d\dist
 ```
 
-**⚠️ 用 `localhost` 而不是 `127.0.0.1`**，因为 CORS 白名单里两个都允许，
-但 `localhost` 在 WSL2 转发下更稳。
+> **Windows 原生下 `--bind 127.0.0.1` 就够** —— 浏览器和服务器在同一台机器上。
+> 只有要让**别的机器**访问时才需要 `--bind 0.0.0.0`（见 5.7）。
 
-### 5.3 验收标准
+### 5.2 打开浏览器
+
+```
+http://127.0.0.1:5178/     主控台
+http://127.0.0.1:5179/     三维
+```
+
+**✅ CORS 白名单里 `127.0.0.1:5178/5179` 和 `localhost:5178/5179` 都在，
+两种写法都能用。**
+
+### 5.3 ⚠️ 三维报 `toSorted is not a function` 怎么办
+
+**这是浏览器版本问题，不是显卡问题。**
+
+| 检查 | 做法 |
+| --- | --- |
+| 5 秒判定 | 浏览器里按 F12，控制台敲 `typeof [].toSorted`<br>返回 `"function"` = 支持；`"undefined"` = 不支持，必崩 |
+| 最低版本 | **Edge/Chrome 110+**，**Firefox 115+**，Safari 16+ |
+| 查版本 | Edge `edge://version`；Chrome `chrome://version`；Firefox `about:support` |
+
+**解法二选一**：
+1. **换一个够新的浏览器**（最简单，不需要改任何东西）
+2. **给三维页加兼容垫片** —— 已备好，见 `WEIER_ENVIRONMENT_20261022.md` 的说明；
+   加完老浏览器也能跑
+
+> **注意：报错文案里提到 WebGL 是误导。** 真正的原因是 Cesium 内部调用了
+> `Array.prototype.toSorted`，而这个方法是 2023 年才进浏览器的。
+
+### 5.4 验收标准
 
 | 检查 | 期望 |
 | --- | --- |
@@ -267,22 +349,45 @@ http://localhost:5179/     三维
 | 5178 顶部状态 | 起 Runtime 前 `Runtime API OFFLINE`，起后 **`ONLINE`** |
 | 三维里有没有三维城市网格 | ✅ 应该有 |
 
-**⭐ 这三条就是 weier 的"部署成功"定义。**
+**⭐ 这几条就是 weier 的"部署成功"定义。**
 
-### 5.4 一条命令验证 Runtime 真的在干活
+### 5.5 一条命令验证 Runtime 真的在干活
 
-```bash
-cd ~/uavswarm
-PYTHONPATH="$PWD/src" ~/tools/python/bin/python3 -m uav_runtime.console.cli \
-  submit-action land --demo-link-state lost --pretty | grep -E 'decision_code|status|adapter'
+```cmd
+cd /d D:\uavswarm
+set PYTHONPATH=%CD%\src
+D:\tools\python\python.exe -m uav_runtime.console.cli submit-action land --demo-link-state lost --pretty
 ```
 
-**期望**：
+**期望**（在输出里找到这三行）：
 ```
 "decision_code": "deny",
 "status": "blocked",
 "adapter": "",
 ```
+
+### 5.6 如果你已经装好 WSL，想用 WSL 起前端（可选，不是首选）
+
+```bash
+cd ~/uavswarm
+~/tools/python/bin/python3 -m http.server 5178 --bind 0.0.0.0 --directory frontend/swarm-console &
+~/tools/python/bin/python3 -m http.server 5179 --bind 0.0.0.0 --directory frontend/swarm-console/simulation-3d/dist &
+```
+
+**⚠️ WSL 里必须 `--bind 0.0.0.0`**（WSL2 是 NAT，绑 `127.0.0.1` 的话 Windows 侧访问不到）。
+浏览器用 `http://localhost:5178/`（WSL2 有 localhost 转发）。
+
+### 5.7 要让别的机器看这台的前端（多机场景）
+
+**Windows 原生**（管理员 cmd）：
+```cmd
+netsh advfirewall firewall add rule name="UAVSwarm 5178-5179" dir=in action=allow protocol=TCP localport=5178-5179
+```
+并且起服务时要 `--bind 0.0.0.0`。
+
+**⚠️ 但跨机访问 Runtime 目前做不到** —— Runtime 只监听 `127.0.0.1:8765`，不可配置
+（见 `WEIER_ENVIRONMENT_20261022.md` §5.2）。所以跨机时：
+**页面能看，但连不上后端**，需要那个 4 行补丁。
 
 ---
 
@@ -335,15 +440,17 @@ submit-action takeoff --adapter fake --demo-link-state healthy
 □ B5  wsl --import 导入 Ubuntu（走 tarball，不进商店）
 □ B6  wsl -l -v 确认 VERSION=2
 □ C1  WSL 里解便携 Python，验版本
+□ C1  Windows 上解压便携 Python，验版本 3.11.x
 □ C2  解 01-source + 02-dist，验两个路径存在
-□ C3  起 Runtime，看到 listening
+□ C3  起 Runtime（set PYTHONPATH 后跑），看到 listening
 □ C4  curl /api/health 返回 ok
-□ D1  WSL 里起 5178 + 5179（--bind 0.0.0.0）
-□ D2  Windows Edge 打开 localhost:5178 / :5179
+□ D1  Windows 原生起 5178 + 5179（两个 cmd 窗口）
+□ D2  浏览器打开 127.0.0.1:5178 / :5179
+□ D2b 三维若报 toSorted → F12 敲 typeof [].toSorted 判定浏览器版本
 □ D3  截图：5178 界面 + 5179 三维 + Runtime ONLINE
-□ D4  submit-action land --demo-link-state lost → deny/blocked
-□ E1  三台重复 B~D（第 2、3 台会快很多）
-□ E2  按第 1 节表格分配角色
+□ D4  submit-action land --demo-link-state lost → deny/blocked/adapter 空
+□ E1  三台重复 A2~D（第 2、3 台会快很多）
+□ E2  按第 1 节表格决定角色（默认：每台独立地面站）
 □ F    Gazebo：先不做，等①借网或③放弃
 ```
 
@@ -353,33 +460,40 @@ submit-action takeoff --adapter fake --demo-link-state healthy
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
+| **浏览器太老（无 `toSorted`）** | 三维崩在 CesiumWidget，且**报错文案误提 WebGL** | F12 敲 `typeof [].toSorted` 判定；换新浏览器或加垫片 |
 | **Windows 19041 没有 WSLg** | WSL 里不能开 Linux GUI 窗口 | ✅ 我们的设计本来就 headless（三维在 Windows 浏览器里画） |
 | **驱动 531.29** | WSL CUDA 直通支持（≥470 即可），但**不能用 WSLg** | ✅ 不影响本项目 |
-| **DISM 开功能需要管理员** | 没权限就卡住 | 提前确认有本机管理员 |
+| **DISM 开功能需要管理员** | 没权限就卡住 | **只有走 WSL 路线才需要**；Windows 原生路线不需要 |
 | **`wsl --import` 的发行版默认 root** | 安全上不理想 | 测试机可接受；要建用户见 3.6 |
-| **`--bind 127.0.0.1` 导致 Windows 访问不到** | 5178 打不开 | **必须 `0.0.0.0`** |
-| **浏览器缺失**（待确认） | 无法显示 | 加 Edge 离线包到清单 |
-| **Store 假 python** | `python` 命令存在但不可用 | **不要用 Windows 侧的 python**，全部在 WSL 里跑 |
+| **WSL 里绑 `127.0.0.1`** | Windows 访问不到 5178 | WSL 路线必须 `0.0.0.0` |
+| **Windows 控制台是 GBK** | 打印 emoji 会 `UnicodeEncodeError` | 脚本不要用 emoji；中文没问题 |
+| **Store 假 python** | `python` 命令存在但不可用 | **用 `D:\tools\python\python.exe` 的绝对路径** |
+| **Runtime 只听 127.0.0.1** | 跨机连不上、多实例跑不了 | 等那个 4 行补丁 |
 
 ---
 
 ## 9. 每台机器装完应该长什么样（对照）
 
-```bash
-# WSL 里
-~/tools/python/bin/python3 --version                 # Python 3.11.x
-~/uavswarm/src/uav_runtime/http/server.py            # 存在
-~/uavswarm/frontend/swarm-console/simulation-3d/dist/index.html   # 存在
-curl http://127.0.0.1:8765/api/health                # {"status":"ok",...}
+```cmd
+:: Windows 原生（推荐路线）
+D:\tools\python\python.exe --version                          :: Python 3.11.x
+dir D:\uavswarm\src\uav_runtime\http\server.py                :: 存在
+dir D:\uavswarm\frontend\swarm-console\simulation-3d\dist\index.html  :: 存在
+curl http://127.0.0.1:8765/api/health                          :: {"status":"ok",...}
+```
+
+**浏览器**：
+```
+http://127.0.0.1:5178/    ← 界面 + 顶部 ONLINE
+http://127.0.0.1:5179/    ← 三维场景
+```
+
+**F12 控制台**：
+```js
+typeof [].toSorted        // 必须是 "function"，否则三维会崩
 ```
 
 ```cmd
-:: Windows 侧
-wsl -l -v                                            :: VERSION = 2
-```
-
-**Windows 浏览器**：
-```
-http://localhost:5178/    ← 界面 + 顶部 ONLINE
-http://localhost:5179/    ← 三维场景
+:: 只有走 WSL 备用路线才需要
+wsl -l -v                 :: VERSION = 2
 ```
