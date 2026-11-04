@@ -332,6 +332,12 @@ class MavlinkBackendSession:
         default_factory=lambda: threading.Condition(threading.RLock())
     )
     _rx_sequence: int = 0
+    _health_sample_sources: dict[str, tuple[int, int | None, int | None]] = field(default_factory=dict)
+    _parser_error_count: int = 0
+    _last_parser_error_timestamp: str | None = None
+    _unsupported_message_count: int = 0
+    _last_unsupported_message_type: str | None = None
+    _last_unsupported_message_timestamp: str | None = None
     #: LOCAL_POSITION_NED 样本：(sequence, x_north, y_east, z_down, received_monotonic, received_timestamp)。
     #: 早期的实现只存了 z（起飞高度观测只需要垂直分量），但 goto 的位置到达判据
     #: 需要完整三维坐标，因此改为全量保留。
@@ -519,12 +525,36 @@ class MavlinkBackendSession:
 
     def dispatch_message(self, message: Any) -> None:
         """Route one already-received message; public for deterministic tests."""
+        kind = _message_type(message)
+        if kind == "BAD_DATA":
+            # Parser pseudo-message: its default 0/0 header is not a vehicle.
+            # Never refresh telemetry, ACKs, callbacks or RX cursors with noise.
+            with self._rx_condition:
+                self._parser_error_count += 1
+                self._last_parser_error_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return
+        # A pymavlink undecoded wrapper returns before CRC/signature and real
+        # header assignment. Its negative sentinel/default 0/0 is not a source
+        # assertion. Do not blanket-ignore a decoded message named UNKNOWN_*.
+        suffix = kind.removeprefix("UNKNOWN_")
+        undecoded = (kind.startswith("UNKNOWN_") and suffix.isascii() and suffix.isdigit()
+                     and len(suffix) <= 8 and int(suffix) <= 0xFFFFFF
+                     and type(message).__name__ == "MAVLink_unknown"
+                     and callable(getattr(message, "get_msgId", None)) and message.get_msgId() == -2)
+        if undecoded:
+            with self._rx_condition:
+                self._unsupported_message_count += 1
+                self._last_unsupported_message_type = kind
+                self._last_unsupported_message_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return
         msg_system, msg_component = _source_ids(message)
         if msg_system is not None and self.expected_target_system is not None and msg_system != self.expected_target_system:
             self.identity_error = {
                 "code": "target_system_mismatch",
                 "expected_system_id": self.expected_target_system,
                 "observed_system_id": msg_system,
+                "observed_component_id": msg_component,
+                "message_type": kind,
             }
             return
         if msg_component is not None and self.expected_target_component is not None and msg_component != self.expected_target_component:
@@ -532,6 +562,8 @@ class MavlinkBackendSession:
                 "code": "target_component_mismatch",
                 "expected_component_id": self.expected_target_component,
                 "observed_component_id": msg_component,
+                "observed_system_id": msg_system,
+                "message_type": kind,
             }
             return
 
@@ -539,7 +571,6 @@ class MavlinkBackendSession:
         with self._rx_condition:
             self._rx_sequence += 1
             sequence = self._rx_sequence
-            kind = _message_type(message)
             if kind == "COMMAND_ACK":
                 command = int(getattr(message, "command", -1))
                 generation = self._active_ack_waiters.get(command)
@@ -550,6 +581,8 @@ class MavlinkBackendSession:
                     )
             received_monotonic = time.monotonic()
             received_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            if kind in {"HEARTBEAT", "LOCAL_POSITION_NED"}:
+                self._health_sample_sources[kind] = (sequence, msg_system, msg_component)
             if kind == "HEARTBEAT":
                 armed_flag = self._mavlink_const("MAV_MODE_FLAG_SAFETY_ARMED", 128)
                 base_mode = int(getattr(message, "base_mode", 0) or 0)
@@ -1349,6 +1382,58 @@ class MavlinkBackendSession:
                 return None
             _, x, y, z, _received, _timestamp = self._local_positions[-1]
         return (float(x), float(y), float(z))
+
+    def telemetry_health_evidence(self) -> dict[str, Any]:
+        """Read independent RX samples; never connect, request streams or send commands."""
+        with self._rx_condition:
+            now = time.monotonic()
+            heartbeat = self._armed_states[-1] if self._armed_states else None
+            position = self._local_positions[-1] if self._local_positions else None
+            hb_source = self._health_sample_sources.get("HEARTBEAT")
+            pos_source = self._health_sample_sources.get("LOCAL_POSITION_NED")
+            expected = (self.expected_target_system or self.target_system,
+                        self.expected_target_component or self.target_component)
+            hb_identity = bool(heartbeat and hb_source and hb_source == (heartbeat[0], *expected))
+            pos_identity = bool(position and pos_source and pos_source == (position[0], *expected))
+            hb_age = None if heartbeat is None else (now - heartbeat[2]) * 1000
+            pos_age = None if position is None else (now - position[4]) * 1000
+            rx_alive = self.receive_thread_alive()
+            healthy = (self.status() == "connected" and rx_alive
+                       and not self.identity_error and not self.last_receive_error)
+            hb_fresh = bool(healthy and hb_identity and hb_age is not None and 0 <= hb_age <= 2500)
+            pos_fresh = bool(healthy and pos_identity and pos_age is not None and 0 <= pos_age <= 1500
+                             and all(math.isfinite(value) for value in position[1:4]))
+            return {"source": "px4_session_rx", "system_id": expected[0] if hb_identity or pos_identity else None,
+                    "component_id": expected[1] if hb_identity or pos_identity else None,
+                    "heartbeat_timestamp": heartbeat[3] if heartbeat else None,
+                    "position_timestamp": position[5] if position else None,
+                    "heartbeat_age_ms": hb_age, "position_age_ms": pos_age,
+                    "heartbeat_sequence": heartbeat[0] if heartbeat else None,
+                    "position_sequence": position[0] if position else None,
+                    "heartbeat_fresh": hb_fresh, "telemetry_fresh": pos_fresh,
+                    "session_diagnostics": {"status": self.status(), "rx_alive": rx_alive,
+                                            "identity_error": dict(self.identity_error) if self.identity_error else None,
+                                            "last_receive_error": self.last_receive_error,
+                                            "parser_error_count": self._parser_error_count,
+                                            "last_parser_error_timestamp": self._last_parser_error_timestamp,
+                                            "unsupported_message_count": self._unsupported_message_count,
+                                            "last_unsupported_message_type": self._last_unsupported_message_type,
+                                            "last_unsupported_message_timestamp": self._last_unsupported_message_timestamp},
+                    "last_seen": max((row for row in (heartbeat[3] if heartbeat else None,
+                                                       position[5] if position else None) if row), default=None),
+                    "reason": "ok" if hb_fresh and pos_fresh else "session_unavailable" if not healthy
+                              else "heartbeat_stale_or_missing" if not hb_fresh else "position_stale_or_missing"}
+
+    def local_position_evidence(self) -> dict[str, Any]:
+        """Read raw per-vehicle position and its own RX age, never scene truth."""
+        with self._rx_condition:
+            if not self._local_positions:
+                return {"sample_timestamp": None, "stale": True, "local_position": {}}
+            sequence, x, y, z, received, timestamp = self._local_positions[-1]
+            age = max(0.0, time.monotonic() - received)
+            return {"sample_timestamp": timestamp, "stale": age > 2.0, "position_age_ms": int(age * 1000),
+                    "position_sequence": sequence, "position_epoch": self._position_epoch,
+                    "local_position": {"x_m": x, "y_m": y, "z_down_m": z, "altitude_m": -z}}
 
     def land(self, *, timeout_s: float) -> dict[str, Any]:
         command = self._mavlink_const("MAV_CMD_NAV_LAND", 21)
