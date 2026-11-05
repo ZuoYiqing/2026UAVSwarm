@@ -119,7 +119,16 @@ def unified_policy_gate(ctx: PolicyContext, actx: RuntimeActionContext, profile:
                 policy_trace_id=f"policy-{actx.task_id}",
                 audit_tags=["policy", "deny", "link_lost", "scope"],
             )
-        if not is_lost_link_fallback_action(action_type):
+        # Companion v1 permits only the immutable task's pre-authorized LAND.
+        # This trusted, in-process context is never accepted from HTTP fields.
+        # Existing callers/profiles retain the original fallback-only default.
+        authorized_land = (
+            action_type == "land"
+            and profile.name == "platform_task_v1"
+            and ctx.flags.get("offline_landing_authorized") is True
+            and profile.fallback_behavior.get("preauthorized_land") is True
+        )
+        if not is_lost_link_fallback_action(action_type) and not authorized_land:
             return PolicyDecisionEnvelope(
                 decision_code=DecisionCode.DENY,
                 primary_reason_code=REASON_CODE_LINK_LOST_NON_FALLBACK_DENIED,

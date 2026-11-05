@@ -190,7 +190,7 @@ test("flight action timeouts cover backend command and observation windows", () 
   assert.equal(api.landTimeoutMs({ command_timeout_ms: 10_000, observe_timeout_ms: 25_000 }), 40_000);
 });
 
-test("critical state failure marks console and Cesium snapshots stale", () => {
+test("critical state failure marks ground observation stale without inventing a platform disconnect", () => {
   const fleet = model.mergeFleet(registry, { nodes: [] }, { vehicles: [] });
   fleet[0].connected = true;
   fleet[0].stale = false;
@@ -199,9 +199,14 @@ test("critical state failure marks console and Cesium snapshots stale", () => {
     vehicles: [{ id: "UAV-01", connected: true, telemetry: { stale: false } }],
   });
 
-  assert.equal(staleFleet[0].connected, false);
-  assert.equal(staleFleet[0].stale, true);
-  assert.equal(staleSnapshot.vehicles[0].connected, false);
+  assert.equal(staleFleet[0].connected, true);
+  assert.equal(staleFleet[0].stale, false);
+  assert.equal(staleFleet[0].observationStale, true);
+  assert.equal(model.canExecute(staleFleet[0], "live").allowed, false);
+  assert.equal(model.isFleetReady([staleFleet[0]]), false);
+  assert.throws(() => model.buildRuntimeRequest(staleFleet[0], 3), /地面观测已过期/);
+  assert.equal(fleet[0].observationStale, undefined);
+  assert.equal(staleSnapshot.vehicles[0].connected, true);
   assert.equal(staleSnapshot.vehicles[0].telemetry.stale, true);
 });
 
