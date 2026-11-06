@@ -98,7 +98,23 @@ Runtime → health 文件必须包含 contract_version=1.0、scene_id、当前 r
 vehicles 三节点；每节点包含精确 sysid/compid/endpoint、布尔 heartbeat_fresh/telemetry_fresh、
 heartbeat_timestamp、position_timestamp 和 last_seen。心跳最多 2.5 秒，位置最多 1.5 秒；
 独立消息时间戳不可由整份 snapshot 的时间替代。缺失、重复、身份漂移或过期均非 ready。
-Runtime `3fa42eb` 已有接收 API，但独立消息时间戳出口尚需 Runtime 主责补齐，本契约仍待其确认。
+Runtime 已在 `9869e6a` 实现只读 `GET /api/simulation/runtime-telemetry` 和
+`scripts/export_runtime_telemetry.py`，但这是离线测试通过的生产者版本，不能当作现场健康证据。
+地面 Runtime 启动时必须显式传入与 harness 和平台 Runtime 相同的 `--run-id`；
+缺失时该路由返回 `503 runtime_run_id_required`。集成 checkout 须先吸收该提交。
+在独占验收窗口中由集成负责人持续运行以下只读导出器，输出使用该 run 的忽略目录：
+
+```bash
+SIM_RUN_ID='<active-harness-run-id>'
+PYTHONPATH=src python3 scripts/export_runtime_telemetry.py \
+  --url http://127.0.0.1:8765 --scene-id simple_recon_v0_1 \
+  --run-id "$SIM_RUN_ID" \
+  --output ".runtime/px4_gazebo/health/$SIM_RUN_ID/runtime-telemetry.json" --interval 0.5
+```
+
+导出器只 GET 并原子替换文件，保留生产者和各消息原始时间；失败时旧文件自然过期。
+health 采样期间须保持导出器运行，不能只导出一次，更不能通过改写时间戳延长有效期。
+本线已用受控时钟 fixture 验证原子导出文件可被消费者逐机读取；真实三机仍待验收。
 
 integrated health 只读 Gazebo：正确 world、至少 1 秒 clock 窗口、RTF≥0.2、三 model 和受管理进程身份。
 暂停、低 RTF、model 缺失、world 错误、身份不匹配、证据过期会产生明确 reason 和非零退出码。
