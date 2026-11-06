@@ -108,3 +108,29 @@ test("HTTP busy response remains structured for the UI", async () => {
     runtime.restore();
   }
 });
+
+test("platform status, task and cursor reads use gateway GET routes without browser credentials", async () => {
+  const calls = [];
+  const runtime = loadApi(async (url, options) => {
+    calls.push({url,options});
+    return response({contract_version:"1.0"});
+  });
+  try {
+    await runtime.api.platformStatus();
+    await runtime.api.platformTask("task/UAV-02");
+    await runtime.api.platformEvents(42,"store/a");
+    assert.deepEqual(calls.map((call) => call.url), [
+      "http://127.0.0.1:8765/api/platform/status",
+      "http://127.0.0.1:8765/api/platform/tasks/task%2FUAV-02",
+      "http://127.0.0.1:8765/api/platform/events?after_seq=42&store_id=store%2Fa",
+    ]);
+    for (const {options} of calls) {
+      assert.equal(options.method,"GET");
+      assert.equal(options.body,undefined);
+      assert.equal(options.headers.Authorization,undefined);
+    }
+    for (const name of ["submitPlatformTask","platformHeartbeat","cancelPlatformTask"]) {
+      assert.equal(runtime.api[name],undefined);
+    }
+  } finally { runtime.restore(); }
+});
