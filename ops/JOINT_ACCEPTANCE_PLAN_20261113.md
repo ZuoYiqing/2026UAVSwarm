@@ -51,9 +51,18 @@
 
 ### 怎么用这个版本
 
+**开发机（能连 GitHub）**：
 ```bash
 git fetch origin --tags
 git checkout demo-20261113
+```
+
+**weier（离线台式机，**不能** `git fetch`）**：
+```bash
+mkdir -p ~/uavswarm-demo
+tar -xzf /mnt/d/weier-offline/sync/demo-20261113-src.tar.gz -C ~/uavswarm-demo
+tar -xzf /mnt/d/weier-offline/02-frontend-3d-dist.tar.gz \
+    -C ~/uavswarm-demo/frontend/swarm-console/simulation-3d/
 ```
 
 **以后所有演示都从这个 tag 起**，不要用浮动分支。

@@ -54,13 +54,48 @@
 
 ## 1.1 版本政策：验收只用 tag
 
+### ⚠️ 先分清两类机器，这决定你该怎么拿版本
+
+| 机器 | 能不能连 GitHub | 怎么拿到 `demo-20261113` |
+|---|---|---|
+| **三位的开发机**（这台 / 各自机器） | ✅ 能 | `git fetch` + `checkout` |
+| **weier 离线台式机** | ❌ **完全离线，用 U 盘拷文件** | **解压打包好的快照** |
+
+**不要把 weier 当成能联网的机器。** 它上面没有 GitHub，`git fetch` 一定失败。
+
+### 在开发机上（看代码、改代码用）
+
 ```bash
 git fetch origin --tags
 git checkout -b acceptance/demo-20261113 demo-20261113
 ```
 
-**各人原有的 `codex/*` 分支不动**，验收完再回去继续。
-**验收期间不改代码** —— 发现问题请在群里说，统一决定是出 r2 还是各回分支修。
+### 在 weier 上（现场验收用，离线）
+
+```bash
+# ① 解源码快照到新目录（旧的 ~/uavswarm 不动）
+mkdir -p ~/uavswarm-demo
+tar -xzf /mnt/d/weier-offline/sync/demo-20261113-src.tar.gz -C ~/uavswarm-demo
+
+# ② 三维构建产物不在 git 里（0 个文件被跟踪），必须另外解这一层
+tar -xzf /mnt/d/weier-offline/02-frontend-3d-dist.tar.gz \
+    -C ~/uavswarm-demo/frontend/swarm-console/simulation-3d/
+
+# ③ 验证关键文件在
+ls ~/uavswarm-demo/src/uav_runtime/http/demo.py                       # #99
+ls ~/uavswarm-demo/simulation/px4_gazebo/area_coverage.py             # #98
+ls ~/uavswarm-demo/frontend/swarm-console/mission-dashboard.js        # #100
+ls -lh ~/uavswarm-demo/frontend/swarm-console/simulation-3d/dist/assets/index-DCSbRQMB.js   # 应为 4.3 MB
+```
+
+**之后所有服务都从 `~/uavswarm-demo` 起**，不用 `~/uavswarm`。
+**这样旧的 `~/uavswarm` 保持原样，出问题还能退回去。**
+
+### 三条共同纪律
+
+- **各人原有的 `codex/*` 分支不动**，验收完再回去继续
+- **验收期间不改代码** —— 发现问题在群里说，统一决定是出 r2 还是各回分支修
+- **`demo-20261113` 这个 tag 就是"我们要验的东西"**，验的就是它，不多也不少
 
 ## 1.2 分支政策（针对这次踩过的坑）
 
@@ -385,9 +420,18 @@ F6 LIVE/DEMO 双模式+演示大屏、F7 显式化 —— 都在 `3d5d5e4` 里�
 
 ## 拉取验收版本
 
+**开发机（能连 GitHub）**：
 ```bash
 git fetch origin --tags
 git checkout -b acceptance/demo-20261113 demo-20261113
+```
+
+**weier（离线，只用 U 盘拷进来的文件）**：
+```bash
+mkdir -p ~/uavswarm-demo
+tar -xzf /mnt/d/weier-offline/sync/demo-20261113-src.tar.gz -C ~/uavswarm-demo
+tar -xzf /mnt/d/weier-offline/02-frontend-3d-dist.tar.gz \
+    -C ~/uavswarm-demo/frontend/swarm-console/simulation-3d/
 ```
 
 ## 起四件套（weier WSL）
