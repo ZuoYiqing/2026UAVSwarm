@@ -46,30 +46,32 @@ button {
 .shell {
   display: grid;
   grid-template-columns: 252px minmax(0, 1fr);
-  grid-template-rows: 64px 1fr;
+  grid-template-rows: auto 1fr;
   min-height: 100vh;
 }
 
 .topbar {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: 8px 12px;
+  min-height: 64px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--line-soft);
   background: rgba(7, 16, 21, 0.92);
   backdrop-filter: blur(14px);
-  overflow-x: auto;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 300px;
+  min-width: 0;
 }
 
 .mark {
+  flex: none;
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -88,18 +90,25 @@ button {
 .top-pill {
   display: inline-flex;
   align-items: center;
-  height: 34px;
-  padding: 0 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 12px;
   border: 1px solid var(--line-soft);
   border-radius: 7px;
   background: rgba(17, 36, 45, 0.72);
   color: var(--muted);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .top-pill strong {
   color: var(--text);
   margin-left: 8px;
+}
+
+.topbar > .badge {
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 
 .top-pill.ok strong,
@@ -110,6 +119,7 @@ button {
 .top-actions {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
@@ -647,8 +657,6 @@ a.button {
 
 .simulation-frame-wrap {
   position: relative;
-  min-height: 480px;
-  height: 100%;
   overflow: hidden;
   border: 1px solid var(--line-soft);
   border-radius: 7px;
@@ -656,27 +664,71 @@ a.button {
 }
 
 .simulation-frame {
+  display: block;
   width: 100%;
-  height: 100%;
-  min-height: 480px;
+  height: clamp(420px, 58vh, 680px);
   border: 0;
 }
 
 .simulation-frame-note {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
   padding: 6px 9px;
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
+  border-top: 1px solid var(--line-soft);
   background: rgba(5, 14, 18, 0.86);
   color: var(--muted);
   font-size: 11px;
-  pointer-events: none;
 }
 
-.twin-panel {
-  min-height: 0;
+.twin-page {
+  height: auto;
+}
+
+.twin-page .page-title {
+  flex-wrap: wrap;
+}
+
+.twin-main,
+.twin-details {
+  display: grid;
+  gap: 10px;
+}
+
+.twin-main { grid-template-columns: minmax(0, 1.42fr) minmax(280px, .58fr); }
+.twin-details { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
+.twin-nodes { grid-template-rows: auto 1fr; min-width: 0; }
+.twin-nodes .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.twin-nodes .metric { min-width: 0; padding-inline: 8px; }
+
+.twin-telemetry {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 10px;
+  overflow-wrap: anywhere;
+}
+
+.twin-details .vehicle-diagram {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: space-between;
+  gap: 12px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.twin-details .module-tile {
+  position: relative;
+  inset: auto;
+  width: min(100%, 170px);
+  overflow-wrap: anywhere;
+}
+
+.twin-details .m2,
+.twin-details .m4 { justify-self: end; }
+.twin-details .drone-arm { width: min(360px, 90%); }
+.twin-details .drone-body { width: min(210px, 65%); }
+
+@media (max-width: 1100px) {
+  .twin-main,
+  .twin-details { grid-template-columns: minmax(0, 1fr); }
 }
 
 .split-2 {
@@ -1235,14 +1287,11 @@ a.button {
   .cap-grid { grid-template-columns: repeat(3, 1fr); }
   .profile-pill,
   .top-time { display: none; }
-  .topbar { gap: 8px; padding-inline: 12px; scrollbar-width: none; }
-  .topbar::-webkit-scrollbar { display: none; }
-  .brand { min-width: 230px; }
+  .topbar { padding-inline: 12px; }
 }
 
 @media (max-width: 1100px) {
   .shell { grid-template-columns: 76px minmax(0, 1fr); }
-  .brand { min-width: 210px; }
   .brand-title { font-size: 16px; }
   .nav button { grid-template-columns: 24px; justify-content: center; padding: 0; }
   .nav button span:nth-child(2),
@@ -1263,7 +1312,6 @@ a.button {
   .action-page .backend-action-column > .panel { grid-column: 1; }
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; }
   .topbar { grid-column: 1; padding: 8px 10px; }
-  .brand { min-width: 180px; }
   .sidebar { grid-column: 1; padding: 6px; overflow-x: auto; scrollbar-width: none; }
   .sidebar::-webkit-scrollbar { display: none; }
   .nav { flex-direction: row; }
@@ -1276,8 +1324,8 @@ a.button {
   .form-grid { grid-template-columns: 1fr !important; }
   .page-title { align-items: flex-start; flex-direction: column; }
   .page-actions { margin-left: 0; flex-wrap: wrap; }
-  .simulation-frame-wrap,
-  .simulation-frame { min-height: 380px; }
+  .simulation-frame { height: clamp(360px, 60vh, 520px); }
+  .twin-details .vehicle-diagram { padding: 10px; }
   .telemetry-detail dl { grid-template-columns: 1fr; }
   .action-buttons .button { flex: 1 1 130px; }
 }

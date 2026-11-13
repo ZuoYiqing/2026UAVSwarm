@@ -20,6 +20,36 @@ http://localhost:5178/
 
 `5178` 是前端静态页面端口。关闭服务时，在运行命令的终端按 `Ctrl+C`。
 
+## 任务态势与演示大屏
+
+在左侧选择「总览驾驶舱」，再点「集群任务态势」标题旁的「LIVE 大屏」或「DEMO 大屏」。大屏顶部的「返回主控台」会回到总览。
+
+| 入口 | 数据来源 | 用途 |
+| --- | --- | --- |
+| `http://127.0.0.1:5178/` | Runtime 公共 API | 任务地图、关键指标、主时间轴与审计 |
+| `http://127.0.0.1:5178/?mode=stage` | 内置 DEMO | 18 秒切换画面，约 3 分钟播完降级、处置、重分配和恢复，最后停在审计总结 |
+| `http://127.0.0.1:5178/?mode=stage&source=live` | Runtime 公共 API | 只读轮播任务地图、关键指标、时间轴与三维态势 |
+
+两种大屏都通过 5179 加载独立的 Cesium 页面。内置 DEMO 使用 Cesium 自带的场景演示，载具和场景属于该三维示例。LIVE 联调使用现有三维开发服务或 `ops/serve_3d_proxy.py`。
+
+换到离线电脑时，将这一版本的 `frontend/swarm-console/` 和已构建的 `simulation-3d/dist/` 一起带过去。三维目录下的 `src/vehicle-contract.js` 也随主控台复制，供 LIVE 快照校验使用。从复制后的项目根目录开启两个终端：
+
+```powershell
+# 终端 1：主控台
+python -m http.server 5178 --bind 127.0.0.1 --directory frontend/swarm-console
+
+# 终端 2：三维 DEMO
+python -m http.server 5179 --bind 127.0.0.1 --directory frontend/swarm-console/simulation-3d/dist
+```
+
+在离线电脑自己的浏览器打开上表地址。内置 DEMO 只需要 Python 3、浏览器和本地构建产物。现场使用 LIVE 时，另行启动 Runtime，并按现场部署方式提供 5179 的三维服务。浏览器窗口变窄时，主控台自动将三维、节点列表和遥测改为上下排列。
+
+首屏以 Runtime 上报的链路质量、任务进度和覆盖证据为准。航点完成度与面积分开展示。只有区域边界和面积汇总时，地图把空间分布标为“覆盖未知”。同场景且标定匹配的新鲜位置才能落到任务地图。目标发现和安全裕度缺少证据时显示等待或未知。
+
+时间轴读取 `/api/events?n=50`、`/api/policy/decisions?n=20`、`/api/actions/lifecycle?n=20` 和 `/api/replay?n=20`。点击记录查看原始 JSON。Policy Gate 可按载具和判定过滤，顶部裁决提示 2 秒后缩成徽章并支持关闭。
+
+Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/state`。显式启用 Runtime 演习后，可从首屏选中载具并发出 DEMO 注入或清除请求。注入分与实测分分别显示，模拟处置与分配记录标为 DEMO。默认 API 地址仍为 `http://127.0.0.1:8765/api`。
+
 ## 页面
 
 - 总览驾驶舱
@@ -31,6 +61,8 @@ http://localhost:5178/
 - Skills 能力库
 - Adapter / Backend
 - 仿真中心
+- 观察复核
+- 澄清待办
 - 硬件资产
 - Audit / Replay
 - 模型与知识
