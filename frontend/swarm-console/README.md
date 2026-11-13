@@ -20,6 +20,22 @@ http://localhost:5178/
 
 `5178` 是前端静态页面端口。关闭服务时，在运行命令的终端按 `Ctrl+C`。
 
+## 任务态势与演示大屏
+
+| 入口 | 数据来源 | 用途 |
+| --- | --- | --- |
+| `http://127.0.0.1:5178/` | Runtime 公共 API | 任务地图、关键指标、主时间轴与审计 |
+| `http://127.0.0.1:5178/?mode=stage` | 内置 DEMO | 18 秒切换画面，约 3 分钟播完降级、处置、重分配和恢复，最后停在审计总结 |
+| `http://127.0.0.1:5178/?mode=stage&source=live` | Runtime 公共 API | 只读轮播任务地图、关键指标、时间轴与三维态势 |
+
+两种大屏都通过 5179 加载独立的 Cesium 页面。内置 DEMO 使用 Cesium 自带的场景演示，载具和场景属于该三维示例。LIVE 联调使用现有三维开发服务或 `ops/serve_3d_proxy.py`。
+
+首屏以 Runtime 上报的链路质量、任务进度和覆盖证据为准。航点完成度与面积分开展示。只有区域边界和面积汇总时，地图把空间分布标为“覆盖未知”。同场景且标定匹配的新鲜位置才能落到任务地图。目标发现和安全裕度缺少证据时显示等待或未知。
+
+时间轴读取 `/api/events?n=50`、`/api/policy/decisions?n=20`、`/api/actions/lifecycle?n=20` 和 `/api/replay?n=20`。点击记录查看原始 JSON。Policy Gate 可按载具和判定过滤，顶部裁决提示 2 秒后缩成徽章并支持关闭。
+
+Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/state`。显式启用 Runtime 演习后，可从首屏选中载具并发出 DEMO 注入或清除请求。注入分与实测分分别显示，模拟处置与分配记录标为 DEMO。默认 API 地址仍为 `http://127.0.0.1:8765/api`。
+
 ## 页面
 
 - 总览驾驶舱
@@ -31,6 +47,8 @@ http://localhost:5178/
 - Skills 能力库
 - Adapter / Backend
 - 仿真中心
+- 观察复核
+- 澄清待办
 - 硬件资产
 - Audit / Replay
 - 模型与知识
