@@ -103,6 +103,19 @@
       "radius_m": 8
     }
   ],
+  "coverage_areas": [
+    {
+      "area_id": "three-uav-patrol-coverage-v1",
+      "frame": "scene_ned",
+      "cell_size_m": 1,
+      "polygon": [
+        {"north_m": -45, "east_m": -25},
+        {"north_m": 50, "east_m": -25},
+        {"north_m": 50, "east_m": 25},
+        {"north_m": -45, "east_m": 25}
+      ]
+    }
+  ],
   "map_assets": {
     "gazebo_world": "worlds/simple_recon_v0_1.sdf",
     "frontend_map_hint": "frontend/simple_recon_v0_1_map.json",
