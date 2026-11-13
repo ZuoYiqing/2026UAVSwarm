@@ -18,10 +18,12 @@ from typing import Any, Callable
 
 try:
     from . import harness
+    from .area_coverage import AreaCoverage
     from .calibration import aligned_translation, check_context, read_origin_context, translation_from_calibration
     from .gazebo_evidence import capture_poses
 except ImportError:  # Direct script execution adds this directory to sys.path.
     import harness  # type: ignore
+    from area_coverage import AreaCoverage
     from calibration import aligned_translation, check_context, read_origin_context, translation_from_calibration
     from gazebo_evidence import capture_poses
 
@@ -906,6 +908,7 @@ def run_patrol(
     landing_timeout_s: float = 45.0,
     sleep: Callable[[float], None] = time.sleep,
     motion_observer: Any = None,
+    coverage: AreaCoverage | None = None,
 ) -> dict[str, Any]:
     """Execute and report one deterministic standalone three-UAV patrol."""
     by_node = {controller.node_id: controller for controller in controllers}
@@ -926,6 +929,7 @@ def run_patrol(
     }
     stop_monitor = threading.Event()
     monitor_active = threading.Event()
+    route_started_at: dict[str, float] = {}
     separation: dict[str, Any] = {
         "minimum_distance_m": None,
         "pair": None,
@@ -937,6 +941,7 @@ def run_patrol(
 
     def monitor_separation() -> None:
         sequences: dict[str, int] = {}
+        coverage_sequences: dict[str, int] = {}
         last_complete: float | None = None
         while not stop_monitor.wait(0.1):
             if not monitor_active.is_set():
@@ -945,6 +950,20 @@ def run_patrol(
             if last_complete is None:
                 last_complete = now
             samples = {node_id: controller.position_sample() for node_id, controller in by_node.items()}
+            if coverage is not None:
+                sampled_at = time.monotonic()
+                for node_id, sample in samples.items():
+                    position = sample["position"]
+                    received_at = sample["received_at"]
+                    route_start = route_started_at.get(node_id)
+                    if (route_start is not None and position is not None
+                            and sample["calibration_valid"] and received_at is not None
+                            and received_at >= route_start
+                            and 0 <= sampled_at - received_at <= TELEMETRY_STALE_AFTER_S
+                            and math.isfinite(position.x_m) and math.isfinite(position.y_m)
+                            and sample["sequence"] > coverage_sequences.get(node_id, -1)):
+                        coverage.observe(north_m=position.x_m, east_m=position.y_m)
+                        coverage_sequences[node_id] = sample["sequence"]
             separation["attempt_count"] += 1
             complete = all(sample["position"] is not None and sample["calibration_valid"]
                            and sample["received_at"] is not None
@@ -1072,32 +1091,33 @@ def run_patrol(
                         f"{node_id} entry waypoint {index + 1} timeout"
                     )
 
-        def execute_route(row: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+        def execute_route(row: dict[str, Any]) -> None:
             node_id = str(row["node_id"])
             controller = by_node[node_id]
-            waypoint_results: list[dict[str, Any]] = []
-            for index, raw_waypoint in enumerate(row["waypoints"]):
-                waypoint = _position(
-                    raw_waypoint,
-                    context=f"{node_id} waypoint {index + 1}",
-                )
-                outcome = controller.goto(
-                    waypoint,
-                    radius_m=float(plan["arrival_radius_m"]),
-                    hold_samples=int(plan["arrival_hold_samples"]),
-                    timeout_s=float(plan["waypoint_timeout_s"]),
-                )
-                outcome["index"] = index + 1
-                waypoint_results.append(outcome)
-                if not outcome["reached"]:
-                    raise PatrolError(f"{node_id} waypoint {index + 1} timeout")
-            return node_id, waypoint_results
+            route_started_at[node_id] = time.monotonic()
+            try:
+                for index, raw_waypoint in enumerate(row["waypoints"]):
+                    waypoint = _position(
+                        raw_waypoint,
+                        context=f"{node_id} waypoint {index + 1}",
+                    )
+                    outcome = controller.goto(
+                        waypoint,
+                        radius_m=float(plan["arrival_radius_m"]),
+                        hold_samples=int(plan["arrival_hold_samples"]),
+                        timeout_s=float(plan["waypoint_timeout_s"]),
+                    )
+                    outcome["index"] = index + 1
+                    results[node_id]["waypoints"].append(outcome)
+                    if not outcome["reached"]:
+                        raise PatrolError(f"{node_id} waypoint {index + 1} timeout")
+            finally:
+                del route_started_at[node_id]
 
         with ThreadPoolExecutor(max_workers=len(plan_rows)) as executor:
             futures = [executor.submit(execute_route, row) for row in plan_rows]
             for future in futures:
-                node_id, waypoint_results = future.result()
-                results[node_id]["waypoints"] = waypoint_results
+                future.result()
 
         for row in plan_rows:
             node_id = str(row["node_id"])
@@ -1192,5 +1212,6 @@ def run_patrol(
         "vehicles": [results[str(row["node_id"])] for row in plan_rows],
         "separation": separation,
         "physical_evidence": physical_evidence,
+        **({"coverage": coverage.report()} if coverage is not None else {}),
         "error": error,
     }

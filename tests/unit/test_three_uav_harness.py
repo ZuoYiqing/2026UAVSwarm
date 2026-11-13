@@ -139,21 +139,48 @@ def test_world_contains_aligned_pads_but_no_static_x500() -> None:
     assert not any(name.startswith("x500") for name in names)
 
 
-def test_repeated_start_is_rejected_when_owned_process_identity_is_live(
-    monkeypatch: pytest.MonkeyPatch,
+def test_repeated_start_reuses_only_the_same_complete_managed_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    decision = harness.ProcessIdentityDecision(
-        code=harness.IDENTITY_MATCH,
-        node_id="UAV-01",
-        pid=4242,
-        signal_allowed=True,
-    )
-    monkeypatch.setattr(harness, "_validate_processes", lambda *args, **kwargs: [decision])
+    import gazebo_evidence
 
-    with pytest.raises(harness.HarnessError, match="already running"):
-        harness._validate_start_state(
-            {"run_id": RUN_ID, "processes": [_process_row()]}
+    manifest = _manifest()
+    world = WORLD_PATH.resolve()
+    state = {
+        "run_id": RUN_ID,
+        "manifest_path": str(MANIFEST_PATH.resolve()),
+        "manifest_sha256": harness._manifest_digest(manifest),
+        "px4_dir": str(harness.resolve_px4_dir(manifest)),
+        "mode": "headless",
+        "world_name": manifest["world_name"],
+        "world_path": str(world),
+        "world_file_sha256": harness.hashlib.sha256(world.read_bytes()).hexdigest(),
+        "processes": [],
+    }
+    decisions = [
+        harness.ProcessIdentityDecision(
+            code=harness.IDENTITY_MATCH, node_id=node, pid=pid, signal_allowed=True
         )
+        for pid, node in enumerate(("UAV-01", "UAV-02", "UAV-03"), start=4242)
+    ]
+    models = {"x500_0", "x500_1", "x500_2"}
+    monkeypatch.setattr(harness, "read_state", lambda: state)
+    monkeypatch.setattr(harness, "_validate_processes", lambda *args, **kwargs: decisions)
+    monkeypatch.setattr(harness, "gazebo_models", lambda: models)
+    monkeypatch.setattr(harness, "_running_gazebo_worlds", lambda: [manifest["world_name"]])
+    monkeypatch.setattr(gazebo_evidence, "server_identity", lambda state: {"process_identity_valid": True})
+    monkeypatch.setattr(harness, "preflight", lambda manifest: pytest.fail("must not relaunch"))
+
+    harness.start_harness(MANIFEST_PATH, headless=True)
+    assert f"Harness already running: run_id={RUN_ID}" in capsys.readouterr().out
+    with pytest.raises(harness.HarnessError, match="running_configuration_mismatch"):
+        harness.start_harness(MANIFEST_PATH, headless=False)
+    models.remove("x500_2")
+    with pytest.raises(harness.HarnessError, match="gazebo_models_missing: x500_2"):
+        harness.start_harness(MANIFEST_PATH, headless=True)
+    decisions.pop()
+    with pytest.raises(harness.HarnessError, match="managed_run_incomplete"):
+        harness.start_harness(MANIFEST_PATH, headless=True)
 
 
 RUN_ID = "run-test-001"
@@ -480,10 +507,11 @@ def test_cleanup_incomplete_preserves_state_after_safe_process_stop(
     monkeypatch.setattr(
         harness,
         "_wait_for_cleanup",
-        lambda state: {
+        lambda state, **kwargs: {
             "clean": False,
             "world_stopped": False,
             "ports_released": True,
+            "live_group_member_pids": [],
         },
     )
 
@@ -493,3 +521,54 @@ def test_cleanup_incomplete_preserves_state_after_safe_process_stop(
     assert signals == [(4242, harness.SIGTERM)]
     assert state_path.exists()
     assert pid_path.exists()
+
+
+def test_cleanup_waits_for_children_even_when_world_and_ports_are_clear() -> None:
+    evidence = harness._wait_for_cleanup(
+        {"world_name": "simple_recon_v0_1", "processes": [_process_row()]},
+        timeout_s=0,
+        world_probe=lambda: [],
+        process_probe=lambda _: [4243],
+    )
+    assert evidence["world_stopped"] and evidence["ports_released"]
+    assert evidence["live_group_member_pids"] == [4243]
+    assert not evidence["clean"]
+
+
+@pytest.mark.parametrize("reused_pid", [False, True])
+def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reused_pid: bool
+) -> None:
+    state_path, _ = _write_state(tmp_path, monkeypatch)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    server = copy.deepcopy(state["processes"][0])
+    state["processes"][0]["owns_gazebo"] = True
+    server.update(pid=4243, kind="gazebo")
+    server["process_identity"].update(pid=4243)
+    state["gazebo_processes"] = [server]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    signals: list[tuple[int, int]] = []
+
+    def identity_reader(pid: int):
+        if pid == 4242 or signals:
+            return _exited()
+        if reused_pid:
+            return _observed(pid=4243, proc_start_time_ticks=999999)
+        return harness.ProcessIdentityReadResult(
+            code=harness.IDENTITY_OBSERVED, identity=_identity(pid=4243, pgid=4242)
+        )
+
+    monkeypatch.setattr(harness, "read_process_identity", identity_reader)
+    monkeypatch.setattr(harness.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(harness.os, "killpg", lambda *args: pytest.fail("dead group leader"), raising=False)
+    monkeypatch.setattr(harness, "_wait_for_cleanup", lambda *args, **kwargs: {
+        "clean": bool(signals), "live_group_member_pids": [] if signals else [4243]
+    })
+    if reused_pid:
+        with pytest.raises(harness.HarnessError, match="gazebo_cleanup_identity_invalid"):
+            harness.stop_harness()
+        assert not signals and state_path.exists()
+    else:
+        assert harness.stop_harness()["cleanup"]["clean"]
+        assert signals == [(4243, harness.SIGTERM)]
+        assert not state_path.exists()
