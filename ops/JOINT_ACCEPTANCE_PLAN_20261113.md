@@ -1,3 +1,65 @@
+## 零、组合版本已固定（2026-11-13 补记）
+
+### 结论
+
+**三条 demo 线可以干净合并，合并后全量测试全绿。** 已固化为可复现版本：
+
+| 项 | 值 |
+|---|---|
+| 分支 | **`integration/demo-20261113`** |
+| 提交 | `421aa27`（合并提交） |
+| **标签** | **`demo-20261113`**（annotated tag，指向 `174fdc0`） |
+| 基线 | `main` `d60f74f` |
+| 相对 main 的变化 | **34 files changed, +3340 −322** |
+
+### 三条线的组成
+
+| PR | 分支 | 提交 | 内容 |
+|---|---|---|---|
+| **#98** | `codex/simulation-demo-readiness` | `914b042` | 三机飞行验证、`area_coverage.py`、起停可靠性 |
+| **#99** | `codex/runtime-demo-readiness` | `74750f1` | 链路评分、演习注入（`http/demo.py`）、任务进度（`http/mission_progress.py`）、失败归因 |
+| **#100** | `codex/frontend-demo-readiness` | `3d5d5e4` | 主控台 F1~F7（`mission-dashboard.js`）+ LIVE 舞台与双面板修复 |
+
+> **注意**：`3d5d5e4` 比 #100 描述里写的 `ee75534` **更新一个提交**（`expose LIVE stage and prevent twin panel overlap`）。合并时用的是分支最新 HEAD，不是 PR 描述里的提交。
+
+### 实测依据
+
+1. **目录完全不重叠** —— 这是能干净合并的根本原因：
+   - #98 → `simulation/`、`scenarios/`、`docs/simulation/`
+   - #99 → `src/uav_runtime/`、`docs/fixtures/`
+   - #100 → `frontend/swarm-console/`
+2. **依次 `merge --no-ff` 零冲突**
+3. **合并后全量 `pytest`：936 passed, 12 skipped, 0 failed**（225 秒）
+
+### ⚠️ 明确排除：#97
+
+`codex/runtime-platform-autonomy`（`8d94a80`）**不在本版本内**，原因：
+
+| 指标 | #97 | 三条 demo 线 |
+|---|---|---|
+| 分叉点 | `6fe7057` | `bb24e38` |
+| 落后 main | **23 个提交** | 2 个提交 |
+| 自身提交数 | **10 个** | 1~2 个 |
+| 内容 | 平台侧持久任务服务、UAV-02 机载 Runtime、本地模型接入、MAVLink 健康修复 | demo 接口与展示 |
+
+**#97 是"飞机能自己执行"的基础**（机载 Runtime / 持久任务 / 模型接入），
+而 **#99 不含它**，所以 #99 的降级处置只能"模拟"。
+
+**这直接决定了"方案 A vs B"的性质**：
+- 方案 A（模拟 + 标演习）= 现有三条线就能做，零额外合并风险
+- 方案 B（真停）**不是改几行代码，而是要合并 #97** —— 落后 23 个提交，风险完全不同
+
+### 怎么用这个版本
+
+```bash
+git fetch origin --tags
+git checkout demo-20261113
+```
+
+**以后所有演示都从这个 tag 起**，不要用浮动分支。
+
+---
+
 # 三线联合验收计划（demo readiness）
 
 **日期**：2026-11-13
