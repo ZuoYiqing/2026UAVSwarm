@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import parse_qs
 from uuid import uuid4
@@ -50,6 +51,8 @@ from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.http.preflight import check_preflight
+from uav_runtime.http.demo import DemoRehearsal, parse_injection
+from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
@@ -63,6 +66,64 @@ _DEFAULT_VEHICLE_CONFIG = (
 )
 VEHICLE_REGISTRY = VehicleRegistry.from_json(os.environ.get("UAV_RUNTIME_VEHICLE_CONFIG", _DEFAULT_VEHICLE_CONFIG))
 RUNTIME_STATE_STORE = RuntimeStateStore(vehicle_registry=VEHICLE_REGISTRY)
+DEMO_REHEARSAL: DemoRehearsal | None = None
+_MISSION_PROGRESS: MissionProgress | None = None
+_MISSION_PROGRESS_LOCK = Lock()
+
+
+def mission_progress() -> dict[str, Any]:
+    with _MISSION_PROGRESS_LOCK:
+        progress = _MISSION_PROGRESS
+    return progress.snapshot() if progress is not None else unavailable_progress()
+
+
+def configure_demo() -> DemoRehearsal | None:
+    """Enable the rehearsal only at explicit server startup."""
+    global DEMO_REHEARSAL
+    if os.environ.get("UAV_RUNTIME_DEMO_ENABLED") != "1":
+        return None
+
+    def measured(node_id: str) -> int:
+        handle = VEHICLE_REGISTRY.get_vehicle(node_id)
+        state = VEHICLE_REGISTRY.refresh_state(handle)
+        return handle.session.link_quality() if state.connected and not state.stale else 0
+
+    def append(event: dict[str, Any]) -> None:
+        AuditLog(AUDIT_PATH).append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+
+    DEMO_REHEARSAL = DemoRehearsal(
+        lambda: [h.config.node_id for h in VEHICLE_REGISTRY.list_vehicles() if h.config.enabled],
+        measured, append,
+    )
+    DEMO_REHEARSAL.start()
+    return DEMO_REHEARSAL
+
+
+def _demo_route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+    demo = DEMO_REHEARSAL
+    if method == "GET" and path == "/api/demo/state":
+        return 200, demo.state() if demo else {
+            "contract_version": "1.0", "enabled": False, "mode": "LIVE", "overrides": [],
+            "held_out": [], "assignments": [], "execution_authorized": False, "flight_command_sent": False,
+        }
+    if method != "POST" or path not in {"/api/demo/inject", "/api/demo/clear"}:
+        return 404, {"error": "not_found"}
+    if demo is None:
+        return 404, {"error": "demo_disabled"}
+    node = body.get("node_id")
+    if not isinstance(node, str) or node not in demo.nodes():
+        return 400, {"error": "invalid_demo_node"}
+    try:
+        if path == "/api/demo/clear":
+            if set(body) != {"node_id"}:
+                raise ValueError("unexpected_demo_field")
+            changed = demo.clear(node)
+        else:
+            changed = demo.inject(node, *parse_injection(body))
+    except ValueError as exc:
+        return 400, {"error": str(exc)}
+    return 200, {**demo.state(), "changed": changed}
 
 
 def _utc_now() -> str:
@@ -460,6 +521,7 @@ def _execute_flight_action(
     cancel_event = admission["cancel_event"]
     RUNTIME_STATE_STORE.transition_action(action_id, "executing")
     landing_context: tuple[dict[str, Any], dict[str, Any]] | None = None
+    goto_calibration: dict[str, Any] | None = None
     execution_cursor: int | None = None
     execution_started = False
     try:
@@ -500,6 +562,7 @@ def _execute_flight_action(
             calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(
                 handle.config.node_id
             )
+            goto_calibration = calibration
             translation = (calibration or {}).get("translation_scene_ned_m")
             if calibration_status != "calibrated" or not isinstance(translation, dict):
                 # **拒绝执行，而不是"尽力而为"地飞。** 没有可信平移量时把 scene 坐标
@@ -600,6 +663,20 @@ def _execute_flight_action(
         out.update(identity)
         out["execution_admitted"] = True
         out["policy_decision"] = policy_event
+        if action == "goto" and out.get("result") == "pass" and goto_calibration:
+            try:
+                current_calibration, status = RUNTIME_STATE_STORE.coordinate_calibration(handle.config.node_id)
+            except (ValueError, VehicleRegistryError):
+                current_calibration, status = None, "unavailable"
+            if (status == "calibrated" and current_calibration
+                    and all(current_calibration.get(key) == goto_calibration.get(key) for key in (
+                        "calibration_version", "session_position_epoch", "translation_scene_ned_m",
+                        "scene_id", "map_version",
+                    ))):
+                out["arrival_calibration"] = {key: goto_calibration.get(key) for key in (
+                    "scene_id", "map_version", "calibration_version", "session_position_epoch",
+                    "translation_scene_ned_m",
+                )}
         if action == "land" and out.get("result") == "pass":
             current_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
             if (landing_context is None or current_context is None
@@ -825,7 +902,26 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
             "step_outcomes": [],
         }
 
-    result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    # Observe existing execution; this projection never submits an action,
+    # changes an outcome, or reads another runner's standalone report.
+    global _MISSION_PROGRESS
+    coverage, coverage_reason, coverage_polygon = configured_coverage(
+        getattr(VEHICLE_REGISTRY, "scene", None), payload_plan["map_version"],
+    )
+    progress = MissionProgress(
+        controller.action_executor, approved, scene_id=payload_plan["scene_id"],
+        map_version=payload_plan["map_version"],
+        coverage=coverage, coverage_reason=coverage_reason, coverage_polygon=coverage_polygon,
+    )
+    controller.action_executor = progress
+    with _MISSION_PROGRESS_LOCK:
+        _MISSION_PROGRESS = progress
+    try:
+        result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    except Exception:
+        progress.finish("failed")
+        raise
+    progress.finish(result.get("result"))
     RUNTIME_STATE_STORE.record_event({
         "type": "agent_plan_execution_result", "timestamp": _utc_now(),
         "plan_id": plan.plan_id,
@@ -924,7 +1020,13 @@ def runtime_snapshot() -> dict[str, Any]:
 
 def vehicle_snapshot() -> dict[str, Any]:
     """Return the Cesium vehicle feed projection from cached telemetry only."""
-    return RUNTIME_STATE_STORE.vehicle_snapshot()
+    snapshot = RUNTIME_STATE_STORE.vehicle_snapshot()
+    if DEMO_REHEARSAL is not None:
+        overrides = {row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
+        for vehicle in snapshot["vehicles"]:
+            if override := overrides.get(vehicle["id"]):
+                vehicle.update(link_quality=override["value"], link_quality_mode="DEMO")
+    return snapshot
 
 
 def agent_status() -> dict[str, Any]:
@@ -1059,6 +1161,10 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
 
 
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
+    if method == "GET" and normalized == "/api/mission/progress":
+        return 200, mission_progress()
+    if normalized.startswith("/api/demo/"):
+        return _demo_route(method, normalized, payload)
     if method == "GET" and normalized == "/api/health":
         return 200, health()
     if method == "GET" and normalized == "/api/preflight":
@@ -1145,6 +1251,7 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "ack_evidence": out.get("ack_evidence"),
         "completion_evidence": out.get("completion_evidence"),
         "completion_state": out.get("completion_state"),
+        "completion_timeout_detail": out.get("completion_timeout_detail"),
         "max_altitude_m": out.get("max_altitude_m"),
         "threshold_reached": out.get("threshold_reached"),
         "result": out.get("result"),

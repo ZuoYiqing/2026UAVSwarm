@@ -128,6 +128,7 @@ class VehicleRegistry:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.scene_id = scene_id
+        self.scene: dict[str, Any] | None = None
         self.default_node_id = default_node_id
         self.stale_after_ms = stale_after_ms
         self._session_factory = session_factory or MavlinkBackendSession.from_config
@@ -169,6 +170,7 @@ class VehicleRegistry:
                 ],
             }
         scene_id = str(data.get("scene_id") or "")
+        scene = None
         scene_poses: dict[str, dict[str, Any]] = {}
         if scene_id:
             if data.get("scene_path"):
@@ -208,6 +210,7 @@ class VehicleRegistry:
             default_node_id=data.get("default_node_id"),
             **kwargs,
         )
+        registry.scene = scene
         for row in data.get("vehicles", []):
             row = dict(row)
             metadata = dict(row.get("metadata") or {})
