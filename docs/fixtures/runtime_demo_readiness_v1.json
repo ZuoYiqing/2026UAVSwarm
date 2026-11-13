@@ -1,0 +1,59 @@
+{
+  "fixture_only": true,
+  "inject_request": {
+    "node_id": "UAV-02",
+    "kind": "link_degraded",
+    "value": 18,
+    "duration_s": 60
+  },
+  "inject_response_fields": {
+    "contract_version": "1.0",
+    "enabled": true,
+    "mode": "DEMO",
+    "changed": true,
+    "execution_authorized": false,
+    "flight_command_sent": false,
+    "held_out": ["UAV-02"]
+  },
+  "vehicle_fields": {
+    "id": "UAV-02",
+    "link_quality": 18,
+    "link_quality_measured": 0,
+    "link_quality_mode": "DEMO"
+  },
+  "policy_decision_fields": {
+    "action_type": "hold_position",
+    "node_id": "UAV-02",
+    "mode": "DEMO",
+    "decision_code": "allow",
+    "rule_name": "degraded_link_hold",
+    "link_quality": 18,
+    "execution_authorized": false
+  },
+  "mission_progress_unavailable": {
+    "contract_version": "1.0",
+    "status": "unavailable",
+    "mode": "LIVE",
+    "source": "runtime_plan_executor",
+    "mission_id": null,
+    "run_id": null,
+    "scene_id": null,
+    "map_version": null,
+    "source_timestamp": null,
+    "completion_basis": null,
+    "completion_pct": null,
+    "waypoints_reached": null,
+    "waypoints_total": null,
+    "area_total_km2": null,
+    "area_covered_km2": null,
+    "coverage_pct": null,
+    "targets_found": null,
+    "targets_total": null,
+    "degraded": null,
+    "vehicles_active": null,
+    "vehicles": [],
+    "coverage": null,
+    "coverage_reason": null,
+    "reason": "no_runtime_plan_execution"
+  }
+}

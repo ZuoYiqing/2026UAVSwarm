@@ -338,6 +338,9 @@ class MavlinkBackendSession:
     _local_positions: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     _armed_states: list[tuple[int, bool, float, str]] = field(default_factory=list)
     _landed_states: list[tuple[int, int, float, str]] = field(default_factory=list)
+    _link_heartbeat_at: float | None = None
+    _link_position_at: float | None = None
+    _link_position_sequence: int | None = None
     _home_position: dict[str, Any] | None = None
     _global_position: dict[str, Any] | None = None
     _last_position_boot_ms: int | None = None
@@ -426,6 +429,9 @@ class MavlinkBackendSession:
                 self._validate_identity(self.target_system, self.target_component)
                 self._mavutil = mavutil_module
                 self.connection = conn
+                with self._rx_condition:
+                    self._link_heartbeat_at = self._link_position_at = None
+                    self._link_position_sequence = None
                 self.connected = True
                 self.identity_error = None
                 self.last_receive_error = None
@@ -485,6 +491,21 @@ class MavlinkBackendSession:
 
     def receive_owner_count(self) -> int:
         return 1 if self.receive_thread_alive() else 0
+
+    def link_quality(self) -> int:
+        """Display-only RX freshness, not a radio metric or Policy input."""
+        with self._rx_condition:
+            heartbeat, position = self._link_heartbeat_at, self._link_position_at
+            if not self.connected or not self.receive_thread_alive() or heartbeat is None or position is None:
+                return 0
+            now = time.monotonic()
+
+        def score(age: float, healthy: float, expired: float) -> float:
+            if age <= healthy:
+                return 100.0 - 20.0 * max(0.0, age) / healthy
+            return 80.0 * max(0.0, expired - age) / (expired - healthy)
+
+        return round(min(score(now - heartbeat, 2.5, 4.5), score(now - position, 0.5, 2.0)))
 
     def subscribe(self, callback: Callable[[Any], None]) -> int:
         with self._rx_condition:
@@ -550,7 +571,11 @@ class MavlinkBackendSession:
                     )
             received_monotonic = time.monotonic()
             received_timestamp = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            matched_source = (msg_system == (self.expected_target_system or self.target_system)
+                              and msg_component == (self.expected_target_component or self.target_component))
             if kind == "HEARTBEAT":
+                if matched_source:
+                    self._link_heartbeat_at = received_monotonic
                 armed_flag = self._mavlink_const("MAV_MODE_FLAG_SAFETY_ARMED", 128)
                 base_mode = int(getattr(message, "base_mode", 0) or 0)
                 self._armed_states.append((sequence, bool(base_mode & armed_flag), received_monotonic, received_timestamp))
@@ -578,6 +603,8 @@ class MavlinkBackendSession:
                         self._home_position = None
                         self._global_position = None
                         self._local_positions.clear()
+                        self._link_position_at = None
+                        self._link_position_sequence = None
                         self._armed_states.clear()
                         self._landed_states.clear()
                         self._last_heartbeat_mode = None
@@ -594,6 +621,9 @@ class MavlinkBackendSession:
                 )
                 if len(self._local_positions) > 1024:
                     del self._local_positions[:-512]
+                if matched_source and all(math.isfinite(value) for value in self._local_positions[-1][1:4]):
+                    self._link_position_at = received_monotonic
+                    self._link_position_sequence = sequence
             elif kind == "HOME_POSITION":
                 self._home_position = {
                     "sequence": sequence, "received_monotonic": received_monotonic,
@@ -635,6 +665,8 @@ class MavlinkBackendSession:
                         self._home_position = None
                         self._global_position = None
                         self._local_positions.clear()
+                        self._link_position_at = None
+                        self._link_position_sequence = None
                     self._odometry_reset_counter = counter
             callbacks = list(self._subscribers.values())
             self._rx_condition.notify_all()
@@ -2179,8 +2211,10 @@ class MavlinkBackendSession:
                 }
             with self._rx_condition:
                 fresh = [row for row in self._local_positions if row[0] > start_sequence]
+                matched_sequence = self._link_position_sequence
+                position_epoch = self._position_epoch
             if fresh:
-                _, x, y, z, received_monotonic, _ = fresh[-1]
+                sequence, x, y, z, received_monotonic, timestamp = fresh[-1]
                 samples = len(fresh)
                 # 三维欧氏距离。三个分量都要算 —— 只比高度会把"高度对了但水平
                 # 还差很远"误判为到达。
@@ -2201,6 +2235,13 @@ class MavlinkBackendSession:
                             "min_error_m": min_error, "target_error_m": tolerance,
                             "hold_s": received_monotonic - inside_since,
                             "start_sequence": start_sequence,
+                            # Display evidence only; do not change the existing arrival verdict.
+                            "position_sample": (
+                                {"north": x, "east": y, "down": z, "sequence": sequence,
+                                 "position_epoch": position_epoch, "sample_timestamp": timestamp}
+                                if sequence == matched_sequence and time.monotonic() - received_monotonic <= 0.5
+                                else None
+                            ),
                         }
                 else:
                     inside_since = None

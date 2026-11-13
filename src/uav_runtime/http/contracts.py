@@ -65,6 +65,12 @@ class ActionResultView:
     observations: dict[str, Any]
     cleanup: dict[str, Any]
     failure_reason: str | None
+    completion_state: str | None = None
+    completion_timeout_detail: str | None = None
+    mode: str | None = None
+    execution_authorized: bool | None = None
+    flight_command_sent: bool | None = None
+    rule_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,6 +97,11 @@ class PolicyDecisionView:
     explanation: str | None
     audit_tags: list[str]
     timestamp: str | None
+    rule_name: str | None = None
+    reason: str | None = None
+    mode: str | None = None
+    link_quality: int | None = None
+    execution_authorized: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -269,7 +280,8 @@ def event_to_action_result_view(event: dict[str, Any], *, index: int = 0) -> Act
         backend=event.get("backend"),
         backend_mode=event.get("backend_mode"),
         adapter=event.get("adapter") or _adapter_from_backend(event.get("backend")),
-        status="failed" if event.get("result") == "fail" or event.get("failure_reason") else "succeeded",
+        status=("failed" if event.get("result") == "fail" or event.get("failure_reason")
+                else "simulated" if event.get("mode") == "DEMO" else "succeeded"),
         result=event.get("result"),
         started_at=event.get("started_at") or event.get("timestamp"),
         finished_at=event.get("finished_at") or event.get("timestamp"),
@@ -279,6 +291,12 @@ def event_to_action_result_view(event: dict[str, Any], *, index: int = 0) -> Act
         observations=observations,
         cleanup={"auto_land": event.get("auto_land"), "land_ack": ack.get("land_ack")},
         failure_reason=event.get("failure_reason"),
+        completion_state=event.get("completion_state"),
+        completion_timeout_detail=event.get("completion_timeout_detail"),
+        mode=event.get("mode"),
+        execution_authorized=event.get("execution_authorized"),
+        flight_command_sent=event.get("flight_command_sent"),
+        rule_name=event.get("rule_name"),
     )
 
 
@@ -322,6 +340,11 @@ def event_to_policy_decision_view(event: dict[str, Any], *, index: int = 0) -> P
         explanation=event.get("explanation"),
         audit_tags=list(event.get("audit_tags") or []),
         timestamp=event.get("timestamp"),
+        rule_name=event.get("rule_name"),
+        reason=event.get("reason"),
+        mode=event.get("mode"),
+        link_quality=event.get("link_quality"),
+        execution_authorized=event.get("execution_authorized"),
     )
 
 
