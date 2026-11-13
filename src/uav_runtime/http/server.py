@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from uav_runtime.http.routes import dispatch
+from uav_runtime.http.routes import configure_demo, dispatch
 from uav_runtime.http.routes import VEHICLE_REGISTRY
 
 ALLOWED_ORIGINS = {
@@ -54,6 +54,21 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
     def _handle_json_request(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path.startswith("/api/demo/") and self.command == "POST":
+                origin = self.headers.get("Origin")
+                if self.client_address[0] != "127.0.0.1" or (origin is not None and origin not in ALLOWED_ORIGINS):
+                    self._send_json(403, {"error": "local_demo_origin_required"})
+                    return
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                    self._send_json(415, {"error": "json_content_type_required"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if not 1 <= length <= 4096:
+                    self._send_json(400, {"error": "invalid_demo_body_length"})
+                    return
             body = self._read_json_body() if self.command == "POST" else {}
             status, payload = dispatch(self.command, parsed.path, body=body, query=parsed.query)
             self._send_json(status, payload)
@@ -74,13 +89,16 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status: int, payload: Any) -> None:
         body = b"" if status == 204 else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self._send_cors_headers()
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
 
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin")
@@ -102,17 +120,20 @@ def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPSer
 
 def main() -> int:
     server = create_server()
-    telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-    if telemetry_enabled:
-        # Registry owns one collector/session lifecycle per node. Endpoint changes
-        # belong in config/vehicles.sitl.json, never in HTTP request handlers.
-        VEHICLE_REGISTRY.start_all()
-    print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
+    demo = None
     try:
+        telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        if telemetry_enabled:
+            # Registry owns one collector/session lifecycle per node.
+            VEHICLE_REGISTRY.start_all()
+        demo = configure_demo()
+        print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if demo is not None:
+            demo.close()
         VEHICLE_REGISTRY.stop_all()
         server.server_close()
     return 0
