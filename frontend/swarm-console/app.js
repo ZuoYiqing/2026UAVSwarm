@@ -1084,7 +1084,9 @@ function policyAuditPanel() {
 
 function overviewPage() {
   return `<div class="page mission-overview">
-    ${pageTitle("集群任务态势", "区域覆盖、链路健康与自主处置", '<a class="button stage-link" href="?mode=stage">演示大屏 ↗</a>')}
+    ${pageTitle("集群任务态势", "区域覆盖、链路健康与自主处置", `
+      <a class="button stage-link" href="?mode=stage&amp;source=live">LIVE 大屏</a>
+      <a class="button stage-link" href="?mode=stage">DEMO 大屏</a>`)}
     ${missionMetricsBar()}
     ${missionIndicators()}
     <div class="mission-workspace">${missionMapPanel()}${timelinePanel()}</div>
@@ -1125,12 +1127,12 @@ function runtimeChain(compact = false) {
 
 function twinPage() {
   const summary = fleetSummary();
-  return `<div class="page">
+  return `<div class="page twin-page">
     ${pageTitle("三维集群态势", "Cesium · Runtime vehicle snapshot · 多机任务态势", `<a class="button" href="${esc(state.simulationUrl)}" target="_blank" rel="noreferrer">独立打开</a>`)}
-    <div class="two-main" style="grid-template-columns:1.42fr .58fr">
-      ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "h-fill twin-panel")}
-      <div class="grid" style="grid-template-rows:auto 1fr">
-        <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
+    <div class="twin-main">
+      ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "twin-panel")}
+      <div class="grid twin-nodes">
+        <div class="metrics">
           ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan", "online")}
           ${metric("已武装", summary.armed, "Telemetry", "green", "armed")}
           ${metric("离线 / 过期", state.linkIssues ?? "--", "Fleet", "amber", "issues")}
@@ -1138,9 +1140,9 @@ function twinPage() {
         ${panel("节点列表", vehicleTable(), "scroll")}
       </div>
     </div>
-    <div class="split-2" style="grid-template-columns:1.15fr .85fr">
+    <div class="twin-details">
       ${vehicleDiagramPanel()}
-      ${panel("所选节点遥测", telemetrySummary())}
+      ${panel("所选节点遥测", `<div class="twin-telemetry" id="selected-telemetry">${telemetrySummary()}</div>`)}
     </div>
   </div>`;
 }
@@ -1251,14 +1253,12 @@ function telemetryCard(title, value, color) {
 }
 
 function telemetrySummary() {
-  // id 供同页局部更新使用：主控制台每 2 秒刷新遥测，若为此重建整页，
-  // 三维视图的 iframe 会跟着重建并重新加载。
-  return `<div class="cols-4" id="selected-telemetry">
+  return `
     ${telemetryCard("max_altitude_m", formatNumber(state.maxAltitude), "#36c7f4")}
     ${telemetryCard("last_z", formatNumber(state.lastZ), "#42d883")}
     ${telemetryCard("threshold_reached", state.thresholdReached === null ? "--" : String(state.thresholdReached), "#f5b84c")}
     ${telemetryCard("current status", state.currentAction, "#9a7cff")}
-  </div>`;
+  `;
 }
 
 function statusTile(title, value, detail, color) {
@@ -2271,7 +2271,11 @@ function ensureShell() {
   if (host.dataset?.shellMounted === "1") return;
   if (stageMode && dashboard) {
     host.innerHTML = `<main class="stage-shell">
-      <header class="stage-bar"><b>2026UAVSwarm</b><div id="stage-indicators"></div></header>
+      <header class="stage-bar">
+        <b>2026UAVSwarm</b>
+        <div id="stage-indicators"></div>
+        <a class="button stage-link" href="./">返回主控台</a>
+      </header>
       <div id="stage-title"></div><div id="stage-content"></div>
       <div id="slot-banner"></div>
     </main>`;
@@ -2283,7 +2287,7 @@ function ensureShell() {
   //
   // `.shell` 是 CSS Grid（styles.css:46）：
   //     grid-template-columns: 252px minmax(0, 1fr);
-  //     grid-template-rows: 64px 1fr;
+  //     grid-template-rows: auto 1fr;
   // 且**只有 `.topbar` 有显式定位**（grid-column: 1 / -1），
   // `.sidebar` 与 `.content` 都靠**自动落格**：第 1 个位置被 topbar 占掉整行后，
   // sidebar 落 [第2行第1列]、content 落 [第2行第2列]。
