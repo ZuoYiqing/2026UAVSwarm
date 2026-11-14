@@ -71,6 +71,7 @@ class ActionResultView:
     execution_authorized: bool | None = None
     flight_command_sent: bool | None = None
     rule_name: str | None = None
+    simulated: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -102,6 +103,7 @@ class PolicyDecisionView:
     mode: str | None = None
     link_quality: int | None = None
     execution_authorized: bool | None = None
+    simulated: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -297,6 +299,7 @@ def event_to_action_result_view(event: dict[str, Any], *, index: int = 0) -> Act
         execution_authorized=event.get("execution_authorized"),
         flight_command_sent=event.get("flight_command_sent"),
         rule_name=event.get("rule_name"),
+        simulated=event.get("simulated"),
     )
 
 
@@ -345,6 +348,7 @@ def event_to_policy_decision_view(event: dict[str, Any], *, index: int = 0) -> P
         mode=event.get("mode"),
         link_quality=event.get("link_quality"),
         execution_authorized=event.get("execution_authorized"),
+        simulated=event.get("simulated"),
     )
 
 

@@ -50,12 +50,14 @@ from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
-from uav_runtime.http.preflight import check_preflight
 from uav_runtime.http.demo import DemoRehearsal, parse_injection
 from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
+from uav_runtime.http.preflight import check_preflight, check_peer_isolation
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
+PLATFORM_GATEWAY = None
+RUNTIME_RUN_ID = None
 BRIDGE_VERSION = "0.1"
 _DEFAULT_VEHICLE_CONFIG = (
     Path(__file__).resolve().parents[3]
@@ -84,16 +86,22 @@ def configure_demo() -> DemoRehearsal | None:
         return None
 
     def measured(node_id: str) -> int:
+        if node_id == "UAV-02" and PLATFORM_GATEWAY is not None:
+            view = PLATFORM_GATEWAY.cached_view()
+            snapshot = (view.get("projections") or {}).get("vehicle_snapshot") or {}
+            row = next((v for v in snapshot.get("vehicles", []) if v.get("id") == node_id), {})
+            return _platform_link_quality(row, fresh=view.get("fresh") is True)
         handle = VEHICLE_REGISTRY.get_vehicle(node_id)
         state = VEHICLE_REGISTRY.refresh_state(handle)
-        return handle.session.link_quality() if state.connected and not state.stale else 0
+        read = getattr(handle.session, "link_quality", None)
+        return read() if callable(read) and state.connected and not state.stale else 0
 
     def append(event: dict[str, Any]) -> None:
         AuditLog(AUDIT_PATH).append(event)
         RUNTIME_STATE_STORE.record_event(event)
 
     DEMO_REHEARSAL = DemoRehearsal(
-        lambda: [h.config.node_id for h in VEHICLE_REGISTRY.list_vehicles() if h.config.enabled],
+        lambda: [row["node_id"] for row in vehicles()["vehicles"] if row.get("enabled") is True],
         measured, append,
     )
     DEMO_REHEARSAL.start()
@@ -152,6 +160,27 @@ def preflight(query: str = "") -> dict[str, Any]:
     node_ids = values.get("node_id", [])
     if set(values) != {"node_id"} or len(node_ids) != 1 or not node_ids[0].strip():
         raise RequestValidationError("invalid_parameter", "node_id", "Exactly one explicit node_id is required; overrides are forbidden")
+    if PLATFORM_GATEWAY is not None and node_ids[0] == "UAV-02":
+        try:
+            code, result = PLATFORM_GATEWAY.read_preflight()
+            if (code != 200 or result.get("node_id") != "UAV-02" or result.get("contract_version") != "1.0"
+                    or result.get("execution_authorized") is not False or result.get("flight_command_sent") is not False
+                    or not isinstance(result.get("nodes"), dict) or set(result["nodes"]) != {"UAV-02"}
+                    or result.get("status") not in {"ready", "not_ready"}):
+                raise ValueError("invalid_platform_preflight")
+            peers, reasons = check_peer_isolation(VEHICLE_REGISTRY)
+            result["nodes"] = {**peers, **result.get("nodes", {})}
+            result["reason_codes"] = sorted(set(result.get("reason_codes", []) + reasons))
+            if result["reason_codes"]:
+                result["status"] = "not_ready"
+            result["source"] = "runtime_platform_gateway"
+            return result
+        except Exception:
+            return {"contract_version": "1.0", "preflight_id": f"preflight-{uuid4()}",
+                    "node_id": "UAV-02", "timestamp": _utc_now(), "nodes": {},
+                    "status": "not_ready", "execution_authorized": False, "flight_command_sent": False,
+                    "home_evidence": None, "rtl_destination_evidence": None, "ground_context": None,
+                    "reason_codes": ["platform_link_unavailable"], "source": "runtime_platform_gateway"}
     return check_preflight(VEHICLE_REGISTRY, RUNTIME_STATE_STORE, node_ids[0])
 
 
@@ -1001,32 +1030,81 @@ def _self_api_base() -> str:
     return f"http://127.0.0.1:{os.environ.get('UAV_RUNTIME_HTTP_PORT', '8765')}/api"
 
 
+def simulation_runtime_telemetry(query: str = "") -> tuple[int, dict[str, Any]]:
+    """Dedicated health evidence, deliberately distinct from UI telemetry/latest."""
+    if query:
+        return 400, {"error": "invalid_query", "flight_command_sent": False}
+    if not isinstance(RUNTIME_RUN_ID, str) or not RUNTIME_RUN_ID.strip():
+        return 503, {"error": "runtime_run_id_required", "flight_command_sent": False}
+    from uav_runtime.http.telemetry_evidence import local_evidence, remote_evidence
+    evidence = local_evidence(VEHICLE_REGISTRY, RUNTIME_RUN_ID)
+    if PLATFORM_GATEWAY is not None:
+        evidence["vehicles"] = [row for row in evidence["vehicles"] if row["node_id"] != "UAV-02"]
+        evidence["vehicles"].append(remote_evidence(PLATFORM_GATEWAY.cached_view(),
+                                                  scene_id=VEHICLE_REGISTRY.scene_id, run_id=RUNTIME_RUN_ID))
+    evidence["vehicles"].sort(key=lambda row: row["node_id"])
+    return 200, evidence
+
+
 def telemetry_latest(query: str = "") -> dict[str, Any]:
     """Return a cached telemetry snapshot without opening a MAVLink session."""
     node_id = parse_qs(query, keep_blank_values=True).get("node_id", [None])[0] or None
-    return RUNTIME_STATE_STORE.telemetry_latest(node_id=node_id)
+    if PLATFORM_GATEWAY is not None and node_id == "UAV-02":
+        from uav_runtime.platform.view import merge_projection
+        view = PLATFORM_GATEWAY.cached_view()
+        local = {"version": "1.0", "status": "unavailable", "fresh": False, "age_ms": None,
+                 "stale_after_ms": 3000, "backend": None, "backend_mode": None, "endpoint": None,
+                 "reason": "platform_view_unavailable", "source": "runtime_platform_gateway"}
+        local.update((view.get("projections") or {}).get("telemetry") or {})
+        local.update({"timestamp": _utc_now(), "nodes": []})
+        return merge_projection(local, view, "telemetry")
+    local = RUNTIME_STATE_STORE.telemetry_latest(node_id=node_id)
+    return _merge_platform_view(local, "telemetry") if node_id is None else local
 
 
 def vehicles() -> dict[str, Any]:
     """List registered nodes; reading registry state cannot execute commands."""
-    return {"version": "1.0", "timestamp": _utc_now(), "scene_id": VEHICLE_REGISTRY.scene_id,
-            "vehicles": VEHICLE_REGISTRY.vehicle_rows(), "source": "vehicle_registry"}
+    return _merge_platform_view({"version": "1.0", "timestamp": _utc_now(), "scene_id": VEHICLE_REGISTRY.scene_id,
+            "vehicles": VEHICLE_REGISTRY.vehicle_rows(), "source": "vehicle_registry"}, "vehicles")
 
 
 def runtime_snapshot() -> dict[str, Any]:
     """Return the non-blocking console snapshot assembled from owned state."""
-    return RUNTIME_STATE_STORE.runtime_snapshot()
+    snapshot = _merge_platform_view(RUNTIME_STATE_STORE.runtime_snapshot(), "runtime_snapshot")
+    if PLATFORM_GATEWAY is not None:
+        snapshot["simulation_status"] = simulation_status()
+    return snapshot
 
 
 def vehicle_snapshot() -> dict[str, Any]:
     """Return the Cesium vehicle feed projection from cached telemetry only."""
-    snapshot = RUNTIME_STATE_STORE.vehicle_snapshot()
-    if DEMO_REHEARSAL is not None:
-        overrides = {row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
-        for vehicle in snapshot["vehicles"]:
-            if override := overrides.get(vehicle["id"]):
-                vehicle.update(link_quality=override["value"], link_quality_mode="DEMO")
+    snapshot = _merge_platform_view(RUNTIME_STATE_STORE.vehicle_snapshot(), "vehicle_snapshot")
+    overrides = ({row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
+                 if DEMO_REHEARSAL is not None else {})
+    # merge_projection copies local and remote vehicle rows. Never write an
+    # override into the platform cache or into the measured value.
+    for vehicle in snapshot["vehicles"]:
+        if PLATFORM_GATEWAY is not None and vehicle["id"] == "UAV-02":
+            score = _platform_link_quality(vehicle, fresh=snapshot["platform_view"].get("fresh") is True)
+            vehicle.update(link_quality=score, link_quality_measured=score, link_quality_mode="LIVE")
+        if override := overrides.get(vehicle["id"]):
+            vehicle.update(link_quality=override["value"], link_quality_mode="DEMO")
     return snapshot
+
+
+def _platform_link_quality(vehicle: dict[str, Any], *, fresh: bool) -> int:
+    value = vehicle.get("link_quality_measured")
+    if (fresh and vehicle.get("connected") is True and (vehicle.get("telemetry") or {}).get("stale") is False
+            and vehicle.get("link_quality_mode") == "LIVE" and type(value) is int and 0 <= value <= 100):
+        return value
+    return 0
+
+
+def _merge_platform_view(local, key):
+    if PLATFORM_GATEWAY is None:
+        return local
+    from uav_runtime.platform.view import merge_projection
+    return merge_projection(local, PLATFORM_GATEWAY.cached_view(), key)
 
 
 def agent_status() -> dict[str, Any]:
@@ -1036,7 +1114,24 @@ def agent_status() -> dict[str, Any]:
 
 def simulation_status() -> dict[str, Any]:
     """Report Gazebo as unknown until independent simulator evidence exists."""
-    return RUNTIME_STATE_STORE.simulation_status()
+    status = RUNTIME_STATE_STORE.simulation_status()
+    if PLATFORM_GATEWAY is not None:
+        rows = vehicles()["vehicles"]
+        enabled = [row for row in rows if row.get("enabled", True)]
+        connected = [row for row in enabled if row.get("connected") and not row.get("stale", True)]
+        status.update({"total_registered_nodes": len(rows), "total_enabled_nodes": len(enabled),
+                       "connected_nodes": len(connected), "stale_nodes": sum(bool(r.get("stale", True)) for r in enabled),
+                       "offline_nodes": len(enabled) - len(connected), "any_px4_connected": bool(connected),
+                       "all_enabled_px4_connected": bool(enabled) and len(connected) == len(enabled),
+                       "px4_sitl_connected": bool(connected)})
+        if status.get("evidence_fresh"):
+            model_rows = {str(row.get("node_id")): row for row in status.get("models", []) if isinstance(row, dict)}
+            world = status.get("world")
+            ready = (status.get("clock_advancing") is True and isinstance(world, dict) and world.get("status") == "ready"
+                     and bool(enabled) and all(model_rows.get(row["node_id"], {}).get("status") == "ready" for row in enabled))
+            status.update({"status": "ready" if ready else "degraded", "gazebo_probe_status": "ready" if ready else "degraded",
+                           "reason": None if ready else "simulation_evidence_incomplete"})
+    return status
 
 
 def publish_simulation_evidence(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1165,6 +1260,16 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, mission_progress()
     if normalized.startswith("/api/demo/"):
         return _demo_route(method, normalized, payload)
+    if normalized.startswith("/api/platform/"):
+        from uav_runtime.platform.contract import PlatformError
+        if PLATFORM_GATEWAY is None:
+            return 503, {"error": "platform_not_configured"}
+        try:
+            return PLATFORM_GATEWAY.relay(method, normalized, payload, query)
+        except PlatformError as exc:
+            return exc.status, {"error": exc.code}
+        except Exception:
+            return 503, {"error": "platform_link_unavailable", "observation_status": "unknown"}
     if method == "GET" and normalized == "/api/health":
         return 200, health()
     if method == "GET" and normalized == "/api/preflight":
@@ -1192,8 +1297,20 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
     if method == "POST" and normalized == "/api/plans/execute":
         return 200, plans_execute(payload)
     if method == "POST" and normalized == "/api/simulation/evidence":
-        return 200, publish_simulation_evidence(payload)
+        result = publish_simulation_evidence(payload)
+        if PLATFORM_GATEWAY is not None:
+            try:
+                code, _ = PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
+                result["platform_publication"] = {"http_status": code}
+            except Exception:
+                result["platform_publication"] = {"error": "platform_link_unavailable"}
+        return 200, result
     if method == "POST" and normalized == "/api/coordinates/calibration":
+        if PLATFORM_GATEWAY is not None and payload.get("node_id") == "UAV-02":
+            try:
+                return PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
+            except Exception:
+                return 503, {"error": "platform_link_unavailable"}
         return 200, publish_coordinate_calibration(payload)
     if method == "POST" and normalized == "/api/planner/plan-mission":
         return 200, plan_mission(payload)
@@ -1215,6 +1332,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, skills(query)
     if method == "GET" and normalized == "/api/telemetry/latest":
         return 200, telemetry_latest(query)
+    if method == "GET" and normalized == "/api/simulation/runtime-telemetry":
+        return simulation_runtime_telemetry(query)
     if method == "GET" and normalized == "/api/vehicles":
         return 200, vehicles()
     if method == "GET" and normalized == "/api/snapshot":

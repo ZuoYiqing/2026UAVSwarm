@@ -136,3 +136,8 @@ def check_preflight(registry: Any, store: Any, node_id: str) -> dict[str, Any]:
             "ground_context": None, "reason_codes": ["preflight_query_exception"],
             "error_class": type(exc).__name__,
         }
+
+
+def check_peer_isolation(registry: Any):
+    """Cache/session evidence only, no HOME/config queries on other aircraft."""
+    return _observations(registry, None)

@@ -83,7 +83,7 @@ class DemoRehearsal:
         self.append({
             "type": event_type, "timestamp": datetime.now(timezone.utc).isoformat(),
             "node_id": node, "trace_id": trace, "mission_id": "demo-rehearsal",
-            "source": "runtime_demo", "mode": "DEMO", "execution_authorized": False,
+            "source": "runtime_demo", "mode": "DEMO", "simulated": True, "execution_authorized": False,
             "flight_command_sent": False, **fields,
         })
 
