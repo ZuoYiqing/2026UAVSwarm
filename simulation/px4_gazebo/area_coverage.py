@@ -7,6 +7,9 @@ from collections.abc import Sequence
 from typing import Any
 
 MAX_GRID_CELLS = 1_000_000
+MIN_DISPLAY_CELL_SIZE_M = 10
+MAX_DISPLAY_CELL_SIZE_M = 50
+MAX_DISPLAY_GRID_CELLS = 25_000
 Point = tuple[float, float]
 
 
@@ -90,8 +93,15 @@ class AreaCoverage:
 
         north, east = zip(*vertices)
         self._north0, self._east0 = min(north), min(east)
-        self._rows = math.ceil((max(north) - self._north0) / self.cell_size_m)
-        self._columns = math.ceil((max(east) - self._east0) / self.cell_size_m)
+        self._north_span = max(north) - self._north0
+        self._east_span = max(east) - self._east0
+        origin = scene.get("origin")
+        self._scene_origin = (
+            {key: origin.get(key) for key in ("lat_deg", "lon_deg", "alt_m")}
+            if isinstance(origin, dict) else {}
+        )
+        self._rows = math.ceil(self._north_span / self.cell_size_m)
+        self._columns = math.ceil(self._east_span / self.cell_size_m)
         if self._rows * self._columns > MAX_GRID_CELLS:
             raise ValueError("coverage grid exceeds maximum cell count")
         self._area = {
@@ -104,6 +114,7 @@ class AreaCoverage:
             raise ValueError("coverage polygon has no grid cell centers")
         self._covered: set[tuple[int, int]] = set()
         self._samples = 0
+        self._display_cache: tuple[float, int, list[tuple[int, int, int]]] | None = None
 
     def _center(self, row: int, col: int) -> Point:
         return (
@@ -125,9 +136,59 @@ class AreaCoverage:
                     self._covered.add((row, col))
         self._samples += 1
 
-    def report(self) -> dict[str, Any]:
-        cell_km2 = self.cell_size_m ** 2 / 1_000_000
+    def _display_grid(self, cell_size_m: float) -> dict[str, Any] | None:
+        cell_size_m = _finite(cell_size_m)
+        if not MIN_DISPLAY_CELL_SIZE_M <= cell_size_m <= MAX_DISPLAY_CELL_SIZE_M:
+            raise ValueError("display grid cell size must be between 10 and 50 m")
+        if self._samples == 0 or cell_size_m < self.cell_size_m:
+            return None
+        try:
+            lat, lon, alt = (_finite(self._scene_origin.get(key)) for key in ("lat_deg", "lon_deg", "alt_m"))
+        except ValueError:
+            return None
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+
+        rows = math.ceil(self._north_span / cell_size_m)
+        columns = math.ceil(self._east_span / cell_size_m)
+        if rows * columns > MAX_DISPLAY_GRID_CELLS:
+            return None
+
+        covered_count = len(self._covered)
+        cache = self._display_cache
+        if cache is None or cache[:2] != (cell_size_m, covered_count):
+            counts: dict[tuple[int, int], int] = {}
+            for row, col in self._covered:
+                # Assign source centers on the outer edge to the last cell.
+                coarse_row = min(rows - 1, int((row + 0.5) * self.cell_size_m / cell_size_m))
+                coarse_col = min(columns - 1, int((col + 0.5) * self.cell_size_m / cell_size_m))
+                key = (coarse_row, coarse_col)
+                counts[key] = counts.get(key, 0) + 1
+            cells = [(row, col, count) for (row, col), count in sorted(counts.items())]
+            self._display_cache = (cell_size_m, covered_count, cells)
+        else:
+            cells = cache[2]
         return {
+            "version": "1.0",
+            "frame": "scene_ned",
+            "units": "m",
+            "scene_id": self.scene_id,
+            "map_version": self.map_version,
+            "area_id": self.area_id,
+            "scene_origin": {"reference": "scene_json.origin", "lat_deg": lat, "lon_deg": lon, "alt_m": alt},
+            "grid_origin_ned_m": {"north_m": self._north0, "east_m": self._east0},
+            "cell_size_m": cell_size_m,
+            "rows": rows,
+            "columns": columns,
+            "source_cell_size_m": self.cell_size_m,
+            "cell_fields": ["north_index", "east_index", "covered_source_cells"],
+            "covered_cells": [list(cell) for cell in cells],
+        }
+
+    def report(self, *, grid_cell_size_m: float | None = None) -> dict[str, Any]:
+        """Return area metrics and, when requested, a sparse display grid."""
+        cell_km2 = self.cell_size_m ** 2 / 1_000_000
+        result = {
             "method": "scene_ned_grid_cell_center_v1",
             "scene_id": self.scene_id,
             "map_version": self.map_version,
@@ -140,3 +201,6 @@ class AreaCoverage:
             "area_covered_km2": len(self._covered) * cell_km2,
             "completion_pct": 100 * len(self._covered) / len(self._area),
         }
+        if grid_cell_size_m is not None:
+            result["grid"] = self._display_grid(grid_cell_size_m)
+        return result

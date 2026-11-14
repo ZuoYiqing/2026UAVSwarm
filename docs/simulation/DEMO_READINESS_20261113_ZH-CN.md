@@ -102,7 +102,34 @@ Standalone 巡检使用 `--coverage-area three-uav-patrol-coverage-v1
 `live_group_member_pids`，第二次停止为幂等成功。若旧 Gazebo 子进程在 PX4
 组长退出后仍存活，只有与已记录进程身份一致才会发送单进程信号。
 
-## 本轮验证
+## S7 · 可选覆盖网格（r3 增量）
+
+`AreaCoverage.report(grid_cell_size_m=20)` 在原面积报告上增加可选 `grid`。
+原调用 `report()` 仍返回原字段。建议 Runtime 启用后透传到 `coverage.grid`，
+同时保留现有 `coverage.polygon` 作为任务区边界。示例 JSON 使用三条合成观测
+`(15,-20)`、`(30,-20)`、`(-10,20)` 和 10 m 足迹半径，坐标顺序为
+北、东。[coverage_grid_s7_v1.json](fixtures/coverage_grid_s7_v1.json)
+
+| 字段 | 含义 |
+| --- | --- |
+| `frame` / `units` | `scene_ned` / `m`。行沿北增加，列沿东增加。网格只表示水平面，Cesium 参考视图投影时交换北、东顺序为 `(east, north)`。 |
+| `scene_origin` | `scene_id` 对应 `scenarios/<scene_id>/scene.json` 的 `origin`，使用既有场景锚点的经纬度与高程。PX4 HOME 和每机 EKF 原点不参与网格投影。 |
+| `grid_origin_ned_m` | 任务区包围框的最小北、东坐标，作为第 `[0,0]` 格的西南边角，以场景原点为参照。 |
+| `cell_size_m` / `rows` / `columns` | 展示格边长以及包围框中的格数。零基索引 `[r,c]` 的西南角为 `(north0 + r × size, east0 + c × size)`。靠任务区边缘的格子可与既有 `coverage.polygon` 裁剪后绘制。 |
+| `covered_cells` | 仅列出有覆盖的格子，固定三元组为 `[north_index, east_index, covered_source_cells]`。原面积网格的中心按位置归入展示格，第三项是其中已覆盖的源格数量。展开粗格时用它表示几何覆盖量，完整格的填充不代表格内每处已覆盖。 |
+| `source_cell_size_m` | 面积估算的源格边长。每个粗格的面积贡献为 `covered_source_cells × source_cell_size_m²`，加总与面积报告一致。 |
+
+展示尺度允许 10–50 m，推荐从 20 m 开始。包围框最多 25,000 个展示格；
+8 km² 的 4 km × 2 km 矩形区域在 20 m 下为 20,000 格。大场景应在
+`coverage_areas[].cell_size_m` 配置合适的源格尺寸，源格仍受现有 100 万格预算约束。
+改变展示粒度不改变面积估算。网格超过预算、缺少有效场景锚点、缺少观测或展示格小于
+源格时，显式请求返回 `grid: null`。超预算可增大粒度重试；仍不可用时保留未知。
+合法空列表表示已有观测但暂未覆盖任何格。可用网格应和当前任务的场景、地图与区域版本一致。
+
+当前 Runtime 的覆盖输入在验证航点到达时记入。网格表示这些观测的几何足迹，并保留
+各观测之间的空白。面积和航点完成度继续使用各自原字段。
+
+## S1–S4 验证
 
 - Windows 和 WSL 各 111 项通过、6 项跳过，跳过项需要真实三机。覆盖几何累计、
   运动判据、进程身份、健康、场景和标定。
