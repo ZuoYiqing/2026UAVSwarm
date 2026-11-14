@@ -85,12 +85,37 @@ test("producer mission progress retains waypoint basis and map only uses aligned
   assert.equal(dashboard.missionMap(dashboard.missionProgress({...payload,coverage:null}),snapshot),null);
 });
 
+test("the LIVE task map separates verified waypoint completion from covered area", () => {
+  const h = harness("http://127.0.0.1:5178/?mode=stage&source=live");
+  const progress = {
+    mission_id: "fixture-plan", status: "running", completion_basis: "verified_waypoints",
+    completion_pct: 75, waypoints_reached: 3, waypoints_total: 4,
+    area_covered_km2: 0.001, area_total_km2: 0.00475,
+    coverage: { frame: "scene_ned", polygon: [[0, 0], [10, 0], [10, 10], [0, 10]] },
+  };
+  h.run(`state.apiStatus="live"; state.missionStatus="live"; state.mission=dashboard.missionProgress(${JSON.stringify(progress)}); renderStage();`);
+  const map = h.html("stage-content");
+  assert.match(map, /航点完成度<\/span><b>75%<\/b>\s*<small>3 \/ 4 个航点/);
+  assert.match(map, /面积覆盖率<\/span><b>21\.05%<\/b>\s*<small>0\.001000 \/ 0\.004750 km²/);
+  assert.match(map, /class="mission-region unknown"/);
+
+  for (const [covered, total, label] of [[0, 0.00475, "0%"], [null, 0.00475, "—"],
+    [0.001, 0, "—"], [0.005, 0.00475, "—"]]) {
+    const sample = {...progress, area_covered_km2: covered, area_total_km2: total};
+    h.run(`state.mission=dashboard.missionProgress(${JSON.stringify(sample)}); renderStage();`);
+    assert.ok(h.html("stage-content").includes(`面积覆盖率</span><b>${label}</b>`));
+    assert.match(h.html("stage-content"), /航点完成度<\/span><b>75%/);
+  }
+});
+
 test("DEMO plays its complete zero-operation story and keeps all writes disabled", async () => {
   const h = harness("http://127.0.0.1:5178/?mode=stage");
   assert.match(h.html("app"), /stage-shell/);
   assert.doesNotMatch(h.html("app"), /slot-sidebar/);
   assert.match(h.html("stage-indicators"), /DEMO · 内置演习/);
   assert.match(h.html("stage-content"), /UAV-01.*西区/s);
+  assert.match(h.html("stage-content"), /内置演习进度/);
+  assert.doesNotMatch(h.html("stage-content"), /航点完成度/);
   h.tick(19);
   assert.match(h.html("stage-content"), /链路质量.*42.*▼/s);
   h.tick(25);
