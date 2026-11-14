@@ -1,0 +1,49 @@
+{
+  "contract_version": "1.0",
+  "example_kind": "offline_fixture_not_flight_evidence",
+  "task_request": {
+    "contract_version": "1.0",
+    "node_id": "UAV-02",
+    "task_id": "uav02-autonomy-demo",
+    "task_version": 1,
+    "request_id": "request-autonomy-demo",
+    "trace_id": "trace-autonomy-demo",
+    "authorization": {
+      "operator_id": "local-operator",
+      "expires_at": "2026-10-22T12:05:00Z",
+      "offline_policy": "continue_authorized",
+      "max_altitude_m": 3,
+      "max_hold_s": 10
+    },
+    "steps": [
+      {"step_id": "takeoff-1", "action": "takeoff", "params": {"altitude_m": 3}},
+      {"step_id": "hold-1", "action": "hold_position", "params": {"hold_s": 3}},
+      {"step_id": "land-1", "action": "land", "params": {}}
+    ]
+  },
+  "fixture_clock": "2026-10-22T12:00:00Z",
+  "task_states": ["accepted", "executing", "succeeded", "failed", "cancelled", "recovery_required"],
+  "endpoints": {
+    "submit": "POST /api/platform/tasks",
+    "status": "GET /api/platform/status",
+    "task": "GET /api/platform/tasks/{task_id}",
+    "cancel": "POST /api/platform/tasks/{task_id}/cancel",
+    "reconcile": "POST /api/platform/tasks/{task_id}/reconcile",
+    "heartbeat": "POST /api/platform/link/heartbeat",
+    "events": "GET /api/platform/events?after_seq=0&store_id={store_id}",
+    "stream": "GET /api/platform/events/stream?after_seq=0&store_id={store_id}"
+  },
+  "status_response_projection": {
+    "contract_version": "1.0",
+    "node_id": "UAV-02",
+    "execution_mode": "fake",
+    "model_configured": false,
+    "execution_authorized": false
+  },
+  "dynamic_status_fields": ["boot_id", "store_id", "run_id", "ground_link", "active_task", "event_seq", "platform_observation", "safe_to_stop"],
+  "event_page_fields": ["contract_version", "store_id", "events", "next_seq", "checkpoint_seq", "history_gap", "has_more"],
+  "event_fields": ["seq", "store_id", "event_type", "node_id", "task_id", "task_version", "execution_id", "request_id", "trace_id", "timestamp", "data"],
+  "errors": ["authentication_required", "invalid_task_fields", "unsupported_task_version", "node_mismatch", "authorization_expired_or_too_long", "parameter_out_of_bounds", "unsupported_task_sequence", "idempotency_conflict", "node_busy", "ground_link_unavailable", "takeoff_requires_ground_link", "local_observation_stale", "authorization_expired", "model_response_invalid", "model_deadline_exceeded", "task_not_found", "event_store_changed", "event_cursor_ahead", "operator_reconciliation_required", "fresh_ground_reconciliation_required", "platform_link_unavailable"],
+  "authority": "Only persisted accepted task steps; candidate decisions cannot change parameters. Fake results never prove flight.",
+  "acceptance": "After TAKEOFF, impair only ground-to-agent HTTP. Agent/PX4 and local model remain available. Replay the same task after reconnect; execution_id and action count must be unchanged."
+}

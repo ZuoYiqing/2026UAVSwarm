@@ -1,0 +1,26 @@
+{
+  "fixture_version": "0.1",
+  "status": "contract_only_not_real_acceptance",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "target_node_id": "UAV-02",
+  "application_path": {
+    "ground_runtime_url": "http://127.0.0.1:8767",
+    "transparent_proxy_target": "127.0.0.1:8766",
+    "fault_modes": ["up", "down", "delay"]
+  },
+  "preserved_paths": [
+    "UAV-02 Agent to PX4 sysid 2 compid 1 on 14541",
+    "UAV-02 camera image and camera_info",
+    "UAV-01 Runtime to PX4 on 14540",
+    "UAV-03 Runtime to PX4 on 14542"
+  ],
+  "expected_observations": {
+    "ground_link_down": "new ground requests fail and existing SSE closes",
+    "onboard_px4_session": "same owner and process identity across link cut",
+    "onboard_camera": "timestamps continue while simulator clock advances",
+    "uav01_uav03": "armed false and no physical displacement",
+    "task_execution": "only previously authorized bounded hold and land may continue; no new takeoff",
+    "oracle_boundary": "Gazebo world pose and target truth are evaluation only"
+  }
+}
