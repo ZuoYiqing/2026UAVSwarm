@@ -103,13 +103,20 @@
       frame: coverage.frame,
       regions: coverageRegions,
     } : null);
+    const areaCovered = nonnegative(payload.area_covered_km2);
+    const areaTotal = nonnegative(payload.area_total_km2);
+    const coveragePercent = areaCovered !== null && areaTotal > 0 && areaCovered <= areaTotal
+      ? (areaCovered / areaTotal) * 100 : null;
     return {
       id: payload.mission_id,
       runId: payload.run_id ?? null,
       title: payload.title || payload.mission_name || payload.mission_id,
       completion: pct(payload.completion_pct),
-      areaCovered: nonnegative(payload.area_covered_km2),
-      areaTotal: nonnegative(payload.area_total_km2),
+      areaCovered,
+      areaTotal,
+      coveragePercent,
+      waypointsReached: Number.isInteger(payload.waypoints_reached) ? nonnegative(payload.waypoints_reached) : null,
+      waypointsTotal: Number.isInteger(payload.waypoints_total) ? nonnegative(payload.waypoints_total) : null,
       targetsFound: nonnegative(payload.targets_found),
       targetsTotal: nonnegative(payload.targets_total),
       degraded: typeof payload.degraded === "boolean" ? payload.degraded : null,
