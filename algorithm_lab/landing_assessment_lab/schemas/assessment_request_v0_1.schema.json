@@ -1,0 +1,395 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "assessment_id",
+    "correlation",
+    "goal",
+    "observation"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "landing_assessment_proposal_v0.1"
+    },
+    "assessment_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mission_id",
+        "request_id",
+        "action_id",
+        "trace_id"
+      ],
+      "properties": {
+        "mission_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "scene_id",
+        "map_version",
+        "ground_reference",
+        "vertical_tolerance_m",
+        "min_samples",
+        "min_stable_s"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "scene_ground_contact",
+            "unknown_surface"
+          ]
+        },
+        "scene_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "map_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "ground_reference": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scene_id",
+                "map_version",
+                "source_kind",
+                "source_ref",
+                "ground_down_m"
+              ],
+              "properties": {
+                "scene_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "map_version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "source_kind": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "ground_down_m": {
+                  "type": "number",
+                  "minimum": -10000,
+                  "maximum": 10000
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vertical_tolerance_m": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 1
+        },
+        "min_samples": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 64
+        },
+        "min_stable_s": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 10
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "source_kind",
+        "source_ref",
+        "timebase",
+        "evaluated_at_s",
+        "max_sample_age_s",
+        "calibration",
+        "samples",
+        "surface_observation"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_kind": {
+          "enum": [
+            "synthetic_replay",
+            "normalized_runtime_snapshot"
+          ]
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "timebase": {
+          "enum": [
+            "unix_s",
+            "simulation_s",
+            "px4_boot_s"
+          ]
+        },
+        "evaluated_at_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "max_sample_age_s": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 10
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "frame",
+                "scene_id",
+                "map_version",
+                "source_ref"
+              ],
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "frame": {
+                  "const": "scene_ned"
+                },
+                "scene_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "map_version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "samples": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sample_id",
+              "t_s",
+              "position_scene_ned_m",
+              "landed",
+              "armed",
+              "source_ref"
+            ],
+            "properties": {
+              "sample_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "t_s": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              "position_scene_ned_m": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "north_m",
+                      "east_m",
+                      "down_m"
+                    ],
+                    "properties": {
+                      "north_m": {
+                        "type": "number",
+                        "minimum": -100000,
+                        "maximum": 100000
+                      },
+                      "east_m": {
+                        "type": "number",
+                        "minimum": -100000,
+                        "maximum": 100000
+                      },
+                      "down_m": {
+                        "type": "number",
+                        "minimum": -100000,
+                        "maximum": 100000
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "landed": {
+                "type": "boolean"
+              },
+              "armed": {
+                "type": "boolean"
+              },
+              "source_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        },
+        "surface_observation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "image_ref",
+            "range_down_m",
+            "source_ref"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "absent",
+                "range_only",
+                "rgb_capture"
+              ]
+            },
+            "image_ref": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "range_down_m": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source_ref": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Offline landing evidence input, proposal v0.1"
+}
