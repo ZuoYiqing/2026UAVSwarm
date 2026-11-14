@@ -925,16 +925,24 @@ function missionMapPanel() {
       <small>${!current && assignment ? "最后上报" : esc(phase)}</small>
     </div>`;
   }).join("");
-  const coverage = region => ["covered", "uncovered"].includes(region.coverage_status) ? region.coverage_status : "unknown";
+  const grid = map?.coverageGrid;
+  const coverage = region => {
+    if (grid && grid.areaId === region.area_id) return "uncovered";
+    return builtInDemo && ["covered", "uncovered"].includes(region.coverage_status) ? region.coverage_status : "unknown";
+  };
   const markerHtml = map?.markers.map(marker => `<span class="mission-map-node" style="left:${marker.x}%;top:${marker.y}%">${esc(marker.id)}</span>`).join("") || "";
   const geometry = map ? `<div class="mission-map">
     <span class="mission-compass" aria-hidden="true">↑ 北</span>
     ${map.regions.map(region => `<div class="mission-region ${coverage(region)}" title="${esc(region.label || region.area_id || "任务区域")}"
       style="clip-path:polygon(${region.projected.map(point => point.x + "% " + point.y + "%").join(",")})"></div>`).join("")}
+    ${grid ? '<canvas class="mission-coverage-grid" width="1600" height="1000" aria-hidden="true"></canvas>' : ""}
     ${markerHtml}
     ${markerHtml ? "" : `<span class="mission-map-caption">等待同场景的可用载具位置</span>`}
   </div>
-  <div class="mission-legend"><span class="covered">已覆盖</span><span class="uncovered">未覆盖</span><span class="unknown">覆盖未知</span>
+  <div class="mission-legend">${grid
+    ? `<span class="grid-covered">有覆盖记录的格</span><span class="uncovered">无覆盖记录</span>${map.regions.some(region => region.area_id !== grid.areaId) ? '<span class="unknown">覆盖分布未知</span>' : ""}`
+    : builtInDemo ? '<span class="covered">已覆盖</span><span class="uncovered">未覆盖</span><span class="unknown">覆盖未知</span>'
+      : '<span class="unknown">覆盖分布未知</span>'}
     ${current ? "" : "<span>最后上报区域</span>"}</div>`
     : `<div class="mission-wait"><b>等待任务区域数据</b><span>Runtime 上报区域边界后显示地图。载具分配与进度列于下方。</span></div>`;
   const phases = { running: "执行中", executing: "执行中", completed: "已完成", failed: "失败",
@@ -942,8 +950,18 @@ function missionMapPanel() {
   const phaseLabel = current ? phases[mission?.status] : mission ? "最后上报" : "";
   return `<section class="panel mission-map-panel"><div class="panel-title"><h2>任务地图</h2><span class="small">俯视 · ${esc(mission?.title || "区域侦察")}${phaseLabel ? " · " + phaseLabel : ""}</span></div>
     ${missionMapMetrics(mission, current)}
-    ${geometry}<div class="mission-roster">${roster || '<div class="empty-state">等待载具与任务分配数据</div>'}</div>
+    ${geometry}
+    ${grid ? `<p class="small mission-grid-note">${grid.size} m 网格 · ${grid.cells.length
+      ? `${grid.cells.length} 个格有覆盖记录，格内可能仅部分覆盖` : "已有观测，当前没有覆盖记录"}${current ? "" : " · 最后上报"}</p>` : ""}
+    <div class="mission-roster">${roster || '<div class="empty-state">等待载具与任务分配数据</div>'}</div>
   </section>`;
+}
+
+function drawMissionCoverage() {
+  const canvas = document.querySelector(".mission-coverage-grid");
+  if (!canvas) return;
+  const map = dashboard?.missionMap(state.mission, null);
+  window.SwarmCoverageGrid?.draw(canvas, map?.coverageGrid);
 }
 
 function missionMetricsBar() {
@@ -1075,6 +1093,7 @@ function renderStage() {
     }
     state.renderedPage = view;
   }
+  if (view === "map") drawMissionCoverage();
   updatePolicyBanner();
 }
 
@@ -2274,7 +2293,10 @@ function designPreviewNotice(message) {
 function render() {
   ensureShell();
   if (stageMode && dashboard) renderStage();
-  else renderRegions();
+  else {
+    renderRegions();
+    if (state.page === "overview") drawMissionCoverage();
+  }
   renderPolicyBanner();
 }
 
