@@ -1,0 +1,51 @@
+{
+  "fixture_source": "synthetic_positions",
+  "coverage": {
+    "method": "scene_ned_grid_cell_center_v1",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "area_id": "three-uav-patrol-coverage-v1",
+    "frame": "scene_ned",
+    "cell_size_m": 1.0,
+    "footprint_radius_m": 10.0,
+    "sample_count": 3,
+    "area_total_km2": 0.00475,
+    "area_covered_km2": 0.000718,
+    "completion_pct": 15.115789473684211,
+    "polygon": [
+      {"north_m": -45, "east_m": -25},
+      {"north_m": 50, "east_m": -25},
+      {"north_m": 50, "east_m": 25},
+      {"north_m": -45, "east_m": 25}
+    ],
+    "grid": {
+      "version": "1.0",
+      "frame": "scene_ned",
+      "units": "m",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "area_id": "three-uav-patrol-coverage-v1",
+      "scene_origin": {
+        "reference": "scene_json.origin",
+        "lat_deg": 47.3979709,
+        "lon_deg": 8.5461639,
+        "alt_m": 0.0
+      },
+      "grid_origin_ned_m": {"north_m": -45.0, "east_m": -25.0},
+      "cell_size_m": 20.0,
+      "rows": 5,
+      "columns": 3,
+      "source_cell_size_m": 1.0,
+      "cell_fields": ["north_index", "east_index", "covered_source_cells"],
+      "covered_cells": [
+        [1, 1, 54],
+        [1, 2, 146],
+        [2, 0, 127],
+        [2, 1, 8],
+        [2, 2, 46],
+        [3, 0, 283],
+        [4, 0, 54]
+      ]
+    }
+  }
+}
