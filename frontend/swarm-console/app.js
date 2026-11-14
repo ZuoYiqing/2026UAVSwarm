@@ -841,6 +841,7 @@ function missionIndicators(compact = false) {
   const measured = dashboard?.pct(override?.link_quality_measured) ?? null;
   const linkArrow = builtInDemo ? frame?.linkTrend : state.linkTrends.get(node);
   const completion = mission?.completion ?? null;
+  const completionLabel = mission?.completionBasis === "verified_waypoints" ? "航点完成度" : "任务完成度";
   const missionArrow = builtInDemo ? frame?.progressTrend : state.missionTrend;
   const missionCurrent = builtInDemo || state.missionStatus === "live" && !degraded;
   const safety = missionCurrent && typeof mission?.safety === "string" ? mission.safety : null;
@@ -852,7 +853,7 @@ function missionIndicators(compact = false) {
     ? `${mission.targetsFound} / ${mission.targetsTotal ?? "—"}` : "等待目标证据";
   if (compact) return `<div class="stage-kpi-strip">
     <span>链路质量 <b class="${color}">${quality === null ? "—" : esc(quality + " " + (linkArrow || ""))}</b></span>
-    <span>任务完成度 <b>${completion === null ? "—" : esc(completion + "%" + (missionCurrent ? " " + (missionArrow || "") : " · 最后上报"))}</b></span>
+    <span>${completionLabel} <b>${completion === null ? "—" : esc(completion + "%" + (missionCurrent ? " " + (missionArrow || "") : " · 最后上报"))}</b></span>
     <span>剩余安全裕度 <b>${esc(safety || "未知")}</b></span>
   </div>`;
   return `<div class="mission-kpis" aria-label="任务状态指标">
@@ -864,9 +865,9 @@ function missionIndicators(compact = false) {
         ${links.size < (builtInDemo ? frame.fleet : state.fleet).filter(v => v.enabled !== false).length ? " · 部分节点缺数据" : ""}` : "等待链路质量数据"}</p>
     </section>
     <section class="mission-kpi cyan">
-      <h2>任务完成度</h2><strong>${completion === null ? "—" : formatNumber(completion, Number.isInteger(completion) ? 0 : 1) + "%"}
+      <h2>${completionLabel}</h2><strong>${completion === null ? "—" : formatNumber(completion, Number.isInteger(completion) ? 0 : 1) + "%"}
         <span class="kpi-trend" aria-hidden="true">${esc(missionCurrent ? missionArrow || "" : "")}</span></strong>
-      ${completion === null ? "" : `<progress max="100" value="${completion}" aria-label="任务完成度"></progress>`}
+      ${completion === null ? "" : `<progress max="100" value="${completion}" aria-label="${completionLabel}"></progress>`}
       <p>${completion === null ? "等待任务进度" : missionCurrent ? esc(mission.title) : "最后上报 · 当前进度未知"}
         ${mission?.completionBasis === "verified_waypoints" ? " · 已验证航点" : ""}</p>
     </section>
@@ -880,6 +881,24 @@ function missionIndicators(compact = false) {
       ${missionCurrent && mission?.degraded === true ? badge("降级任务", "amber") : ""}
       ${mission?.timestamp ? `<span>${missionCurrent ? "采样" : "最后采样"} <b>${esc(eventTime(mission.timestamp))}</b></span>` : ""}
     </div>
+  </div>`;
+}
+
+function missionMapMetrics(mission, current) {
+  const verifiedWaypoints = mission?.completionBasis === "verified_waypoints";
+  const completion = verifiedWaypoints || builtInDemo ? mission?.completion ?? null : null;
+  const reached = mission?.waypointsReached;
+  const total = mission?.waypointsTotal;
+  const hasWaypointCount = reached != null && total > 0 && reached <= total;
+  const coverage = mission?.coveragePercent ?? null;
+  const areaDigits = mission?.areaTotal < 0.01 ? 6 : 3;
+  const sampleLabel = current ? "" : " · 最后上报";
+  const percent = value => value === null ? "—" : formatNumber(value, Number.isInteger(value) ? 0 : 2, "%");
+  return `<div class="mission-map-metrics">
+    <div><span>${builtInDemo && !verifiedWaypoints ? "任务完成度" : "航点完成度"}</span><b>${percent(completion)}</b>
+      <small>${completion === null ? "等待已验证航点" : `${hasWaypointCount ? `${reached} / ${total} 个航点` : builtInDemo ? "内置演习进度" : "已验证到达"}${sampleLabel}`}</small></div>
+    <div><span>面积覆盖率</span><b>${percent(coverage)}</b>
+      <small>${coverage === null ? "等待覆盖证据" : `${formatNumber(mission.areaCovered, areaDigits)} / ${formatNumber(mission.areaTotal, areaDigits)} km²${sampleLabel}`}</small></div>
   </div>`;
 }
 
@@ -922,6 +941,7 @@ function missionMapPanel() {
     blocked: "受阻", partially_completed: "部分完成" };
   const phaseLabel = current ? phases[mission?.status] : mission ? "最后上报" : "";
   return `<section class="panel mission-map-panel"><div class="panel-title"><h2>任务地图</h2><span class="small">俯视 · ${esc(mission?.title || "区域侦察")}${phaseLabel ? " · " + phaseLabel : ""}</span></div>
+    ${missionMapMetrics(mission, current)}
     ${geometry}<div class="mission-roster">${roster || '<div class="empty-state">等待载具与任务分配数据</div>'}</div>
   </section>`;
 }
