@@ -75,8 +75,20 @@
 | `serve_3d_proxy.py` | 7.1 KB | 三维静态服务 + API 反代（第 12 步，**必须用**） |
 | `px4_fix_offline.sh` | 6.8 KB | PX4 的 `.git` 缺失修复（第 9 步，**必须用**） |
 
-> 另外还有 `python-3.11.9-amd64.exe` 和 `VSCode-win32-x64-portable.zip`，
-> **本次部署用不到**（Python 全靠 WSL 里的，编辑器可选）。
+> 另外还有 `python-3.11.9-amd64.exe` 和 `VSCode-win32-x64-portable.zip`：
+>
+> - **`python-3.11.9-amd64.exe`** —— **纯仿真演示用不到**（Python 全靠 WSL 里的 3.10）。
+>   但**如果算法要跑在 Windows 侧**就需要它。
+>
+>   **为什么算法可能要在 Windows 上跑**：weier 是 Windows 10 **19041（2004）**，
+>   而 WSL 里用 NVIDIA GPU（CUDA）要求 **Windows 11 或 Windows 10 21H2（19044）以上**。
+>   19041 不满足 → WSL 拿不到 RTX 3080 → 算法若需要 GPU，只能跑 Windows 侧。
+>   （依据：Microsoft Learn《Enable NVIDIA CUDA on WSL 2》）
+>
+>   配套的 `cp311-win` 轮子**已经在 `04-wheelhouse.tar.gz` 里**，不用再下东西。
+>   详见 **§11.5 每个 Runtime 环境各自的 Python**。
+>
+> - **`VSCode-win32-x64-portable.zip`** —— 编辑器，可选。
 
 ### 3.2 `D:\offline-batch2\`（Linux 侧，项目本身）
 
@@ -84,7 +96,7 @@
 |---|---|---|
 | `01-source.tar.gz` | 10.9 MB | **项目源码**（第 10 步） |
 | `02-frontend-3d-dist.tar.gz` | 10.8 MB | **三维构建产物**（第 12 步，漏了三维白屏） |
-| `04-wheelhouse.tar.gz` | 74.7 MB | pymavlink 的离线轮子（第 11 步） |
+| `04-wheelhouse.tar.gz` | 74.7 MB | pymavlink 等的离线轮子，**含 x86_64 / aarch64 / win_amd64 三种平台**（第 11 步、§11.5） |
 
 > `03-...node_modules-WIN.tar.gz`、`05-node-...zip` **本次用不到**（那是给"Windows 原生跑 Vite 开发"的，我们不这么干）。
 
@@ -549,6 +561,87 @@ find_spec -> True            ← ★ 必须是 True
 > 🚨 **为什么必须用 `python3`（3.10）**：wheelhouse 里的 pymavlink 轮子是
 > **cp310 + manylinux x86_64**。如果你用 3.11 装，会报
 > `No matching distribution found` —— **那不是包坏了，是版本对不上**。
+
+### 11.5 每个 Runtime 环境各自的 Python
+
+> **这一节是后加的。** 上面的 11.1~11.4 只覆盖了「一台机、一个 Runtime」的部署。
+> 现在的架构是 **多 Runtime**（地面 + 机载），**每个跑 Runtime 的环境都要有自己的 Python 和 pymavlink**。
+
+#### 为什么要强调
+
+原来只有一个 Runtime，跑在一个 WSL 里，所以"装一次就行"。
+现在 #97 带进来**机载 Runtime**（UAV-02 的机载端），
+再加上**算法可能跑在 Windows 侧**（weier 是 Win10 19041，WSL 拿不到 RTX 3080），
+就变成了"每个环境一套"。
+
+**这些 Python 环境彼此完全独立** —— 在 WSL 里装的包，Windows 那边的 Python 看不到，反之亦然。
+**每个环境都要单独装、单独验证。**
+
+#### 环境与轮子的对应表
+
+`04-wheelhouse.tar.gz` 里**已经包含了三种平台的轮子**，不用再下载任何东西：
+
+| 环境 | Python 版本 | pip 会选中的轮子 | 状态 |
+|---|---|---|---|
+| **WSL（地面 Runtime）** | **3.10.12**（Ubuntu 22.04 自带） | `cp310-manylinux_2_17_x86_64` | ✅ §11.3 已覆盖 |
+| **机载计算机（ARM64，如 Jetson）**<br>Ubuntu 22.04 | **3.10** | `cp310-manylinux_2_17_aarch64` | ⚠️ 步骤同上，路径相同 |
+| **机载计算机（ARM64）**<br>Ubuntu 20.04 | 3.8 | `cp38-manylinux_2_17_aarch64`（pymavlink 2.4.49 / lxml 5.4.0） | ⚠️ 版本更老 |
+| **Windows（算法侧，可选）** | **3.11.9**（用 `python-3.11.9-amd64.exe` 装） | `cp311-win_amd64` | ⚠️ 见下方命令 |
+
+#### 三个坑
+
+1. **Linux 侧只有 `cp310` 和 `cp38` 的轮子**
+   → 如果哪台 Linux 机子是 Python **3.11 / 3.12**，**pymavlink 装不上**。
+   先跑 `python3 --version` 确认，不是 3.10 就换成 3.10 的解释器（`/usr/bin/python3`）。
+
+2. **Windows 侧只有 `cp310` / `cp311` / `cp313` 的轮子**
+   → 装 Python 时**别选 3.9 / 3.12**，选 **3.11.9**（就是我们发的那个安装包）。
+
+3. **装完必须逐个环境验证**，不能只看一个环境过了就以为全过：
+   ```bash
+   python3 -c "import importlib.util as u; print(u.find_spec('pymavlink') is not None)"
+   ```
+   **期望 `True`**。每个环境都要单独跑一次。
+
+#### 各环境的具体命令
+
+**WSL / x86 Linux / ARM64 Linux**（三个都一样，pip 自己选平台）：
+
+```bash
+tar -xzf /mnt/d/offline-batch2/04-wheelhouse.tar.gz -C /root
+/usr/bin/python3 -m pip install --user --no-index --find-links=/root/wheelhouse pymavlink
+/usr/bin/python3 -c "import importlib.util as u; print(u.find_spec('pymavlink') is not None)"
+```
+
+> ★ 用 **`/usr/bin/python3`** 全路径，不要只写 `python3` ——
+> 如果 PATH 被改过，`python3` 可能指向另一个版本。
+
+**Windows**（仅在算法要跑 Windows 时）：
+
+```powershell
+# 先装 Python（发过去的那两个安装包）
+D:\weier-offline\python-3.11.9-amd64.exe
+
+# 解 wheelhouse（用系统 tar，不要用 MSYS 的）
+C:\Windows\System32\tar.exe -xzf D:\offline-batch2\04-wheelhouse.tar.gz -C C:\
+
+# 装（注意是 py -3.11）
+py -3.11 -m pip install --no-index --find-links=C:\wheelhouse pymavlink
+
+# 验证
+py -3.11 -c "import importlib.util as u; print(u.find_spec('pymavlink') is not None)"
+```
+
+> ⚠️ **Windows 上必须用 `C:\Windows\System32\tar.exe`**，不要用 Git Bash / MSYS 的 `tar` ——
+> 后者处理大文件会报 `Cannot open: I/O error`。
+
+#### 怎么确认自己装对了
+
+| 检查 | 命令 | 期望 |
+|---|---|---|
+| Python 版本 | `python3 --version` | `3.10.x`（Linux）/ `3.11.9`（Windows） |
+| 包能 import | 上面的 `find_spec` | `True` |
+| 装的是哪个平台的轮子 | `python3 -m pip show pymavlink` | 看 `Location` 是对的目录 |
 
 ---
 
