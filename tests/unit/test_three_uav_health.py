@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import copy
 import hashlib
+import os
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,11 @@ from simulation.px4_gazebo.scripts import health_three_uav  # noqa: E402
 
 MANIFEST_PATH = HARNESS_DIR / "config" / "three_uav_sitl.json"
 RUN_ID = "health-run-001"
+NOW_S = 1_800_000_000.0
+
+
+def _stamp(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
 
 
 def _state(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -94,7 +101,7 @@ def _mavlink_probe(manifest: dict[str, Any]):  # type: ignore[no-untyped-def]
             "observed_system_ids": [vehicle["system_id"]],
             "observed_component_ids": [vehicle["component_id"]],
             "last_seen": "2026-08-16T00:00:00+00:00",
-            "heartbeat_timestamp": harness.utc_now(), "position_timestamp": harness.utc_now(),
+            "heartbeat_timestamp": _stamp(NOW_S), "position_timestamp": _stamp(NOW_S),
             "reason": "ok",
             "evidence": {
                 "heartbeat_count": 12,
@@ -106,8 +113,8 @@ def _mavlink_probe(manifest: dict[str, Any]):  # type: ignore[no-untyped-def]
     return probe
 
 
-def _runtime_telemetry(manifest: dict[str, Any]) -> dict[str, Any]:
-    now = harness.utc_now()
+def _runtime_telemetry(manifest: dict[str, Any], *, epoch: float = NOW_S) -> dict[str, Any]:
+    now = _stamp(epoch)
     return {
         "contract_version": "1.0",
         "scene_id": manifest["scene_id"], "run_id": RUN_ID,
@@ -136,12 +143,16 @@ def _collect(
     *,
     mode: str = "standalone",
     runtime_telemetry: dict[str, Any] | None = None,
+    runtime_telemetry_provider=None,
+    now_provider=lambda: NOW_S,
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
     overrides=None,
     state_overrides=None,
+    manifest=None,
 ) -> dict[str, Any]:
-    manifest = harness.load_manifest(MANIFEST_PATH)
+    if manifest is None:
+        manifest = harness.load_manifest(MANIFEST_PATH)
     state = _state(manifest)
     state.update(state_overrides or {})
     state_path = tmp_path / "harness_state.json"
@@ -153,6 +164,8 @@ def _collect(
         stability_window_s=10.0,
         mode=mode,
         runtime_telemetry=runtime_telemetry,
+        runtime_telemetry_provider=runtime_telemetry_provider,
+        now_provider=now_provider,
         mavlink_probe=mavlink_probe or _mavlink_probe(manifest),
         clock_probe=(overrides or {}).get("clock_probe", lambda world, timeout, **kwargs: {
             "clock_advancing": True,
@@ -236,6 +249,69 @@ def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(
     )
 
 
+def test_integrated_health_reads_world_before_live_evidence(tmp_path, monkeypatch):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    now = NOW_S
+    original_reference = health.from_managed_world
+
+    def slow_world(*args, **kwargs):
+        nonlocal now
+        now += 7
+        return original_reference(*args, **kwargs)
+
+    monkeypatch.setattr(health, "from_managed_world", slow_world)
+    result = _collect(
+        tmp_path, monkeypatch, mode="integrated", manifest=manifest,
+        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest, epoch=now),
+        now_provider=lambda: now,
+        overrides={"clock_probe": lambda *args, **kwargs: {
+            "clock_advancing": True, "source_timestamp": _stamp(now),
+        }},
+    )
+
+    assert result["status"] == "ready"
+    assert result["source_timestamp"] == _stamp(NOW_S + 7)
+    assert result["checked_at"] == _stamp(NOW_S + 7)
+    assert result["evidence"]["evidence_age_ms"] == 0
+    assert result["evidence"]["ground_reference_status"] == "available"
+
+
+@pytest.mark.parametrize(("position_age", "ready"), [(1.5, True), (1.501, False)])
+def test_integrated_health_keeps_position_age_boundary(tmp_path, monkeypatch, position_age, ready):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    telemetry = _runtime_telemetry(manifest)
+    telemetry["vehicles"][1]["position_timestamp"] = _stamp(NOW_S - position_age)
+    result = _collect(tmp_path, monkeypatch, mode="integrated", runtime_telemetry=telemetry)
+
+    assert result["ready"] is ready
+    assert result["simulation_status"] == "ready"
+    row = result["vehicles"][1]
+    assert row["heartbeat_fresh"] is True
+    assert row["telemetry_fresh"] is ready
+    assert row["evidence"]["telemetry"]["last_telemetry_age_s"] == position_age
+
+
+def test_integrated_health_withholds_ground_reference_if_world_changes_during_probe(tmp_path, monkeypatch):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    path = tmp_path / "world.sdf"
+    original = harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    path.write_bytes(original)
+    manifest["world_path"] = str(path)
+
+    def change_world():
+        path.write_bytes(original + b"\n")
+        return {row["gazebo_model_name"] for row in manifest["vehicles"]}
+
+    result = _collect(
+        tmp_path, monkeypatch, mode="integrated", manifest=manifest,
+        runtime_telemetry=_runtime_telemetry(manifest), overrides={"model_probe": change_world},
+    )
+    assert result["simulation_status"] == "ready"
+    assert "ground_reference" not in result["runtime_evidence"]
+    assert "ground_reference_world_changed_during_probe" in result["evidence"]["ground_reference_status"]
+
+
 def test_integrated_health_publishes_only_known_ground_collision_geometry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -294,9 +370,53 @@ def test_ground_reference_rejects_raw_file_change_after_start(tmp_path: Path) ->
     world_path.write_bytes(canonical)
     manifest["world_path"] = str(world_path)
     state = _state(manifest)
+    ground_reference.from_managed_world(manifest, state)
     world_path.write_bytes(canonical.replace(b"\n", b"\r\n"))
     with pytest.raises(ValueError, match="ground_reference_run_world_file_hash_mismatch"):
         ground_reference.from_managed_world(manifest, state)
+
+
+def test_ground_reference_caches_digests_and_detects_same_mtime_replacement(tmp_path, monkeypatch):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    path = tmp_path / "world.sdf"
+    original = harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
+    path.write_bytes(original)
+    manifest["world_path"] = str(path)
+    state = _state(manifest)
+    real_open, real_hash = Path.open, hashlib.sha256
+    reads, hashes = [], []
+
+    def track_open(file, *args, **kwargs):
+        if file == path.resolve():
+            reads.append(file)
+        return real_open(file, *args, **kwargs)
+
+    def track_hash(data):
+        hashes.append(data)
+        return real_hash(data)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    monkeypatch.setattr(hashlib, "sha256", track_hash)
+    first = ground_reference.from_managed_world(manifest, state)
+    first["xy_bounds_m"]["north_min_m"] = -1
+    second = ground_reference.from_managed_world(manifest, state)
+    assert second["xy_bounds_m"]["north_min_m"] == -1000
+    assert len(reads) == 1 and len(hashes) == 2
+    with pytest.raises(ValueError, match="ground_reference_run_world_hash_mismatch"):
+        ground_reference.from_managed_world(manifest, {**state, "world_sha256": "0" * 64})
+    assert len(reads) == 1 and len(hashes) == 2
+
+    stat = path.stat()
+    replacement = tmp_path / "replacement.sdf"
+    changed = original.replace(b"<size>2000 2000</size>", b"<size>2100 2000</size>", 1)
+    assert changed != original and len(changed) == len(original)
+    replacement.write_bytes(changed)
+    os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    replacement.replace(path)
+    assert path.stat().st_mtime_ns == stat.st_mtime_ns
+    with pytest.raises(ValueError, match="ground_reference_run_world_file_hash_mismatch"):
+        ground_reference.from_managed_world(manifest, state)
+    assert len(reads) == 2 and len(hashes) == 4
 
 
 @pytest.mark.parametrize("replacement", [

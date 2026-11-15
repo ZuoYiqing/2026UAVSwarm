@@ -70,19 +70,19 @@ def test_fixture_matches_real_producer_exactly(fleet):
     assert local_evidence(registry, "run-fixture", clock=lambda: clock[0]) == FIXTURE
 
 
-def test_actual_simulation_consumer_accepts_producer_and_rejects_independent_stale(fleet, monkeypatch):
+def test_actual_simulation_consumer_accepts_producer_and_rejects_independent_stale(fleet):
     from simulation.px4_gazebo import health
-    from simulation.px4_gazebo.evidence import freshness
     registry, clock = fleet
     manifest = {"scene_id": registry.scene_id, "vehicles": [
         {"node_id": h.config.node_id, "command_endpoint": h.config.endpoint} for h in registry.list_vehicles()]}
-    monkeypatch.setattr(health, "freshness", lambda payload: freshness(payload, now=clock[0]))
     evidence = local_evidence(registry, "run-fixture")
-    result = health._runtime_telemetry_probes(manifest, evidence, run_id="run-fixture")
+    result = health._runtime_telemetry_probes(manifest, evidence, run_id="run-fixture", now=clock[0])
     assert all(row["heartbeat_fresh"] and row["telemetry_fresh"] for row in result.values())
     clock[0] += 2
     registry.get_vehicle("UAV-02").session.dispatch_message(message("HEARTBEAT", 2, base_mode=0))
-    result = health._runtime_telemetry_probes(manifest, local_evidence(registry, "run-fixture"), run_id="run-fixture")
+    result = health._runtime_telemetry_probes(
+        manifest, local_evidence(registry, "run-fixture"), run_id="run-fixture", now=clock[0],
+    )
     assert result["UAV-02"]["heartbeat_fresh"] and not result["UAV-02"]["telemetry_fresh"]
 
 
