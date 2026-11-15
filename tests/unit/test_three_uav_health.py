@@ -381,6 +381,9 @@ def test_ground_reference_caches_digests_and_detects_same_mtime_replacement(tmp_
     path = tmp_path / "world.sdf"
     original = harness.resolve_repo_path(str(manifest["world_path"])).read_bytes()
     path.write_bytes(original)
+    # DrvFs can truncate utime to whole seconds. Pin both files to an exact second.
+    mtime_ns = 1_700_000_000_000_000_000
+    os.utime(path, ns=(mtime_ns, mtime_ns))
     manifest["world_path"] = str(path)
     state = _state(manifest)
     real_open, real_hash = Path.open, hashlib.sha256
@@ -406,14 +409,13 @@ def test_ground_reference_caches_digests_and_detects_same_mtime_replacement(tmp_
         ground_reference.from_managed_world(manifest, {**state, "world_sha256": "0" * 64})
     assert len(reads) == 1 and len(hashes) == 2
 
-    stat = path.stat()
     replacement = tmp_path / "replacement.sdf"
     changed = original.replace(b"<size>2000 2000</size>", b"<size>2100 2000</size>", 1)
     assert changed != original and len(changed) == len(original)
     replacement.write_bytes(changed)
-    os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    os.utime(replacement, ns=(mtime_ns, mtime_ns))
     replacement.replace(path)
-    assert path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert path.stat().st_mtime_ns == mtime_ns
     with pytest.raises(ValueError, match="ground_reference_run_world_file_hash_mismatch"):
         ground_reference.from_managed_world(manifest, state)
     assert len(reads) == 2 and len(hashes) == 4
