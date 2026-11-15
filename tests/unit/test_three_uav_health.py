@@ -136,6 +136,7 @@ def _collect(
     *,
     mode: str = "standalone",
     runtime_telemetry: dict[str, Any] | None = None,
+    runtime_telemetry_provider=None,  # type: ignore[no-untyped-def]
     mavlink_probe=None,  # type: ignore[no-untyped-def]
     identity_reader=None,  # type: ignore[no-untyped-def]
     overrides=None,
@@ -153,6 +154,7 @@ def _collect(
         stability_window_s=10.0,
         mode=mode,
         runtime_telemetry=runtime_telemetry,
+        runtime_telemetry_provider=runtime_telemetry_provider,
         mavlink_probe=mavlink_probe or _mavlink_probe(manifest),
         clock_probe=(overrides or {}).get("clock_probe", lambda world, timeout, **kwargs: {
             "clock_advancing": True,
@@ -221,7 +223,7 @@ def test_integrated_health_uses_runtime_telemetry_without_binding_mavlink(
         tmp_path,
         monkeypatch,
         mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         mavlink_probe=forbidden_probe,
     )
 
@@ -242,7 +244,7 @@ def test_integrated_health_publishes_only_known_ground_collision_geometry(
     manifest = harness.load_manifest(MANIFEST_PATH)
     payload = _collect(
         tmp_path, monkeypatch, mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"),
     )
     expected = json.loads(Path(
@@ -263,7 +265,7 @@ def test_integrated_health_omits_ground_without_matching_startup_hash(
     manifest = harness.load_manifest(MANIFEST_PATH)
     payload = _collect(
         tmp_path, monkeypatch, mode="integrated",
-        runtime_telemetry=_runtime_telemetry(manifest),
+        runtime_telemetry_provider=lambda: _runtime_telemetry(manifest),
         state_overrides={"world_sha256": startup_hash},
     )
     assert payload["simulation_status"] == "ready"
@@ -487,6 +489,44 @@ def test_integrated_rejects_unusable_runtime_evidence(tmp_path, monkeypatch, fai
     assert not result["ready"]
     assert result["simulation_status"] == "ready"
     assert result["system_status"] == "unknown"
+
+
+def test_integrated_rejects_public_telemetry_as_health_evidence(tmp_path, monkeypatch):
+    """The ground public snapshot lacks independent heartbeat/position samples."""
+    public_telemetry = {
+        "version": "1.0", "timestamp": harness.utc_now(), "fresh": True,
+        "nodes": [{"node_id": "UAV-02", "connected": True, "stale": False}],
+    }
+    result = _collect(tmp_path, monkeypatch, mode="integrated",
+                      runtime_telemetry=public_telemetry,
+                      mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"))
+    assert result["simulation_status"] == "ready"
+    assert result["system_status"] == "unknown"
+    assert result["ready"] is False
+
+
+@pytest.mark.parametrize("failure", ["stale_heartbeat", "stale_position", "missing_position", "wrong_endpoint", "unexpected_node"])
+def test_integrated_requires_independent_runtime_samples(tmp_path, monkeypatch, failure):
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    evidence = _runtime_telemetry(manifest)
+    uav02 = evidence["vehicles"][1]
+    if failure == "stale_heartbeat":
+        uav02["heartbeat_timestamp"] = "2020-01-01T00:00:00Z"
+    elif failure == "stale_position":
+        uav02["position_timestamp"] = "2020-01-01T00:00:00Z"
+    elif failure == "missing_position":
+        uav02.pop("position_timestamp")
+    elif failure == "wrong_endpoint":
+        uav02["endpoint"] = manifest["vehicles"][0]["command_endpoint"]
+    else:
+        evidence["vehicles"].append({"node_id": "UAV-04"})
+    result = _collect(tmp_path, monkeypatch, mode="integrated",
+                      runtime_telemetry=evidence,
+                      mavlink_probe=lambda *args: pytest.fail("integrated health opened MAVLink"))
+    assert result["simulation_status"] == "ready"
+    assert result["system_status"] == "unknown"
+    assert result["ready"] is False
+    assert result["vehicles"][1]["readiness"] is False
 
 
 def test_integrated_health_cli_never_checks_or_binds_standalone_endpoints(

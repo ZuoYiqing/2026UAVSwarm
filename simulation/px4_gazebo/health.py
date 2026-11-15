@@ -260,13 +260,18 @@ def _runtime_telemetry_probes(
         rows = []
     by_node: dict[str, dict[str, Any]] = {}
     duplicate_nodes: set[str] = set()
+    malformed_row = False
     for row in rows:
         if not isinstance(row, dict) or not row.get("node_id"):
+            malformed_row = True
             continue
         node_id = str(row["node_id"])
         if node_id in by_node:
             duplicate_nodes.add(node_id)
         by_node[node_id] = row
+    expected_nodes = {str(vehicle["node_id"]) for vehicle in manifest["vehicles"]}
+    if envelope_reason == "ok" and (set(by_node) - expected_nodes or malformed_row):
+        envelope_reason = "runtime_telemetry_unexpected_node"
     probes: dict[str, dict[str, Any]] = {}
     for vehicle in manifest["vehicles"]:
         node_id = str(vehicle["node_id"])
