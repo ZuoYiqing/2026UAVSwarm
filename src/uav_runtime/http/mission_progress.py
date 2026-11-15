@@ -10,6 +10,9 @@ from typing import Any
 from uuid import uuid4
 
 
+DISPLAY_GRID_CELL_SIZE_M = 20.0
+
+
 def unavailable_progress() -> dict[str, Any]:
     return {
         "contract_version": "1.0", "status": "unavailable", "mode": "LIVE",
@@ -127,14 +130,25 @@ class MissionProgress:
             self._active.clear()
             self._timestamp = self._now()
 
+    def _coverage_report(self) -> dict[str, Any]:
+        if self._coverage is None:
+            return {}
+        try:
+            report = self._coverage.report(grid_cell_size_m=DISPLAY_GRID_CELL_SIZE_M)
+        except (TypeError, ValueError, OverflowError):
+            # Older Simulation checkouts and optional display failures must
+            # not take the existing area metrics or mission progress away.
+            try:
+                report = self._coverage.report()
+            except (TypeError, ValueError, OverflowError):
+                return {}
+        return {**report, "grid": report.get("grid")} if report else {}
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             total = sum(self._waypoints.values())
             reached = sum(map(len, self._reached.values()))
-            try:
-                coverage = self._coverage.report() if self._coverage is not None else {}
-            except (TypeError, ValueError, OverflowError):
-                coverage = {}
+            coverage = self._coverage_report()
             if coverage and self._coverage_polygon is not None:
                 coverage = {**coverage, "polygon": deepcopy(self._coverage_polygon)}
             return {
