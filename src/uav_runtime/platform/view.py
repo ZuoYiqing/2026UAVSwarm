@@ -50,7 +50,9 @@ def produce_view(service, dispatch):
                             "sample_age_ms": position_age if coherent else None,
                             "stale": bool(spatial.get("stale", True)) or not fresh_pose})
             spatial["public_position_usable"] = bool(spatial.get("public_position_usable")) and fresh_pose
-            if not fresh_pose:
+            # A new position arriving while the projection is built can make
+            # this pose incoherent without making the owner's link stale.
+            if not position_fresh:
                 row["connected"] = False
                 telemetry["stale"] = True
             ages = [age for age in (position_age, telemetry.get("age_ms")) if isinstance(age, (int, float))]
@@ -120,11 +122,13 @@ def aged_view(projections, *, elapsed_ms, fresh, stale_after_ms):
         age = age + elapsed_ms if isinstance(age, (int, float)) and not isinstance(age, bool) else None
         position_age = spatial.get("sample_age_ms")
         position_age = position_age + elapsed_ms if type(position_age) in (int, float) else None
-        usable = (fresh and age is not None and age <= stale_after_ms and position_age is not None
-                  and position_age <= stale_after_ms and not telemetry.get("stale", True))
-        telemetry.update({"age_ms": age, "stale": not usable})
-        spatial.update({"sample_age_ms": position_age, "stale": not usable})
-        row["connected"] = bool(row.get("connected")) and usable
+        telemetry_usable = (fresh and age is not None and age <= stale_after_ms
+                            and not telemetry.get("stale", True))
+        pose_usable = (telemetry_usable and position_age is not None and position_age <= stale_after_ms
+                       and not spatial.get("stale", True))
+        telemetry.update({"age_ms": age, "stale": not telemetry_usable})
+        spatial.update({"sample_age_ms": position_age, "stale": not pose_usable})
+        row["connected"] = bool(row.get("connected")) and telemetry_usable
         cal_age, cal_valid = spatial.get("calibration_age_ms"), spatial.get("calibration_valid_for_ms")
         if type(cal_age) in (int, float) and type(cal_valid) in (int, float) and cal_age >= 0 and cal_valid > 0:
             spatial["calibration_age_ms"] = cal_age + elapsed_ms
@@ -132,7 +136,7 @@ def aged_view(projections, *, elapsed_ms, fresh, stale_after_ms):
                 spatial["calibration_status"] = "stale"
         else:
             spatial["calibration_status"] = "unavailable"
-        spatial["public_position_usable"] = (bool(spatial.get("public_position_usable")) and usable
+        spatial["public_position_usable"] = (bool(spatial.get("public_position_usable")) and pose_usable
                                               and spatial.get("calibration_status") == "calibrated")
         if not fresh:
             row["observation_status"] = "unknown"
