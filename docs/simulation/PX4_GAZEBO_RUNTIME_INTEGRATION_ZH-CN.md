@@ -79,8 +79,10 @@ python3 simulation/px4_gazebo/scripts/health_three_uav.py --mode integrated \
 不改几何或其他字节）。此场景的 SDF 还由同目录 `.gitattributes`
 规定新 checkout 使用 LF；已有 worktree 仍可能保留 CRLF，生产者在两者
 之间得到同一内容哈希 `9086de5b…`。harness 另记录启动时的原始字节
-`world_file_sha256`，采样时也要逐字节复核，因此运行中连换行变化都会
-使地面证据失效。`world_sha256_scheme=sha256-lf-v1` 明确标识内容哈希算法，
+`world_file_sha256`。采集器在进程内以真实路径、mtime、大小和文件身份缓存
+原始/规范化哈希。文件版本变化会重新读取并校验启动摘要。若版本在采样期间变化，
+此次省略地面证据。每次调用仍核对当前 run 的两份启动摘要，连换行变化也会使
+地面证据失效。`world_sha256_scheme=sha256-lf-v1` 明确标识内容哈希算法，
 地面证据仍保持 `contract_version=1.0`；两种哈希的定义不可互换。旧 harness
 运行记录无启动哈希、文件已修改、场景/版本不匹配或 world/进程身份不可信时
 省略该字段，不能猜测地面高度。可审查的静态示例见
@@ -91,14 +93,21 @@ Gazebo 中运行后动态改动 world 的情形不由文件哈希证明，Runtim
 仅是视觉标识，承重面为上述 `ground_plane`；本字段既不验证 pad 容差或逐机
 着陆能力，也不允许把屋顶、其他场景或场景真值当作图像识别结果。
 载体可为原子替换的 JSON 文件，亦可显式 POST 既有 `/simulation/evidence`；本线未修改 HTTP route。
-source_timestamp 来自本次 clock 样本，TTL 5000 ms。publisher 保留采样时间并扣除文件已消耗的 TTL，
+world 文件校验先于实时 Gazebo 采样。即使每次运行新的 CLI 进程，首次读取也不占用
+之后采集的证据窗口。Runtime 证据在 Gazebo 和进程检查后重新读取，统一按同一 UTC
+时刻计算各节点的年龄。source_timestamp 来自本次 clock 样本，TTL 5000 ms。publisher
+保留采样时间并扣除文件已消耗的 TTL，
 拒绝过期、超前时间、重定向和非 loopback API。Runtime 仍应独立检查 source time，不能只看接收时刻。
 
 Runtime → health 文件必须包含 contract_version=1.0、scene_id、当前 run_id、source_timestamp、valid_for_ms、
 vehicles 三节点；每节点包含精确 sysid/compid/endpoint、布尔 heartbeat_fresh/telemetry_fresh、
 heartbeat_timestamp、position_timestamp 和 last_seen。心跳最多 2.5 秒，位置最多 1.5 秒；
 独立消息时间戳不可由整份 snapshot 的时间替代。缺失、重复、身份漂移或过期均非 ready。
-Runtime `3fa42eb` 已有接收 API，但独立消息时间戳出口尚需 Runtime 主责补齐，本契约仍待其确认。
+Runtime 的持久接收线程持续更新消息时间。已固定版本可由
+`GET /api/simulation/runtime-telemetry` 读取该会话的证据，连续导出推荐间隔
+0.5 秒。位置与心跳上限分别与 Runtime 的 1500 ms、2500 ms 判据一致。
+集成健康报告的逐机 `last_telemetry_age_s` 与 `last_heartbeat_age_s` 可用于现场
+复核时延。主控台的 `link_quality` 使用独立的会话收包时间与评分规则。
 
 integrated health 只读 Gazebo：正确 world、至少 1 秒 clock 窗口、RTF≥0.2、三 model 和受管理进程身份。
 暂停、低 RTF、model 缺失、world 错误、身份不匹配、证据过期会产生明确 reason 和非零退出码。

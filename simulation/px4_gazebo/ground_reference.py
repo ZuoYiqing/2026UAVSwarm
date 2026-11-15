@@ -4,7 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import xml.etree.ElementTree as ET
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 try:
@@ -16,6 +19,8 @@ except ImportError:  # Direct script execution adds this directory to sys.path.
 SUPPORTED_SCENE = "simple_recon_v0_1"
 SUPPORTED_MAP = "simple_recon_v0_1-map-1"
 SUPPORTED_WORLD = "simple_recon_v0_1"
+FileSignature = tuple[int, int, int, int, int]
+WorldRevision = tuple[Path, FileSignature]
 
 
 def _zero_pose(element: ET.Element) -> bool:
@@ -51,7 +56,38 @@ def _positive_pair(raw: str | None) -> tuple[float, float]:
     return values[0], values[1]
 
 
-def from_managed_world(manifest: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+def _file_signature(info: os.stat_result) -> FileSignature:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def world_file_revision(manifest: dict[str, Any]) -> WorldRevision:
+    path = harness.resolve_repo_path(str(manifest["world_path"])).resolve()
+    return path, _file_signature(path.stat())
+
+
+@lru_cache(maxsize=8)
+def _world_snapshot(path: Path, signature: FileSignature) -> tuple[bytes, str, str]:
+    """Cache the file and both digests in the collector process."""
+    with path.open("rb") as world:
+        if _file_signature(os.fstat(world.fileno())) != signature:
+            raise ValueError("ground_reference_world_changed_during_read")
+        world_bytes = world.read()
+        if (len(world_bytes) != signature[2]
+                or _file_signature(os.fstat(world.fileno())) != signature):
+            raise ValueError("ground_reference_world_changed_during_read")
+    if _file_signature(path.stat()) != signature:
+        raise ValueError("ground_reference_world_changed_during_read")
+    raw_digest = hashlib.sha256(world_bytes).hexdigest()
+    digest = hashlib.sha256(harness.canonical_world_bytes(world_bytes)).hexdigest()
+    return world_bytes, raw_digest, digest
+
+
+def from_managed_world(
+    manifest: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    revision: WorldRevision | None = None,
+) -> dict[str, Any]:
     """Describe only the known flat collision plane bound to this harness run.
 
     This is geometry evidence, not landing permission or live contact evidence.
@@ -61,18 +97,16 @@ def from_managed_world(manifest: dict[str, Any], state: dict[str, Any]) -> dict[
         SUPPORTED_SCENE, SUPPORTED_MAP, SUPPORTED_WORLD
     ):
         raise ValueError("ground_reference_scene_unsupported")
-    world_path = harness.resolve_repo_path(str(manifest["world_path"])).resolve()
     scene_path = harness.resolve_repo_path(str(manifest["scene_path"]))
     scene = json.loads(scene_path.read_text(encoding="utf-8"))
     if (scene.get("scene_id"), scene.get("map_version"), scene.get("public_frame")) != (
         SUPPORTED_SCENE, SUPPORTED_MAP, "scene_ned"
     ):
         raise ValueError("ground_reference_scene_mismatch")
+    world_path, signature = revision if revision is not None else world_file_revision(manifest)
     if state.get("world_name") != SUPPORTED_WORLD or state.get("world_path") != str(world_path):
         raise ValueError("ground_reference_run_world_mismatch")
-    world_bytes = world_path.read_bytes()
-    raw_digest = hashlib.sha256(world_bytes).hexdigest()
-    digest = hashlib.sha256(harness.canonical_world_bytes(world_bytes)).hexdigest()
+    world_bytes, raw_digest, digest = _world_snapshot(world_path, signature)
     if state.get("world_file_sha256") != raw_digest:
         raise ValueError("ground_reference_run_world_file_hash_mismatch")
     if state.get("world_sha256_scheme") != harness.WORLD_SHA256_SCHEME:
