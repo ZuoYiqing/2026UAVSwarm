@@ -579,14 +579,80 @@ find_spec -> True            ← ★ 必须是 True
 
 #### 环境与轮子的对应表
 
-`04-wheelhouse.tar.gz` 里**已经包含了三种平台的轮子**，不用再下载任何东西：
+`04-wheelhouse.tar.gz` 里**已经包含了三种平台、四种组合的轮子**，不用再下载任何东西：
 
-| 环境 | Python 版本 | pip 会选中的轮子 | 状态 |
-|---|---|---|---|
-| **WSL（地面 Runtime）** | **3.10.12**（Ubuntu 22.04 自带） | `cp310-manylinux_2_17_x86_64` | ✅ §11.3 已覆盖 |
-| **机载计算机（ARM64，如 Jetson）**<br>Ubuntu 22.04 | **3.10** | `cp310-manylinux_2_17_aarch64` | ⚠️ 步骤同上，路径相同 |
-| **机载计算机（ARM64）**<br>Ubuntu 20.04 | 3.8 | `cp38-manylinux_2_17_aarch64`（pymavlink 2.4.49 / lxml 5.4.0） | ⚠️ 版本更老 |
-| **Windows（算法侧，可选）** | **3.11.9**（用 `python-3.11.9-amd64.exe` 装） | `cp311-win_amd64` | ⚠️ 见下方命令 |
+| 环境 | 跑什么 | 系统 | Python | 用哪个轮子 |
+|---|---|---|---|---|
+| **WSL（weier）** | **地面 Runtime** +（现阶段）**模拟无人机** | Ubuntu 22.04 | **3.10.12** | `cp310-manylinux_2_17_x86_64` |
+| **Windows（weier）** | 算法（需要 GPU 时） | Win10 19041 | **3.11.9** | `cp311-win_amd64` |
+| **UGV（Jetson AGX Orin）** | **MAVLink 垫片**（不是 Runtime，见下） | Ubuntu 20.04 / ROS Noetic | **3.8** | `cp38-manylinux_2_17_aarch64` |
+| **机载无人机计算机** | 待定 | **未定** | **未定** | 待定（ARM64 的话用 `cp310-...aarch64`） |
+
+> **⚠️ 机载计算机还没定**，所以表里最后一行是空的。
+> **现阶段用 weier 模拟无人机** —— 也就是无人机这条线暂时也跑在 WSL（x86_64）里，
+> 和地面 Runtime 用同一套 `cp310-manylinux_2_17_x86_64` 轮子。
+> 等机载板子定了，按架构补对应轮子（ARM64 用 aarch64 那三个，x86 用 x86_64）。
+
+#### ⚠️ UGV 有一个绕过不去的硬冲突
+
+**UGV 是 Jetson AGX Orin，跑 Ubuntu 20.04 + ROS Noetic，而 ROS Noetic 的 Python 是 3.8。
+Runtime 要求 ≥3.10。这是硬冲突，绕不过去。**
+
+（依据：`ops/ugv/README.md:266-267`）
+
+所以 **UGV 上不能直接跑 Runtime**。原定的方案是
+「车端只跑一个 **MAVLink 垫片**（pymavlink，py3.8），
+把 MAVLink 速度指令转成 `/cmd_vel`、把 `/scout_status` 回填成 MAVLink 遥测，
+**Runtime 跑在地面，零改动**」。
+
+**wheelhouse 里那三个 `cp38-...aarch64` 轮子就是为这个垫片准备的。**
+
+> **📌 这里有一处需要拍板的矛盾**：
+> 上面的垫片方案说"车端不跑 Runtime"，但负责人曾明确要求**「UGV 必须装 Runtime」**。
+> 两者冲突，**开工前必须定**。四个选项：
+>
+> | 方案 | 怎么做 | 代价 |
+> |---|---|---|
+> | **A 垫片**（README 推荐） | 车端只跑 py3.8 垫片，Runtime 在地面 | 零改动，但 UGV 上没有本地 Policy Gate / 审计 |
+> | **B 装独立 3.10** | 用 deadsnakes 或源码编译，与系统 3.8 并存 | **离线要准备好 .deb 包或源码**，且要处理两个 Python 的路径 |
+> | **C 容器化** | Docker 里跑 3.10 的 Runtime，挂 host 网络 + ROS socket | **离线要准备好镜像**，体积大 |
+> | **D 让 Runtime 兼容 3.8** | 改 `requires-python` + 补 `__future__ import annotations` | 代码改动很小，**已静态核查，见下** |
+>
+> **建议先评估 D**，静态核查结果比预想好得多。
+
+### 方案 D 的静态核查（2026-11-16 做的）
+
+Runtime 的核心 `dependencies = []`（**没有任何第三方运行时依赖**），所以能不能跑 3.8
+只取决于**有没有用 3.9+ / 3.10+ 的语法或标准库**。逐项查了 `src/` 下 **107 个源文件**：
+
+| 会让 Python 3.8 报错的特性 | 命中数 |
+|---|---|
+| `match` 语句（3.10+） | **0** |
+| `isinstance(x, int \| str)` 联合类型（3.10+） | **0** |
+| `.removeprefix()` / `.removesuffix()`（3.9+） | **0** |
+| `zoneinfo`（3.9+） | **0** |
+| `functools.cache`（3.9+） | **0** |
+| `except*` / `ExceptionGroup`（3.11+） | **0** |
+| `tomllib`（3.11+） | **0** |
+| 内置泛型在运行时求值（3.9+） | **0** |
+| `dict \| dict` 合并（3.9+） | 1 处，但**是误报**（`state_store.py:257` 是 f-string） |
+
+**`from __future__ import annotations` 覆盖情况**：**86/107 个文件已有**。
+没有的 21 个里，**20 个是空 `__init__.py`**，只有 1 个有实际内容：
+
+```
+src/uav_runtime/policy/registry_refs.py     ← 唯一需要检查的文件
+```
+
+**结论**：**方案 D 可能只需要改两行**——
+`pyproject.toml` 的 `requires-python` 放宽到 `>=3.8`，
+再给 `registry_refs.py` 补一句 `from __future__ import annotations`。
+
+> ⚠️ **但这只是静态核查，不等于验证过。** 必须**真的在 Python 3.8 上跑一遍全量测试**
+> 才算通过。3.8 环境可以用源码编译（离线要准备 `cpython-3.8-*.tar.gz`），
+> 或者在 ROS Noetic 的 py3.8 里直接跑。
+>
+> **如果 D 通过，UGV 就能直接跑 Runtime，不用垫片也不用容器** —— 这是最省事的路线。
 
 #### 三个坑
 
