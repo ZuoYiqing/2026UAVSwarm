@@ -99,8 +99,20 @@ PX4、Gazebo 或正在运行的真实计划。
 输出包括 `area_total_km2`、`area_covered_km2`、`coverage_pct` 及
 `coverage.polygon`（`scene_ned`、米、`north_m/east_m` 顶点）。
 面积是**到达样本的几何足迹并集**，不是连续航线覆盖、目标发现或相机实测；
-不提供逐栅格可视证据。缺生产者、配置或地图不匹配时面积为 `null`，
-见 `coverage_reason`，不影响已验证航点的百分比。
+缺生产者、配置或地图不匹配时面积及 `coverage` 为 `null`，见
+`coverage_reason`，不影响已验证航点的百分比。
+
+r3 增加可选的 `coverage.grid`，直接取同一执行实例的 Simulation S7
+`AreaCoverage.report(grid_cell_size_m=20)`（#102，`82729c9`）。网格为
+S7 v1.0 稀疏展示网格，包围框最多 25,000 格。没有合格到达样本、网格不可用
+或使用旧版面积生产者时，面积对象内的 `grid` 为 `null`；有效网格里的
+`covered_cells: []` 表示有观测，但没有覆盖任务区内的源格。独立巡逻的
+报告不参与计算。参考 [S7 格式](simulation/DEMO_READINESS_20261113_ZH-CN.md#s7--可选覆盖网格r3-增量)。
+
+[HTTP 响应样例](fixtures/runtime_mission_progress_s7_http_v1.json)来自 Runtime
+本地 HTTP 端口对同一次计划执行的实际响应。执行器输入是受控的到达样本，
+网格由正式 S7 生产者计算；样例中的 `mode:LIVE` 是接口投影模式，**不是
+真实 PX4/Gazebo 飞行证据**。本次执行分别经过 `grid:null`、空覆盖、非空覆盖。
 
 ## R5：失败归因
 

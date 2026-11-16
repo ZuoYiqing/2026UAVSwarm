@@ -267,15 +267,17 @@ def test_fake_service_never_promotes_fake_coordinates_to_sitl(packet):
 
 
 @pytest.mark.parametrize("changed", ["timestamp", "coordinates"])
-def test_projection_never_attaches_new_sample_time_to_old_pose(packet, changed):
+def test_projection_never_attaches_new_sample_time_to_old_pose(packet, changed, monkeypatch):
     first = {"source": "px4_telemetry", "sample_timestamp": stamp(1000), "stale": False,
              "local_position": {"x_m": 1, "y_m": 2, "z_down_m": -3}}
     last = deepcopy(first)
     if changed == "timestamp": last["sample_timestamp"] = stamp(1000.001)
     else: last["local_position"]["x_m"] = 100
     samples = iter([first, last])
-    service = SimpleNamespace(mode="sitl", node_id="UAV-02", run_id="run-fixture", clock=lambda: 1000,
+    service = SimpleNamespace(mode="sitl", node_id="UAV-02", run_id="run-fixture", clock=lambda: 1000.001,
                               store=SimpleNamespace(store_id="store-fixture"), observe=lambda: next(samples))
+    packet["projections"]["vehicle_snapshot"]["vehicles"][0].update(
+        link_quality=89, link_quality_measured=89, link_quality_mode="LIVE")
     def dispatch(method, path):
         if path == "/api/simulation/runtime-telemetry":
             return 503, {"error": "runtime_run_id_required"}
@@ -284,9 +286,25 @@ def test_projection_never_attaches_new_sample_time_to_old_pose(packet, changed):
     row = result["projections"]["vehicle_snapshot"]["vehicles"][0]
     assert not row["spatial"]["public_position_usable"]
     assert row["spatial"]["sample_timestamp"] is None
-    bridge, _ = gateway(result)
+    bridge, clock = gateway(result, clock=[1000.001])
     bridge.refresh_view()
-    assert bridge.cached_view()["projections"]["vehicle_snapshot"]["vehicles"][0]["spatial"]["sample_age_ms"] is None
+    monkeypatch.setattr(routes, "PLATFORM_GATEWAY", bridge)
+    _, local = state([1, 3], clock)
+    monkeypatch.setattr(routes, "RUNTIME_STATE_STORE", local)
+    def remote_row():
+        return next(row for row in routes.vehicle_snapshot()["vehicles"] if row["id"] == "UAV-02")
+
+    ground = remote_row()
+    assert ground["spatial"]["sample_age_ms"] is None and ground["spatial"]["stale"]
+    assert not ground["spatial"]["public_position_usable"]
+    assert ground["connected"] and not ground["telemetry"]["stale"]
+    assert ground["link_quality"] == ground["link_quality_measured"] == 89
+
+    # A valid envelope is not enough once the underlying telemetry ages out.
+    clock[0] += 2.1
+    assert bridge.cached_view()["fresh"]
+    ground = remote_row()
+    assert not ground["connected"] and ground["telemetry"]["stale"] and ground["link_quality"] == 0
 
 
 def test_cross_scene_merge_does_not_publish_usable_public_position(packet, monkeypatch):
