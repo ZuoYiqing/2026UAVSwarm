@@ -827,6 +827,9 @@ class RuntimeStateStore:
         for row in node_rows:
             node_id = str(row["node_id"])
             node = telemetry_by_node.get(node_id, {})
+            session = self.vehicle_registry.get_vehicle(node_id).session if self.vehicle_registry is not None else None
+            measure = getattr(session, "link_quality", None)
+            link_quality = measure() if callable(measure) and row.get("connected") and not row.get("stale") else 0
             local = node.get("local_position") or {}
             attitude = node.get("attitude_deg") or {}
             velocity = node.get("velocity_mps") or {}
@@ -884,6 +887,9 @@ class RuntimeStateStore:
                           if self.vehicle_registry is not None else "x500"),
                 "source": {"id": f"px4-sitl-{row.get('system_id') or node_id}", "kind": "simulation", "label": "PX4 SITL"},
                 "connected": bool(row.get("connected")) and not bool(row.get("stale")),
+                "link_quality": link_quality,
+                "link_quality_measured": link_quality,
+                "link_quality_mode": "LIVE",
                 "control": {
                     "contract_version": "1.1",
                     "active_action": row.get("active_action"),

@@ -415,11 +415,13 @@ def test_run_patrol_reports_ack_waypoints_altitude_and_separation() -> None:
     manifest, scene, _ = _inputs()
     plan = patrol.load_patrol_plan(PATROL_PATH, manifest=manifest, scene=scene)
     events: list[str] = []
+    coverage = patrol.AreaCoverage(scene, "three-uav-patrol-coverage-v1", footprint_radius_m=10)
 
     report = patrol.run_patrol(
         plan,
         _fake_controllers(manifest, events),  # type: ignore[arg-type]
         sleep=lambda delay: None,
+        coverage=coverage,
     )
 
     assert report["status"] == "PASS"
@@ -430,6 +432,7 @@ def test_run_patrol_reports_ack_waypoints_altitude_and_separation() -> None:
     }
     assert report["separation"]["threshold_met"] is True
     assert report["separation"]["minimum_distance_m"] >= 7.0
+    assert 0 < report["coverage"]["area_covered_km2"] < report["coverage"]["area_total_km2"]
     assert all(patrol.ack_accepted(row["arm_ack"]) for row in report["vehicles"])
     assert all(patrol.ack_accepted(row["takeoff_ack"]) for row in report["vehicles"])
     assert all(patrol.ack_accepted(row["land_ack"]) for row in report["vehicles"])

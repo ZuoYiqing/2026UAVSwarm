@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -542,10 +543,16 @@ def _running_gazebo_worlds() -> list[str]:
     return sorted(set(worlds))
 
 
-def _validate_start_state(current_state: dict[str, Any] | None) -> None:
-    """Reject a duplicate run and clean only identity-proven exited state."""
+def _validate_start_state(
+    current_state: dict[str, Any] | None,
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    headless: bool,
+) -> bool:
+    """Return True only for the same complete, live, managed launch."""
     if not current_state:
-        return
+        return False
     processes = list(current_state.get("processes", []))
     identities = _validate_processes(
         processes,
@@ -561,10 +568,46 @@ def _validate_start_state(current_state: dict[str, Any] | None) -> None:
             f"{unsafe[0].code}: "
             + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
         )
-    if any(row.code == IDENTITY_MATCH for row in identities):
-        raise HarnessError("this harness is already running; stop it first")
-    if identities and all(row.code == PROCESS_EXITED for row in identities):
+    if all(row.code == PROCESS_EXITED for row in identities):
+        cleanup = _wait_for_cleanup(current_state, timeout_s=0)
+        if not cleanup["clean"]:
+            raise HarnessError("cleanup_incomplete:" + json.dumps(cleanup, sort_keys=True))
         _cleanup_harness_state(processes)
+        return False
+    if any(row.code != IDENTITY_MATCH for row in identities):
+        raise HarnessError("managed_run_incomplete: stop the existing run before restarting")
+    requested_nodes = {row["node_id"] for row in manifest["vehicles"]}
+    if {row.node_id for row in identities} != requested_nodes:
+        raise HarnessError("managed_run_incomplete: running vehicle set differs")
+
+    world_path = resolve_repo_path(str(manifest["world_path"])).resolve()
+    if (current_state.get("manifest_path") != str(manifest_path.resolve())
+            or current_state.get("manifest_sha256") != _manifest_digest(manifest)
+            or current_state.get("px4_dir") != str(resolve_px4_dir(manifest))
+            or current_state.get("mode") != ("headless" if headless else "gui")
+            or current_state.get("world_name") != manifest["world_name"]
+            or current_state.get("world_path") != str(world_path)
+            or not world_path.is_file()
+            or current_state.get("world_file_sha256") != hashlib.sha256(world_path.read_bytes()).hexdigest()):
+        raise HarnessError("running_configuration_mismatch: stop the existing run before changing configuration")
+
+    try:
+        from .gazebo_evidence import server_identity
+    except ImportError:
+        from gazebo_evidence import server_identity
+    if not server_identity(current_state)["process_identity_valid"]:
+        raise HarnessError("gazebo_process_identity_invalid: stop the existing run before restarting")
+    if _running_gazebo_worlds() != [manifest["world_name"]]:
+        raise HarnessError("gazebo_world_unavailable_or_conflicting: expected " + manifest["world_name"])
+    missing = {str(row["gazebo_model_name"]) for row in manifest["vehicles"]} - gazebo_models()
+    if missing:
+        raise HarnessError("gazebo_models_missing: " + ", ".join(sorted(missing)))
+    return True
+
+
+def _manifest_digest(manifest: dict[str, Any]) -> str:
+    contents = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(contents).hexdigest()
 
 
 def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -587,7 +630,10 @@ def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
     if not world_path.is_file():
         raise HarnessError(f"Gazebo world missing: {world_path}")
 
-    _validate_start_state(read_state())
+    model = str(manifest["px4_sim_model"]).removeprefix("gz_")
+    model_path = px4_dir / "Tools" / "simulation" / "gz" / "models" / model / "model.sdf"
+    if not model_path.is_file():
+        raise HarnessError(f"Gazebo model missing: {model_path}")
     foreign_px4 = _foreign_px4_pids()
     if foreign_px4:
         raise HarnessError(
@@ -943,10 +989,11 @@ def _terminate_process_groups(
     kill_timeout_s: float = 2.0,
     identity_reader: Callable[[int], ProcessIdentityReadResult] | None = None,
     signal_sender: Callable[[int, int], None] | None = None,
+    individual: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[ProcessIdentityDecision]:
-    """Stop verified process groups without ever trusting PID/PGID alone."""
+    """Stop verified process groups or a single verified process."""
     decisions = _validate_processes(
         processes,
         run_id=run_id,
@@ -961,14 +1008,15 @@ def _terminate_process_groups(
     managed_pids = {row.pid for row in decisions if row.code == IDENTITY_MATCH}
     if not managed_pids:
         return decisions
-    sender = signal_sender or getattr(os, "killpg", None)
+    sender = signal_sender or (os.kill if individual else getattr(os, "killpg", None))
     if sender is None:
         raise HarnessError("process-group signalling requires Linux/WSL")
+    signal_target = "pid" if individual else "pgid"
     for item, row in reversed(list(zip(processes, decisions))):
         if row.code != IDENTITY_MATCH:
             continue
         try:
-            sender(int(item["pgid"]), SIGTERM)
+            sender(int(item[signal_target]), SIGTERM)
         except ProcessLookupError:
             continue
 
@@ -1005,7 +1053,7 @@ def _terminate_process_groups(
         if row is None or row.code != IDENTITY_MATCH:
             continue
         try:
-            sender(int(item["pgid"]), SIGKILL)
+            sender(int(item[signal_target]), SIGKILL)
         except ProcessLookupError:
             continue
 
@@ -1050,6 +1098,10 @@ def _cleanup_harness_state(processes: list[dict[str, Any]]) -> None:
 
 def start_harness(manifest_path: Path, *, headless: bool) -> None:
     manifest = load_manifest(manifest_path)
+    current_state = read_state()
+    if _validate_start_state(current_state, manifest=manifest, manifest_path=manifest_path, headless=headless):
+        print(f"Harness already running: run_id={current_state['run_id']}")
+        return
     environment = preflight(manifest)
     world_path = Path(environment["world_path"]).resolve()
     world_bytes = world_path.read_bytes()
@@ -1061,8 +1113,10 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         "version": "1.2",
         "run_id": run_id,
         "manifest_path": str(manifest_path.resolve()),
+        "manifest_sha256": _manifest_digest(manifest),
         "started_at": utc_now(),
         "mode": "headless" if headless else "gui",
+        "px4_dir": str(environment["px4_dir"]),
         "px4_commit": environment["px4_commit"],
         "gazebo_version": environment["gazebo_version"],
         "world_name": manifest["world_name"],
@@ -1176,11 +1230,36 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
                 f"start failed ({exc}); cleanup refused/incomplete: "
                 + json.dumps([row.to_dict() for row in problem], sort_keys=True)
             ) from exc
+        cleanup = _wait_for_cleanup(state)
+        if not cleanup["clean"]:
+            raise HarnessError(f"start failed ({exc}); cleanup_incomplete:"
+                               + json.dumps(cleanup, sort_keys=True)) from exc
         _cleanup_harness_state(processes)
         raise
     finally:
         for handle in opened_logs:
             handle.close()
+
+
+def _live_group_members(processes: list[dict[str, Any]]) -> list[int]:
+    """Observe children that can outlive a PX4 group leader."""
+    if os.name != "posix" or not processes:
+        return []
+    groups = {int(row["pgid"]) for row in processes}
+    live = []
+    for path in Path("/proc").iterdir():
+        if not path.name.isdecimal():
+            continue
+        try:
+            stat = (path / "stat").read_text(encoding="utf-8", errors="replace")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        comm_end = stat.rfind(") ")
+        fields = stat[comm_end + 2:].split()
+        if (comm_end >= 0 and len(fields) >= 3 and fields[0] not in {"Z", "X"}
+                and fields[2].isdecimal() and int(fields[2]) in groups):
+            live.append(int(path.name))
+    return sorted(live)
 
 
 def _wait_for_cleanup(
@@ -1189,14 +1268,16 @@ def _wait_for_cleanup(
     timeout_s: float = 10.0,
     world_probe: Callable[[], list[str]] = _running_gazebo_worlds,
     port_probe: Callable[[str, int], bool] = udp_port_available,
+    process_probe: Callable[[list[dict[str, Any]]], list[int]] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Wait until this run's world disappears and UDP ports are reusable."""
+    """Wait until the process groups and world exit and UDP ports are reusable."""
     expected_world = str(state.get("world_name", ""))
     port_rows = list(state.get("required_udp_ports", []))
     deadline = monotonic() + max(0.0, timeout_s)
     while True:
+        live_members = (process_probe or _live_group_members)(list(state.get("processes", [])))
         worlds = world_probe()
         ports = []
         for row in port_rows:
@@ -1212,13 +1293,14 @@ def _wait_for_cleanup(
             )
         world_stopped = not expected_world or expected_world not in worlds
         ports_released = all(row["available"] for row in ports)
-        clean = world_stopped and ports_released
+        clean = not live_members and world_stopped and ports_released
         evidence = {
             "clean": clean,
             "expected_world": expected_world or None,
             "observed_worlds": worlds,
             "world_stopped": world_stopped,
             "ports_released": ports_released,
+            "live_group_member_pids": live_members,
             "ports": ports,
         }
         if clean or monotonic() >= deadline:
@@ -1257,7 +1339,22 @@ def stop_harness() -> dict[str, Any]:
             "failed to stop harness processes: "
             + json.dumps([row.to_dict() for row in remaining], sort_keys=True)
         )
-    cleanup = _wait_for_cleanup(state)
+    cleanup = _wait_for_cleanup(state, timeout_s=2)
+    # A server can outlive its PX4 group leader. The group is no longer
+    # eligible for another signal. Use the recorded server identity instead.
+    gazebo_decisions = []
+    gazebo_groups = {row["pgid"] for row in processes if row.get("owns_gazebo")}
+    for server in state.get("gazebo_processes", []):
+        if (server.get("kind") == "gazebo" and server.get("pgid") in gazebo_groups
+                and server.get("pid") in cleanup["live_group_member_pids"]):
+            gazebo_decisions.extend(
+                _terminate_process_groups([server], run_id=str(state["run_id"]), individual=True)
+            )
+    if any(row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH} for row in gazebo_decisions):
+        raise HarnessError("gazebo_cleanup_identity_invalid:"
+                           + json.dumps([row.to_dict() for row in gazebo_decisions], sort_keys=True))
+    if not cleanup["clean"]:
+        cleanup = _wait_for_cleanup(state)
     if not cleanup["clean"]:
         raise HarnessError(
             "cleanup_incomplete:" + json.dumps(cleanup, sort_keys=True)
@@ -1268,6 +1365,7 @@ def stop_harness() -> dict[str, Any]:
         "idempotent": False,
         "run_id": state.get("run_id"),
         "processes": [row.to_dict() for row in decisions],
+        "gazebo_processes": [row.to_dict() for row in gazebo_decisions],
         "cleanup": cleanup,
     }
     print(json.dumps(payload, indent=2))
@@ -1519,6 +1617,20 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@contextmanager
+def _lifecycle_lock():
+    """Serialize CLI start/stop for the same state directory."""
+    if os.name != "posix":
+        yield
+        return
+    import fcntl
+
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+    with (RUNTIME_ROOT / "harness.lock").open("ab") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -1528,7 +1640,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "mapping":
             print_mapping_table(load_manifest(args.config))
         elif args.command == "start":
-            start_harness(args.config, headless=bool(args.headless))
+            with _lifecycle_lock():
+                start_harness(args.config, headless=bool(args.headless))
         elif args.command == "preflight":
             manifest = load_manifest(args.config)
             repo_root = Path(args.repo_root)
@@ -1547,8 +1660,9 @@ def main(argv: list[str] | None = None) -> int:
             # 若错位时仍返回 0，调用方就只能解析文字判断，那迟早会失效。
             return 0 if report["ok"] else 1
         elif args.command == "stop":
-            stop_harness()
-    except HarnessError as exc:
+            with _lifecycle_lock():
+                stop_harness()
+    except (HarnessError, OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0

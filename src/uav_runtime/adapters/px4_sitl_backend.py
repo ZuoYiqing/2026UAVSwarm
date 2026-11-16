@@ -532,6 +532,7 @@ class Px4SitlBackend:
                             result.update(result="fail", failure_reason="landing_outside_allowed_site", completion_state="failed")
                 else:
                     result["failure_reason"] = observation.get("failure_reason") or "landing_completion_timeout"
+                    self._classify_completion_timeout(result, "land")
                 return self._finish_smoke_result(result)
             observation_args: dict[str, Any] = {
                 "timeout_s": observe_timeout_s,

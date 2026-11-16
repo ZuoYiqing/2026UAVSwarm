@@ -205,12 +205,17 @@ python3 simulation/px4_gazebo/harness.py preflight \
 启动前 Harness 会拒绝：
 
 - 非 Linux / WSL 环境；
-- 缺少 PX4 binary、etc 或 world；
+- 缺少 PX4 binary、etc、world 或 manifest 对应的 Gazebo `model.sdf`；
 - 旧状态文件与当前进程身份不一致；
 - 外部 PX4 进程或其他 Gazebo world；
 - 需要的 UDP 端口已被占用。
 
 启动成功不是完整健康证明，必须继续运行 health。
+
+同一 worktree 的 start/stop 串行执行。对已经完整启动的三机，使用同一配置文件、
+PX4 路径和启动模式重复执行 start 会提示当前 `run_id` 并成功返回。脚本核对
+配置内容、world 文件、受管进程和三个模型。旧版状态缺少配置摘要时，先用原
+worktree 停止后再用新版启动。更换 manifest、GUI 模式或 world 时先停止。
 
 ## 8. 持续健康检查
 
@@ -385,6 +390,9 @@ scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json
 
 ## 11. 四模块集成运行
 
+演示用的现场验收步骤、区域覆盖函数以及 Gazebo 与 Cesium 的坐标对照见
+[2026-11-13 仿真交付记录](DEMO_READINESS_20261113_ZH-CN.md)。
+
 推荐顺序：
 
 ```text
@@ -428,7 +436,8 @@ state v1.2 记录：
 1. 重新读取 `/proc` 并验证身份；
 2. 身份匹配才发送 SIGTERM；
 3. 超时后再次验证身份，仍匹配才发送 SIGKILL；
-4. 等待 PX4 PID 退出；
+4. 等待 PX4 PID 和受管组内子进程退出。Gazebo server 若仍存活，只有在已记录
+   且再次通过身份校验时才对该 PID 发送信号；
 5. 验证目标 Gazebo world 消失；
 6. 验证相关 UDP 端口可重新绑定；
 7. 全部通过后删除 state 和 PID 文件。
