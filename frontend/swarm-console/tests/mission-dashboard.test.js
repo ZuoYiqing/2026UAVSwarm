@@ -5,6 +5,9 @@ const vm = require("node:vm");
 const path = require("node:path");
 const dashboard = require("../mission-dashboard.js");
 const model = require("../console-model.js");
+const coverageGrid = require("../coverage-grid.js");
+// Synthetic producer fixture preserved from 82729c9, not flight telemetry.
+const s7Fixture = require("./fixtures/coverage_grid_s7_v1.json");
 
 const stamp = (second) => new Date(Date.UTC(2026, 10, 13, 2, 0, second)).toISOString();
 const allow = { type:"policy_decision_event", timestamp:stamp(2), request_id:"req-1",
@@ -14,6 +17,17 @@ const result = { type:"action_result", timestamp:stamp(4), request_id:"req-1", a
   node_id:"UAV-02", action:"takeoff", status:"succeeded", completion_evidence:{completion_reached:true} };
 const deny = { type:"policy_decision_event", timestamp:stamp(8), request_id:"req-2",
   node_id:"UAV-03", action_type:"takeoff", decision_code:"deny", rule_name:"fixture_rule", reason:"fixture denial" };
+
+function progressWithGrid(coverage = s7Fixture.coverage) {
+  return {
+    mission_id: "s7-fixture-plan", status: "running", mode: "LIVE",
+    scene_id: coverage.scene_id, map_version: coverage.map_version,
+    completion_basis: "verified_waypoints", completion_pct: 75,
+    waypoints_reached: 3, waypoints_total: 4,
+    area_covered_km2: coverage.area_covered_km2, area_total_km2: coverage.area_total_km2,
+    coverage,
+  };
+}
 
 function harness(href = "http://127.0.0.1:5178/") {
   let elapsed = 0;
@@ -106,6 +120,56 @@ test("the LIVE task map separates verified waypoint completion from covered area
     assert.ok(h.html("stage-content").includes(`面积覆盖率</span><b>${label}</b>`));
     assert.match(h.html("stage-content"), /航点完成度<\/span><b>75%/);
   }
+});
+
+test("the S7 producer fixture draws along north and east within the published boundary", () => {
+  const projection = dashboard.missionMap(dashboard.missionProgress(progressWithGrid()), null).coverageGrid;
+  assert.equal(projection.cells.length, 7);
+  assert.equal(projection.size, 20);
+  const calls = [];
+  const ctx = Object.fromEntries(["save", "restore", "clearRect", "beginPath", "moveTo", "lineTo",
+    "closePath", "clip", "fillRect"].map(name => [name, (...args) => calls.push([name, ...args])]));
+  coverageGrid.draw({width:1600, height:1000, getContext:()=>ctx}, projection);
+  const clipped = calls.findIndex(([name]) => name === "clip");
+  const rectangles = calls.filter(([name]) => name === "fillRect");
+  assert.ok(clipped > 0 && clipped < calls.findIndex(([name]) => name === "fillRect"));
+  assert.equal(rectangles.length, 7);
+  assert.ok(rectangles[1][1] > rectangles[0][1], "advancing east moves right");
+  assert.ok(rectangles[2][2] < rectangles[0][2], "advancing north moves up");
+  assert.ok(rectangles[1][1] + rectangles[1][3] > projection.polygon[2].x * 16,
+    "the east-most display cell extends past the polygon and is clipped");
+  assert.equal(calls.at(-1)[0], "restore");
+});
+
+test("the LIVE map distinguishes mapped coverage, observed zero and unavailable distribution", () => {
+  const h = harness("http://127.0.0.1:5178/?mode=stage&source=live");
+  h.run('state.apiStatus="live"; state.missionStatus="live";');
+  const renderMap = coverage => {
+    h.run(`state.mission=dashboard.missionProgress(${JSON.stringify(progressWithGrid(coverage))}); renderStage();`);
+    return h.html("stage-content");
+  };
+  const valid = s7Fixture.coverage;
+  const map = renderMap(valid);
+  assert.match(map, /mission-coverage-grid/);
+  assert.match(map, /7 个格有覆盖记录，格内可能仅部分覆盖/);
+  assert.match(map, /航点完成度<\/span><b>75%/);
+  assert.match(map, /面积覆盖率<\/span><b>15\.12%/);
+
+  const zero = renderMap({...valid, area_covered_km2:0, grid:{...valid.grid, covered_cells:[]}});
+  assert.match(zero, /已有观测，当前没有覆盖记录/);
+  assert.match(zero, /面积覆盖率<\/span><b>0%/);
+
+  for (const grid of [undefined, null,
+    {...valid.grid, frame:"scene_enu"}, {...valid.grid, map_version:"foreign-version"},
+    {...valid.grid, rows:300, columns:300}, {...valid.grid, covered_cells:[[0,0,718],[0,0,718]]},
+    {...valid.grid, covered_cells:[[5,0,718]]}, {...valid.grid, covered_cells:[]}]) {
+    const fallback = renderMap({...valid, grid});
+    assert.match(fallback, /覆盖分布未知/);
+    assert.doesNotMatch(fallback, /mission-coverage-grid/);
+    assert.match(fallback, /面积覆盖率<\/span><b>15\.12%/);
+  }
+  const snapshotMiss = dashboard.missionProgress({...progressWithGrid(), scene_id:"other-scene"});
+  assert.equal(snapshotMiss.coverageGrid, null);
 });
 
 test("DEMO plays its complete zero-operation story and keeps all writes disabled", async () => {

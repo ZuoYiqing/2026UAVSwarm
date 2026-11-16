@@ -1,8 +1,10 @@
 (function attachMissionDashboard(root, factory) {
-  const dashboard = factory();
+  const coverageGrid = root?.SwarmCoverageGrid
+    ?? (typeof module === "object" && module.exports ? require("./coverage-grid.js") : null);
+  const dashboard = factory(coverageGrid);
   if (typeof module === "object" && module.exports) module.exports = dashboard;
   if (root) root.SwarmMissionDashboard = dashboard;
-})(typeof window === "undefined" ? null : window, function missionDashboard() {
+})(typeof window === "undefined" ? null : window, function missionDashboard(coverageGrid) {
   const terminal = new Set(["succeeded", "failed", "timed_out", "policy_rejected", "cancelled", "canceled"]);
   const pct = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
   const nonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
@@ -115,6 +117,7 @@
       areaCovered,
       areaTotal,
       coveragePercent,
+      coverageGrid: coverageGrid?.parse(coverage, payload) ?? null,
       waypointsReached: Number.isInteger(payload.waypoints_reached) ? nonnegative(payload.waypoints_reached) : null,
       waypointsTotal: Number.isInteger(payload.waypoints_total) ? nonnegative(payload.waypoints_total) : null,
       targetsFound: nonnegative(payload.targets_found),
@@ -210,6 +213,10 @@
     }
     return {
       regions: regions.map(({ region, points }) => ({ ...region, projected: points.map(project) })),
+      coverageGrid: progress.coverageGrid && scene === progress.coverageGrid.sceneId
+        && progress.map.map_version === progress.coverageGrid.mapVersion
+        && regions.some(({ region }) => region.area_id === progress.coverageGrid.areaId)
+        ? coverageGrid.project(progress.coverageGrid, project) : null,
       markers: sourceAligned ? rows(snapshot.vehicles).flatMap(vehicle => {
         const spatial = vehicle.spatial;
         const position = spatial?.scene_pose?.frame === "scene_ned" && nedPoint(spatial.scene_pose.position_m);

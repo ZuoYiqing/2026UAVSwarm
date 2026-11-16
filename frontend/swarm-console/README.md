@@ -46,6 +46,8 @@ python -m http.server 5179 --bind 127.0.0.1 --directory frontend/swarm-console/s
 
 首屏以 Runtime 上报的链路质量、任务进度和覆盖证据为准。任务地图分别显示已验证的航点完成度（已到达 / 总航点）和面积覆盖率（已覆盖面积 / 总面积）。缺少面积证据时，覆盖率显示等待。只有区域边界和面积汇总时，地图把空间分布标为“覆盖未知”。同场景且标定匹配的新鲜位置才能落到任务地图。目标发现和安全裕度缺少证据时显示等待或未知。
 
+Runtime 提供 S7 的 `coverage.grid` 时，任务地图按 `scene_ned` 米绘制有覆盖记录的网格，并用 `coverage.polygon` 裁剪边缘。粗格内可能只有部分面积覆盖。面积覆盖率仍使用源网格累计面积。缺失、空值或身份／坐标不匹配的网格显示“覆盖分布未知”，合法的空覆盖列表显示“已有观测，当前没有覆盖记录”。[仿真契约与示例](https://github.com/ZuoYiqing/2026UAVSwarm/pull/102)
+
 时间轴读取 `/api/events?n=50`、`/api/policy/decisions?n=20`、`/api/actions/lifecycle?n=20` 和 `/api/replay?n=20`。点击记录查看原始 JSON。Policy Gate 可按载具和判定过滤，顶部裁决提示 2 秒后缩成徽章并支持关闭。
 
 Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/state`。显式启用 Runtime 演习后，可从首屏选中载具并发出 DEMO 注入或清除请求。注入分与实测分分别显示，模拟处置与分配记录标为 DEMO。默认 API 地址仍为 `http://127.0.0.1:8765/api`。
