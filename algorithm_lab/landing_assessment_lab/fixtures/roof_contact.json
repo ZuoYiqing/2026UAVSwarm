@@ -1,0 +1,84 @@
+{
+  "contract_version": "landing_assessment_proposal_v0.1",
+  "assessment_id": "roof-contact-001",
+  "correlation": {
+    "mission_id": "M-REPLAY",
+    "request_id": "REQ-001",
+    "action_id": null,
+    "trace_id": null
+  },
+  "goal": {
+    "kind": "scene_ground_contact",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "ground_reference": {
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_kind": "synthetic_scene_geometry",
+      "source_ref": "fixture://world/ground_plane",
+      "ground_down_m": 0
+    },
+    "vertical_tolerance_m": 0.3,
+    "min_samples": 3,
+    "min_stable_s": 0.5
+  },
+  "observation": {
+    "node_id": "UAV-01",
+    "source_kind": "synthetic_replay",
+    "source_ref": "fixture://roof-contact",
+    "timebase": "simulation_s",
+    "evaluated_at_s": 10.7,
+    "max_sample_age_s": 2,
+    "calibration": {
+      "version": "synthetic-cal-1",
+      "frame": "scene_ned",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_ref": "fixture://calibration"
+    },
+    "samples": [
+      {
+        "sample_id": "s1",
+        "t_s": 10,
+        "position_scene_ned_m": {
+          "north_m": 15.6,
+          "east_m": -0.7,
+          "down_m": -9.98
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://roof-contact/s1"
+      },
+      {
+        "sample_id": "s2",
+        "t_s": 10.3,
+        "position_scene_ned_m": {
+          "north_m": 15.6,
+          "east_m": -0.7,
+          "down_m": -9.98
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://roof-contact/s2"
+      },
+      {
+        "sample_id": "s3",
+        "t_s": 10.6,
+        "position_scene_ned_m": {
+          "north_m": 15.6,
+          "east_m": -0.7,
+          "down_m": -9.98
+        },
+        "landed": true,
+        "armed": false,
+        "source_ref": "fixture://roof-contact/s3"
+      }
+    ],
+    "surface_observation": {
+      "kind": "range_only",
+      "image_ref": null,
+      "range_down_m": 0.01,
+      "source_ref": "fixture://roof-contact/range"
+    }
+  }
+}
