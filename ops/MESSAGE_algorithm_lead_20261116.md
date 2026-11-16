@@ -38,30 +38,48 @@
 
 ## 三、✅ 正确做法：给 main 单独开一个工作区
 
-**你的两个老工作区一个都别动**，另开一个新的给 main：
+**你的两个老工作区一个都别动**，另开一个新的。
+
+> ⚠️ **注意：不能直接 `git worktree add <路径> main`**
+> —— 主工作区 `D:\2026UAVSwarm` 已经占用了 `main`，会报
+> `fatal: 'main' is already used by worktree at 'D:/2026UAVSwarm'`。
+>
+> **必须用 `--detach`（只核代码）或者 `-b`（要开发）。**
+
+### 情况 A：只核对基线（不改任何分支）
 
 ```bash
-# ① 在仓库根执行（不是在你的工作区里）
 cd D:\2026UAVSwarm
 git fetch origin --tags
 
-# ② 给 main 新开一个工作区，和你现有的并列
-git worktree add D:\2026UAVSwarm-worktrees\algorithm-main main
+git worktree add --detach D:\2026UAVSwarm-worktrees\algorithm-main main
 
-# ③ 进去确认
 cd D:\2026UAVSwarm-worktrees\algorithm-main
 git log -1 --oneline
 git merge-base --is-ancestor demo-20261113-r3 HEAD && echo "OK: 版本正确" || echo "错了"
 ```
 
-**必须看到 `OK: 版本正确`。**
+### 情况 B：要基于新基线开发（推荐）
 
-**这样你就有三个工作区：**
+```bash
+cd D:\2026UAVSwarm
+git fetch origin --tags
+
+# 从最新 origin/main 开一个新分支 + 新工作区
+git worktree add -b codex/algorithm-intent-anchoring D:\2026UAVSwarm-worktrees\algorithm-intent-anchoring origin/main
+
+cd D:\2026UAVSwarm-worktrees\algorithm-intent-anchoring
+git merge-base --is-ancestor demo-20261113-r3 HEAD && echo "OK: 版本正确" || echo "错了"
+```
+
+**两种都要看到 `OK: 版本正确`。**
+
+**这样你的工作区变成：**
 
 ```
-D:\2026UAVSwarm-worktrees\algorithm-lab-local-llm-poc      ← 你的老工作，原样不动
-D:\2026UAVSwarm-worktrees\algorithm-uav02-local-candidate  ← 你的老工作，原样不动
-D:\2026UAVSwarm-worktrees\algorithm-main                   ← 新的，基于统一基线 main
+D:\2026UAVSwarm-worktrees\algorithm-lab-local-llm-poc      ← 老工作，原样不动
+D:\2026UAVSwarm-worktrees\algorithm-uav02-local-candidate  ← 老工作，原样不动
+D:\2026UAVSwarm-worktrees\algorithm-intent-anchoring       ← 新的，基于 main
 ```
 
 **随时能回去看老代码：**
@@ -76,6 +94,29 @@ git status          # 还是你原来那个分支，一点没变
 
 **这是有意的，不是漏了。**
 
+> ⚠️ **更正我先前的说法**：我一开始写的是"只有需求文档进了 main"，**这个说法太宽**。
+> 实际情况是：`main` 上的 `algorithm_lab/` 已经有 **89 个文件**，
+> 包括 `mission_llm_poc/`（66 个）和 `world_model_lab/`（21 个），**这些早就在了**。
+> 真正没进 main 的，只有你两条分支独有的那部分
+> （`4a42f2d` 的 13 个文件、`0ff77c1` 的 19 个文件）。
+
+### main 上已有的（早就在）
+
+| 目录 | 文件数 |
+|---|---|
+| `algorithm_lab/mission_llm_poc/` | 66 |
+| `algorithm_lab/world_model_lab/` | 21 |
+| `algorithm_lab/INTELLIGENCE_HANDOFF/` | 2（2026-11-16 入库） |
+
+### 没进 main 的（两条分支独有）
+
+| 分支 | 独有文件 | 内容 |
+|---|---|---|
+| `codex/algorithm-lab-local-llm-poc` `4a42f2d` | 13 个 | 离线**着陆证据基线** |
+| `codex/algorithm-uav02-local-candidate` `0ff77c1` | 19 个 | **UAV-02 候选服务**（compact-view 模型视图 / Ubuntu CPU 离线包 / 候选输入哈希） |
+
+### 为什么不合
+
 原因：算法**不进入本次演示**。判断依据是你自己写的那份文档：
 
 > 当前 `algorithm_lab/mission_llm_poc` 的实现是"**闭环验证脚手架**"
@@ -83,10 +124,8 @@ git status          # 还是你原来那个分支，一点没变
 > 它的价值在于冻结 I/O 契约、可复现、可审计。**真正的智能算法尚未开始。**
 > —— `01_runtime_interface_requirements.md:24`
 
-所以合进 main 的只有你的**需求文档**（我帮你入库的，原来一直是未跟踪状态）：
-`algorithm_lab/INTELLIGENCE_HANDOFF/01_…` 和 `02_…`
-
-**你那两条实现分支原样保留**，等你需要的时候再合。
+**你那两条分支原样保留**，等你需要的时候再合。
+合进来之前建议先 rebase 到 `origin/main`（它们分别落后 54 和 27 个提交）。
 
 ---
 
