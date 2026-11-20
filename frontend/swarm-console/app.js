@@ -44,6 +44,8 @@ const state = {
   lastBackendResult: null,
   lastActionResult: null,
   lastPlanResult: null,
+  semanticPreview: {},
+  semanticPreviewDetailsOpen: false,
   runtimeSnapshot: null,
   telemetry: null,
   vehicleSnapshot: null,
@@ -1164,6 +1166,105 @@ function runtimeChain(compact = false) {
     </div>`).join("")}</div>`, compact ? "" : "h-fill");
 }
 
+const semanticPreviewFiles = [
+  ["01-clarification.preview.json", "加载并列澄清"],
+  ["02-clarified.preview.json", "加载明确实体后的绑定"],
+];
+const modelReplayFiles = [
+  ["higher-12.preview.json", "32 米：模型选对，核实通过"],
+  ["higher-2.preview.json", "22 米：模型选错，待澄清"],
+  ["higher-27.preview.json", "47 米：目录范围内无匹配，待澄清"],
+];
+
+function semanticPreviewPanel() {
+  return panel("离线算法证据 · 只读预览", `
+    <div class="semantic-preview-controls">
+      ${semanticPreviewFiles.map(([file, label]) => `<button type="button" class="button" data-semantic-sample="${file}">${label}</button>`).join("")}
+      <div class="field"><label for="semantic-model-replay">模型实测回放（不触发推理）</label>
+        <select id="semantic-model-replay" data-semantic-model-sample>
+          <option value="">选择实测记录</option>
+          ${modelReplayFiles.map(([file, label]) => `<option value="${file}">${label}</option>`).join("")}
+        </select></div>
+      <div class="field"><label for="semantic-preview-file">导入本地预览 JSON</label>
+        <input id="semantic-preview-file" type="file" accept=".json,application/json" data-semantic-file></div>
+    </div>
+    <div id="semantic-preview-result" aria-live="polite">${semanticPreviewResult()}</div>`, "semantic-preview");
+}
+
+function semanticPreviewResult() {
+  const { record, label, error, scopeText } = state.semanticPreview;
+  if (error) return `<p class="inline-error">${esc(label)}：${esc(error)}</p>`;
+  if (!record) return `<p class="small">${label ? `正在读取 ${esc(label)}…` : "选择一份离线导出以查看绑定依据。"}</p>`;
+
+  const { source } = record;
+  const statuses = { bound: ["已绑定", "cyan"], clarify: ["待澄清", "amber"], unknown: ["未知", "amber"] };
+  const items = record.status === "bound" ? record.bindings : record.candidates;
+  const modelAlias = typeof record.scope?.model_alias === "string" ? record.scope.model_alias : null;
+  const modelRaw = typeof record.scope?.model_response === "string" ? record.scope.model_response : null;
+  const ruleHint = record.reason_code === "MODEL_CHOICE_EVIDENCE_MATCH"
+    ? "模型选项与目录规则一致：按所需高度核对唯一匹配，绑定目录对象，不下发任务。"
+    : record.reason_code === "MODEL_CHOICE_REQUIRES_REVIEW"
+      ? "模型选项与目录规则不一致，没有绑定；下方对象只是候选。" : null;
+  return `<p>${badge(...statuses[record.status])} <span class="small">${esc(record.reason_code)}</span></p>
+    <p class="small">${source.model_executed
+      ? "模型实测回放（文件标注）" + (modelAlias ? " · " + esc(modelAlias) : "") : "离线规则验证 · 模型未运行"}</p>
+    <p class="small">${esc(record.scene_id)} / ${esc(record.map_version)} · schema ${esc(record.schema_version)}</p>
+    <p><span class="small">原话</span> ${esc(record.objective)}</p>
+    ${source.model_executed && modelRaw ? `<p><span class="small">模型原始回复</span> <code>${esc(modelRaw)}</code></p>` : ""}
+    ${source.kind === "local_model_scene_selection" ? '<p class="small">核对规则：20 米加上原话中的差值。只查导出目录的北侧首排东半幅；唯一匹配才可绑定，并列须澄清，没有匹配不能选楼。不会替模型改答案。</p>' : ""}
+    ${ruleHint ? `<p class="small">${ruleHint}</p>` : ""}
+    ${record.status === "clarify" ? `<p class="amber">${esc(record.clarification_question)}</p>` : ""}
+    ${record.status === "unknown" ? '<p class="small">当前证据不足以绑定实体。</p>' : ""}
+    ${items.length ? `<ul class="semantic-preview-entities">${items.map(item => `<li>
+      <b>${esc(item.entity_id)}</b> <span class="small">${esc(item.entity_kind)}${Number.isFinite(item.height_m) ? ` · ${item.height_m} m` : ""}</span>
+      ${item.evidence ? `<div>原文依据 ${esc(item.evidence)}</div>` : ""}
+      ${item.source_reference ? `<div class="small">${esc(item.source_reference)}</div>` : ""}
+    </li>`).join("")}</ul>` : ""}
+    <details data-semantic-details${state.semanticPreviewDetailsOpen ? " open" : ""}>
+      <summary>来源与限定条件</summary>
+      <div class="semantic-preview-provenance">
+        <dl class="semantic-preview-source">
+          <dt>来源类型</dt><dd>${esc(source.kind)}</dd>
+          <dt>导入文件</dt><dd>${esc(label)}</dd>
+          <dt>原始证据</dt><dd>${esc(source.evidence_file)}</dd>
+          <dt>原证据 SHA-256（导出记录）</dt><dd><code>${esc(source.evidence_sha256)}</code></dd>
+          <dt>场景目录</dt><dd>${esc(source.catalog_file)}</dd>
+          <dt>目录内容 SHA-256（导出记录）</dt><dd><code>${esc(source.catalog_content_sha256)}</code></dd>
+          <dt>目录审核状态</dt><dd>${source.catalog_review_status === "exported_from_physics_pending_review" ? "物理导出待审核 · " : ""}${esc(source.catalog_review_status)}</dd>
+        </dl>
+        ${scopeText !== null ? `<p>限定范围</p><pre class="json">${esc(scopeText)}</pre>` : ""}
+        ${record.limitations.length ? `<ul>${record.limitations.map(limit => `<li>${esc(limit)}</li>`).join("")}</ul>` : ""}
+      </div>
+    </details>`;
+}
+
+function renderSemanticPreviewResult() {
+  const slot = document.getElementById("semantic-preview-result");
+  if (slot) slot.innerHTML = semanticPreviewResult();
+}
+
+async function loadSemanticPreview(read, label, fileSize = 0) {
+  const model = window.SwarmSemanticPreview;
+  const preview = { label };
+  state.semanticPreview = preview;
+  renderSemanticPreviewResult();
+  try {
+    Object.assign(preview, fileSize > model.maxFileBytes ? { error: "证据文件超过 512 KiB。" } : model.parse(await read()));
+  } catch {
+    preview.error = "无法读取证据文件。";
+  }
+  if (state.semanticPreview === preview) renderSemanticPreviewResult();
+}
+
+function loadSemanticSample(file) {
+  if (stageMode || ![...semanticPreviewFiles, ...modelReplayFiles].some(([name]) => name === file)) return;
+  return loadSemanticPreview(async () => {
+    const response = await fetch("./evidence/semantic-preview/" + file);
+    if (!response.ok) throw new Error("Evidence file unavailable");
+    return response.text();
+  }, file);
+}
+
 function twinPage() {
   const summary = fleetSummary();
   return `<div class="page twin-page">
@@ -1171,6 +1272,7 @@ function twinPage() {
     <div class="twin-main">
       ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "twin-panel")}
       <div class="grid twin-nodes">
+        ${semanticPreviewPanel()}
         <div class="metrics">
           ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan", "online")}
           ${metric("已武装", summary.armed, "Telemetry", "green", "armed")}
@@ -1187,7 +1289,7 @@ function twinPage() {
 }
 
 function planningPage() {
-  return `<div class="page">
+  return `<div class="page semantic-planning-page">
     ${pageTitle("任务规划", "自然语言生成任务 · 结构化编排 · 策略预检 · 仿真预演", `
       <button class="button primary" onclick="generateRequest()">生成请求</button><button class="button planned" onclick="policyPrecheck()">策略预检 · 规划中</button><button class="button" onclick="simulationPreview()">仿真预演</button><button class="button planned" onclick="dispatchMission()">下发任务 · 规划中</button>
     `)}
@@ -1198,9 +1300,10 @@ function planningPage() {
           <div class="mini-tabs" style="margin-top:10px"><span class="chip">园区巡检</span><span class="chip">边界巡逻</span><span class="chip">应急搜救</span><span class="chip">消防侦察</span></div>`)}
         ${panel("地图预览", scene3d("small"), "")}
       </div>
-      <div class="grid" style="grid-template-rows:1.05fr .95fr">
+      <div class="grid semantic-planning-previews">
         ${panel("2 任务编排（结构化任务图）", flowGraph(), "")}
         ${panel("3 请求预览（JSON）", `<pre class="json">${esc(JSON.stringify(sampleActionRequest(), null, 2))}</pre>`, "scroll")}
+        ${semanticPreviewPanel()}
       </div>
       <div class="grid">
         ${panel("4 策略预检（Policy Gate）", `<div class="donut"><div class="donut-inner"><b class="green">通过</b><span class="small">18 条策略</span></div></div>
@@ -2398,10 +2501,15 @@ function renderRegions() {
 /**
  * 同页局部更新：只替换会被状态影响的面板内容，不动三维视图所在容器。
  *
- * 目前只覆盖 twin 页——那是唯一含 iframe 的页面，也是 render() 被频繁调用的场景。
- * 其它页面仍走整体重建（它们没有 iframe，重建无副作用）。
+ * twin 页保留 iframe；任务规划页保留输入框和证据控件。
+ * 其它页面仍走整体重建。
  */
 function updatePageInPlace() {
+  if (state.page === "planning" && document.getElementById("semantic-preview-result")) {
+    // 后台探活不能重建当前的下拉列表或文件选择框。
+    updateVehicleTableInPlace();
+    return;
+  }
   if (state.page !== "twin") {
     const contentSlot = document.getElementById("slot-content");
     if (contentSlot) contentSlot.innerHTML = route();
@@ -2416,15 +2524,7 @@ function updatePageInPlace() {
     return;
   }
 
-  const table = document.getElementById("vehicle-table-body");
-  if (table) table.innerHTML = vehicleTableRows();
-  // 空状态的显隐必须在这里同步。
-  //
-  // 它由首屏渲染决定是否可见，而首屏通常还没有数据 —— 若不在局部更新里纠正，
-  // 数据到达后表格已填好、空状态却仍留在下面（实测："表格有 3 行，
-  // 下面还写着 'Runtime 尚未提供已注册载具'"）。
-  const emptyNote = document.getElementById("vehicle-table-empty");
-  if (emptyNote) emptyNote.hidden = state.fleet.length > 0;
+  updateVehicleTableInPlace();
   const telemetry = document.getElementById("selected-telemetry");
   if (telemetry) telemetry.innerHTML = telemetrySummary();
   const summary = fleetSummary();
@@ -2437,6 +2537,13 @@ function updatePageInPlace() {
   document.querySelectorAll("[data-metric='issues']").forEach((node) => {
     node.textContent = String(state.linkIssues ?? "--");
   });
+}
+
+function updateVehicleTableInPlace() {
+  const table = document.getElementById("vehicle-table-body");
+  if (table) table.innerHTML = vehicleTableRows();
+  const emptyNote = document.getElementById("vehicle-table-empty");
+  if (emptyNote) emptyNote.hidden = state.fleet.length > 0;
 }
 
 function topbar() {
@@ -2545,11 +2652,28 @@ app.addEventListener("click", (event) => {
     return;
   }
   if (stageMode) return;
+  const sample = event.target.closest("[data-semantic-sample]");
+  if (sample) return loadSemanticSample(sample.dataset.semanticSample);
   const target = event.target.closest("[data-vehicle-id]");
   if (target) selectVehicle(target.dataset.vehicleId);
 });
 
+app.addEventListener("toggle", (event) => {
+  if (event.target.hasAttribute?.("data-semantic-details")) state.semanticPreviewDetailsOpen = event.target.open;
+}, true);
+
 app.addEventListener("change", (event) => {
+  if (event.target.hasAttribute?.("data-semantic-model-sample")) {
+    const file = event.target.value;
+    event.target.value = "";
+    return loadSemanticSample(file);
+  }
+  if (event.target.hasAttribute?.("data-semantic-file")) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) return loadSemanticPreview(() => file.text(), file.name, file.size);
+    return;
+  }
   if (event.target.hasAttribute?.("data-demo-target")) {
     selectVehicle(event.target.value);
     return;

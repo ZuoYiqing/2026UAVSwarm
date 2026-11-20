@@ -1,0 +1,38 @@
+{
+  "mode": "scene_reference_binding",
+  "model_executed": false,
+  "authority": "objective",
+  "objective": "请标记最高的那栋楼。（目标实体：link-block-4-3-2-1）",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "coordinate_frame": "scene_ned",
+  "affordances_hash": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+  "affordances_status": "exported_from_physics_pending_review",
+  "execution_ready": false,
+  "proposal": null,
+  "bindings": [
+    {
+      "matched_text": "link-block-4-3-2-1",
+      "target_id": "link-block-4-3-2-1",
+      "target_kind": "building",
+      "relation": "identified",
+      "reference_geometry": {
+        "center_north_m": 350.0,
+        "center_east_m": 53.25,
+        "height_m": 52.0
+      },
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    }
+  ],
+  "candidates": [],
+  "warnings": [
+    "Object coordinates are reference geometry, not approved flight waypoints.",
+    "No route, obstacle clearance, timing, energy or payload feasibility was checked.",
+    "Physical export is pending provider review.",
+    "Affordance coverage is incomplete."
+  ],
+  "status": "grounded_requires_planning",
+  "accepted": true,
+  "reason_code": "ROUTE_PLANNING_REQUIRED",
+  "required_next_input": "Planner-approved scene_ned waypoint candidates"
+}

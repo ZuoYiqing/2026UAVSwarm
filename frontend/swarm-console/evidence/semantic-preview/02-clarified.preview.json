@@ -1,0 +1,35 @@
+{
+  "kind": "uavswarm-semantic-preview",
+  "schema_version": "0.1",
+  "execution_authorized": false,
+  "source": {
+    "kind": "offline_scene_reference",
+    "model_executed": false,
+    "evidence_file": "02-clarified.raw.json",
+    "evidence_sha256": "b2eec7739de60a177aae5b7b791bc5abe25b988d4d1272b7011aae0047fd92c8",
+    "catalog_file": "docs/fixtures/simple_recon_v0_1_scene_affordances.json",
+    "catalog_content_sha256": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+    "catalog_review_status": "exported_from_physics_pending_review"
+  },
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "objective": "请标记最高的那栋楼。（目标实体：link-block-4-3-2-1）",
+  "status": "bound",
+  "reason_code": "ROUTE_PLANNING_REQUIRED",
+  "bindings": [
+    {
+      "entity_id": "link-block-4-3-2-1",
+      "entity_kind": "building",
+      "evidence": "link-block-4-3-2-1",
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    }
+  ],
+  "candidates": [],
+  "clarification_question": null,
+  "limitations": [
+    "Object coordinates are reference geometry, not approved flight waypoints.",
+    "No route, obstacle clearance, timing, energy or payload feasibility was checked.",
+    "Physical export is pending provider review.",
+    "Affordance coverage is incomplete."
+  ]
+}

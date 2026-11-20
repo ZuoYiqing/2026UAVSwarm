@@ -1,5 +1,25 @@
 # Mission LLM Lab v0.1
 
+2026-11-20：[主控台的模型实测回放](../../frontend/swarm-console/README.md#当前已接入的按钮)。
+它只验证限定目录中的目标楼栋选择，不测完整任务规划。程序从
+`simple_recon_v0_1 / simple_recon_v0_1-map-1` 的部分导出中选最近的正北坐标排，
+再取东坐标为正的楼栋；本轮候选 1 高 32 米，候选 2 高 22 米。
+模型只看到短语和编号描述，可返回候选编号、`unknown` 或 `clarify`。
+程序独立计算 `20 + 差值` 并比对该范围的目录高度：唯一匹配时检查 ID，无匹配时检查
+`unknown`，并列时检查 `clarify`。模型不一致时保留原始响应，输出待澄清且不绑定。
+0.8B 模型这三次均答候选 1，只有 32 米题正确；这不是泛化准确率。
+
+若已有同机离线推理服务，从本目录执行以下 PowerShell 命令重跑三条，并保存在新目录：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/scene-preview-try
+python -B scripts/export_local_model_scene_preview.py ../../docs/fixtures/simple_recon_v0_1_scene_affordances.json artifacts/scene-preview-try --local-model-url http://127.0.0.1:18116/v1 --model-alias qwen3.5-0.8b-q4-lab
+```
+
+端口与别名须对应已启动的本地模型；脚本不自动启动模型、不覆盖原证据、不向 Runtime 提交。
+每条输出包含可导入的 `*.preview.json` 和可追溯的 `*.raw.json`。
+
 2026-10-05 最新：[三款模型的逐例输入输出及测试方法](docs/MODEL_EXPERIMENT_WALKTHROUGH_20261005.md)，
 [MiniCPM 采样/格式实验与背景地标修复](docs/MINICPM_SAMPLING_AND_ROLE_FIX_20261005.md)。
 旧报告的分数均是旧代码实验记录；修复后的规则基线另列，不能回写成旧实验的成绩。
