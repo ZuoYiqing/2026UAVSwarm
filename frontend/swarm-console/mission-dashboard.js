@@ -45,11 +45,13 @@
       const type = String(record.event_type || record.type || envelope.event_type || "runtime_event").toLowerCase();
       const decision = type === "policy_decision_event"
         ? String(record.decision_code || record.decision || "").toLowerCase() : "";
-      const timestamp = record.timestamp || envelope.timestamp || record.finished_at || record.updated_at || null;
+      const timestamp = record.timestamp || envelope.timestamp || record.timestamps?.result_time
+        || record.finished_at || record.updated_at || null;
       const node = record.node_id || envelope.node_id || null;
       const action = record.action_type || record.action || null;
       const rule = record.rule_name || record.rule_id || record.policy_rule || null;
       const reason = record.reason || record.explanation || record.primary_reason_code || record.failure_reason || null;
+      const fallbackSummary = envelope.summary === `${type} event` ? null : envelope.summary;
       const key = record.event_id ? "event:" + record.event_id : "raw:" + JSON.stringify(canonical(record));
       const decisionKey = record.decision_id ? "id:" + record.decision_id
         : timestamp && record.request_id ? JSON.stringify([timestamp, record.request_id, node, action, decision]) : null;
@@ -60,7 +62,7 @@
         key, type, timestamp, node, action, decision, rule, reason, color, label, source,
         quality: pct(record.link_quality ?? record.value),
         summary: record.summary || record.message || (typeof reason === "string" ? reason : null)
-          || record.completion_state || record.status || envelope.summary || type,
+          || record.completion_state || record.status || fallbackSummary || null,
         raw: record,
       };
       if (entries.has(key)) return;
@@ -189,65 +191,82 @@
     });
   }
 
-  function missionMap(progress, snapshot) {
-    if (!progress) return null;
-    const scene = progress.map?.scene_id;
-    const frame = progress.map?.frame;
-    const sourceAligned = frame === "scene_ned" && scene && scene === snapshot?.scene_id;
-    const regions = progress.regions
-      .filter(region => (region.frame ?? frame) === "scene_ned" || Array.isArray(region.polygon_ned_m))
-      .map(region => ({ region, points: regionPoints(region) })).filter(item => item.points);
-    if (!regions.length) return null;
-    const points = regions.flatMap(item => item.points);
+  function mapProjection(points, minimumWidth = 1) {
     const northMin = Math.min(...points.map(p => p.north));
     const northMax = Math.max(...points.map(p => p.north));
     const eastMin = Math.min(...points.map(p => p.east));
     const eastMax = Math.max(...points.map(p => p.east));
     // Keep one scale for both axes. The rendering surface uses the same aspect ratio.
-    const width = Math.max(eastMax - eastMin, (northMax - northMin) * 1.6, 1) * 1.20;
+    const width = Math.max(eastMax - eastMin, (northMax - northMin) * 1.6, minimumWidth) * 1.20;
     const height = width / 1.6;
     const centerE = (eastMin + eastMax) / 2;
     const centerN = (northMin + northMax) / 2;
-    function project(point) {
-      return { x: 50 + (point.east - centerE) * 100 / width, y: 50 - (point.north - centerN) * 100 / height };
-    }
+    return point => ({ x: 50 + (point.east - centerE) * 100 / width, y: 50 - (point.north - centerN) * 100 / height });
+  }
+
+  function sharedVehiclePositions(snapshot, scene) {
+    if (!scene || scene !== snapshot?.scene_id) return [];
+    return rows(snapshot.vehicles).flatMap(vehicle => {
+      const spatial = vehicle.spatial;
+      const position = spatial?.scene_pose?.frame === "scene_ned" && nedPoint(spatial.scene_pose.position_m);
+      if (!position || spatial.public_position_usable !== true || vehicle.connected !== true
+        || vehicle.telemetry?.stale !== false || (spatial.scene_id ?? scene) !== scene || !vehicle.id) return [];
+      return [{ id: vehicle.id, position, version: spatial.map_version ?? snapshot.map_version }];
+    });
+  }
+
+  function fleetMap(snapshot) {
+    const scene = snapshot?.scene_id;
+    const positions = sharedVehiclePositions(snapshot, scene);
+    if (!positions.length) return null;
+    const version = positions[0].version;
+    if (!version || positions.some(row => row.version !== version)) return null;
+    const project = mapProjection(positions.map(row => row.position), 20);
+    return { scene, markers: positions.map(({ id, position }) => ({ id, ...project(position) })) };
+  }
+
+  function missionMap(progress, snapshot) {
+    if (!progress) return null;
+    const scene = progress.map?.scene_id;
+    const frame = progress.map?.frame;
+    const regions = progress.regions
+      .filter(region => (region.frame ?? frame) === "scene_ned" || Array.isArray(region.polygon_ned_m))
+      .map(region => ({ region, points: regionPoints(region) })).filter(item => item.points);
+    if (!regions.length) return null;
+    const project = mapProjection(regions.flatMap(item => item.points));
+    const vehicles = frame === "scene_ned" ? sharedVehiclePositions(snapshot, scene) : [];
     return {
       regions: regions.map(({ region, points }) => ({ ...region, projected: points.map(project) })),
       coverageGrid: progress.coverageGrid && scene === progress.coverageGrid.sceneId
         && progress.map.map_version === progress.coverageGrid.mapVersion
         && regions.some(({ region }) => region.area_id === progress.coverageGrid.areaId)
         ? coverageGrid.project(progress.coverageGrid, project) : null,
-      markers: sourceAligned ? rows(snapshot.vehicles).flatMap(vehicle => {
-        const spatial = vehicle.spatial;
-        const position = spatial?.scene_pose?.frame === "scene_ned" && nedPoint(spatial.scene_pose.position_m);
-        const version = spatial?.map_version ?? snapshot.map_version;
+      markers: vehicles.flatMap(({ id, position, version }) => {
         if (progress.map?.map_version && progress.map.map_version !== version) return [];
-        if (!position || spatial.public_position_usable !== true || vehicle.connected !== true || vehicle.telemetry?.stale !== false) return [];
         const point = project(position);
         return point.x >= 0 && point.x <= 100 && point.y >= 0 && point.y <= 100
-          ? [{ id: vehicle.id, ...point }] : [];
-      }) : [],
+          ? [{ id, ...point }] : [];
+      }),
     };
   }
 
-  const stages = [
-    ["map", "三机协同侦察", "三架载具各自负责一个侦察区域，覆盖面积随任务推进。"],
-    ["kpi", "通信质量下降", "监测到 UAV-02 链路分数下降，策略开始评估降级处置。"],
-    ["timeline", "策略介入", "从链路告警到策略裁决、适配器和结果，每条记录都可追溯。"],
-    ["twin", "降级期间的三维视图", "现有三维场景展示载具与环境。"],
-    ["map", "剩余节点接续任务", "任务分配更新，覆盖继续累积。"],
-    ["kpi", "链路恢复", "新的链路观测与恢复记录进入时间轴。"],
-    ["timeline", "回放完整处置链", "查看策略理由、执行结果与恢复记录。"],
-    ["twin", "场景回顾", "三维展示窗口。"],
-    ["map", "区域侦察结束", "覆盖部分完成，最终状态和处置记录可在时间轴复核。"],
-    ["timeline", "任务总结与追溯", "最终覆盖、处置与恢复过程完整保留。"],
+  const demoChapters = [
+    { start: 0, title: "三机分区", detail: "三架载具分别负责西区、中区和东区。" },
+    { start: 18, title: "链路降级与接续", detail: "查看 UAV-02 的策略裁决及其他节点接续中区的记录。" },
+    { start: 96, title: "恢复与结果", detail: "查看重新入队的依据，以及演习结束时的覆盖结果。" },
   ];
-  const demoStepSeconds = 18;
-  const demoDuration = demoStepSeconds * stages.length;
+  const demoChapterSeconds = 20;
+  const demoDuration = demoChapterSeconds * demoChapters.length;
+  const scriptEnd = 180;
 
-  // All values below belong to the built-in, offline DEMO.
+  // Three 20-second chapters play the original offline evidence in order.
   function demoFrame(elapsed) {
-    const second = Math.max(0, Math.min(demoDuration - 1, Math.floor(elapsed)));
+    const position = Math.max(0, Math.min(demoDuration, elapsed));
+    const chapterIndex = Math.min(demoChapters.length - 1, Math.floor(position / demoChapterSeconds));
+    const chapter = demoChapters[chapterIndex];
+    const end = demoChapters[chapterIndex + 1]?.start ?? scriptEnd;
+    const fraction = (position - chapterIndex * demoChapterSeconds) / demoChapterSeconds;
+    const second = Math.min(end - 1, chapter.start + Math.floor((end - chapter.start) * fraction));
     const since = offset => new Date(Date.UTC(2026, 10, 12, 2, 0, offset)).toISOString();
     const progressAt = s => Math.min(88, Math.floor(s < 18 ? 35 * s / 18 : 35 + (s - 18) * 53 / 134));
     const qualityAt = s => s < 18 ? 95 : s < 24 ? 42 : s < 96 ? 18 : 89;
@@ -309,7 +328,7 @@
       return area + (third[0]-first[0])*(third[1]-first[1])/1e6;
     },0);
     return {
-      stage:stages[Math.floor(second / demoStepSeconds)], second,
+      chapter, chapterIndex, second,
       fleet:ids.map(id => ({id,connected:true,stale:false})), vehicleSnapshot,
       actionCount:second < 152 ? (second >= 26 && second < 32 ? 3 : second >= 32 && second < 101 ? 2 : 3) : 0,
       progress:missionProgress({
@@ -327,5 +346,6 @@
     };
   }
 
-  return { pct, rows, timeline, missionProgress, assignmentProgress, linkScores, trend, missionMap, stages, demoStepSeconds, demoDuration, demoFrame };
+  return { pct, rows, timeline, missionProgress, assignmentProgress, linkScores, trend, missionMap, fleetMap,
+    demoChapters, demoChapterSeconds, demoDuration, demoFrame };
 });
