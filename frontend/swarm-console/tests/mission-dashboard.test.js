@@ -172,7 +172,7 @@ test("the LIVE map distinguishes mapped coverage, observed zero and unavailable 
   assert.equal(snapshotMiss.coverageGrid, null);
 });
 
-test("DEMO plays its complete zero-operation story and keeps all writes disabled", async () => {
+test("the three offline chapters retain the map and policy evidence and never call Runtime", async () => {
   const h = harness("http://127.0.0.1:5178/?mode=stage");
   assert.match(h.html("app"), /stage-shell/);
   assert.doesNotMatch(h.html("app"), /slot-sidebar/);
@@ -180,26 +180,115 @@ test("DEMO plays its complete zero-operation story and keeps all writes disabled
   assert.match(h.html("stage-content"), /UAV-01.*西区/s);
   assert.match(h.html("stage-content"), /内置演习进度/);
   assert.doesNotMatch(h.html("stage-content"), /航点完成度/);
-  h.tick(19);
+  h.tick(21);
   assert.match(h.html("stage-content"), /链路质量.*42.*▼/s);
-  h.tick(25);
+  h.tick(27);
   assert.match(h.html("stage-content"), /mission-kpi red[\s\S]*链路质量[\s\S]*18/);
-  h.tick(43);
-  assert.match(h.html("stage-content"), /适配器.*动作结果.*拒绝/s);
-  assert.match(h.html("slot-banner"), /DENY.*link_rejoin_threshold/s);
-  h.timers.filter(timer=>timer.ms===2000).at(-1).callback();
-  assert.match(h.html("slot-banner"), /is-compact/);
-  h.tick(55);
-  assert.match(h.html("stage-content"), /5179\/\?mode=demo.*inert/);
-  h.tick(97);
+  assert.match(h.html("stage-title"), /链路降级与接续.*2 \/ 3/s);
+  for (const event of [/适配器/, /动作结果/, /拒绝/, /中区任务转交/]) assert.match(h.html("stage-content"), event);
+  assert.match(h.html("stage-content"), /任务地图/);
+  assert.doesNotMatch(h.html("stage-content"), /<iframe/);
+  h.tick(41);
   assert.match(h.html("stage-content"), /链路质量.*89/s);
-  h.tick(180);
+  h.tick(60);
   assert.match(h.html("stage-content"), /部分覆盖/);
   assert.match(h.html("stage-content"), /恢复/);
-  assert.match(h.html("stage-title"), /10 \/ 10/);
+  assert.match(h.html("stage-title"), /恢复与结果.*3 \/ 3/s);
+  h.run("seekStage(1)");
+  h.tick(80);
+  assert.match(h.html("stage-title"), /2 \/ 3/);
+  assert.match(h.html("stage-content"), /中区任务转交/);
+  assert.doesNotMatch(h.html("stage-content"), /链路读数恢复到 89/);
+  h.run("toggleStagePlayback(true)");
+  assert.match(h.html("stage-title"), /1 \/ 3/);
   h.run("runOperationalTakeoff(); runSmokeTakeoff(); runLand();");
   await h.run("Promise.all([changeDemoLink('inject'),checkBackend(),generateRequest()])");
   assert.deepEqual(h.calls,[]);
+});
+
+test("the live stage holds a selected view unless the presenter starts rotation", () => {
+  const h = harness("http://127.0.0.1:5178/?mode=stage&source=live");
+  h.tick(60);
+  assert.match(h.html("stage-title"), /任务地图.*1 \/ 4/s);
+  h.run("seekStage(3)");
+  h.tick(120);
+  assert.match(h.html("stage-title"), /三维态势.*4 \/ 4/s);
+  assert.match(h.html("stage-content"), /5179\/.*inert/);
+  h.run("toggleStagePlayback()");
+  h.tick(139);
+  assert.match(h.html("stage-title"), /任务地图.*1 \/ 4/s);
+  assert.doesNotMatch(h.html("stage-content"), /<iframe/);
+});
+
+test("fresh shared poses are shown without inventing task geometry or assignments", () => {
+  const h = harness();
+  const snapshot = { scene_id: "fixture-scene", source: {kind:"simulation", label:"PX4 SITL / Runtime"},
+    vehicles: ["UAV-01", "UAV-02", "UAV-03"].map((id, index) => ({
+      id, connected: true, telemetry: { stale: index === 2 },
+      spatial: { map_version: "fixture-v1", public_position_usable: true,
+        scene_pose: {frame: "scene_ned", position_m: {x:0, y:index * 10}} },
+    })) };
+  h.run(`state.apiStatus="live"; state.dataStatus="live";
+    state.vehicleSnapshot=${JSON.stringify(snapshot)};
+    state.fleet=state.vehicleSnapshot.vehicles.map(v => ({id:v.id, connected:true, stale:v.telemetry.stale}));`);
+  assert.match(h.run("overviewPage()"), /LIVE · PX4 SITL 遥测/);
+  assert.doesNotMatch(h.run("overviewPage()"), /Runtime 演示注入未启用|区域覆盖、链路健康与自主处置/);
+  let html = h.run("missionMapPanel()");
+  assert.match(html, /载具位置俯视图/);
+  assert.equal((html.match(/class="mission-map-node"/g) ?? []).length, 2);
+  assert.match(html, /UAV-01<\/b><span>未收到任务分工/);
+  assert.doesNotMatch(html, /<canvas|class="mission-region|<progress/);
+  h.run('state.vehicleSnapshot.vehicles[1].spatial.map_version = "fixture-v2"');
+  assert.doesNotMatch(h.run("missionMapPanel()"), /class="mission-map-node"/);
+  h.run('state.dataStatus="stale"');
+  html = h.run("missionMapPanel()");
+  assert.match(html, /尚未收到任务执行数据/);
+});
+
+test("older fake action audit rows use their recorded time and remain labeled as DEMO", () => {
+  const h = harness();
+  const legacy = { type: "action_result", adapter: "fake", message: "simulated success",
+    request_id: "legacy-record", timestamps: { result_time: stamp(9) } };
+  const entry = dashboard.timeline({replay:[legacy]})[0];
+  assert.equal(entry.timestamp, stamp(9));
+  h.run(`state.replayEvents=${JSON.stringify([legacy])}`);
+  const html = h.run("timelinePanel()");
+  assert.match(html, /未记录载具或动作/);
+  assert.match(html, /DEMO · simulated success/);
+  assert.doesNotMatch(html, /时间未知/);
+});
+
+test("template preview submits the operator's text and renders only returned policy and risk evidence", async () => {
+  const h = harness();
+  const requests = [];
+  const objective = "检查园区设备并保存照片。";
+  h.api.planMission = async body => {
+    requests.push(JSON.parse(JSON.stringify(body)));
+    return { result: "awaiting_confirmation", plan: {plan_id: "test-plan", steps: [
+      {action_type:"takeoff", risk_level:2, policy_precheck:{decision_code:"require_confirm",primary_reason_code:"operator_required"}},
+      {action_type:"camera_capture", status:"dry_run_only", policy_precheck:null},
+    ]}};
+  };
+  h.run('setPage("planning")');
+  await h.run("generateRequest()");
+  assert.match(h.run("templatePlanPreview()"), /请先填写任务目标/);
+  assert.doesNotMatch(h.run("templatePlanPreview()"), /Runtime 返回 JSON/);
+  h.run(`setTemplatePlanObjective(${JSON.stringify(objective)})`);
+  await h.run("Promise.all([generateRequest(), generateRequest()])");
+  assert.deepEqual(requests, [{mission_type:"inspection_snapshot", source:"ground_station",
+    profile:"standard", objective, dry_run:true}]);
+  const plan = h.run("planningPage()");
+  assert.match(plan, /起飞<\/td>\s*<td>需确认<\/td>\s*<td>operator_required<\/td>\s*<td>2<\/td>/);
+  assert.match(plan, /采集照片<\/td>\s*<td>未预检<\/td>\s*<td>未上报原因<\/td>\s*<td>未上报<\/td>/);
+  assert.match(plan, /Runtime 返回 JSON/);
+  assert.doesNotMatch(plan, /42 \/ 100|18 条策略|<iframe/);
+
+  h.api.planMission = async () => { throw Object.assign(new Error("模板接口故障"), {kind:"http"}); };
+  await h.run("generateRequest()");
+  assert.match(h.run("templatePlanPreview()"), /模板接口故障/);
+  assert.doesNotMatch(h.run("templatePlanPreview()"), /test-plan|operator_required/);
+  h.run('setTemplatePlanObjective("重新填写")');
+  assert.doesNotMatch(h.run("planningPage()"), /模板接口故障/);
 });
 
 test("live demo writes require an explicitly enabled safe Runtime rehearsal and keep audit evidence labeled", async () => {
@@ -252,5 +341,6 @@ test("policy filters and full event JSON persist across navigation, while unavai
   assert.doesNotMatch(html, /enforced_constraints/);
   assert.equal((h.run("sidebar()").match(/onclick="setPage\(/g)||[]).length, 15);
   assert.match(h.run("assetsPage()"), /规划中.*等待硬件资产数据/s);
-  assert.match(h.run("planningPage()"), /下发任务 · 规划中/);
+  assert.match(h.run("planningPage()"), /等待 Runtime 返回逐步预检结果/);
+  assert.doesNotMatch(h.run("planningPage()"), /18 条策略|42 \/ 100|下发任务|DEMO · 界面预览/);
 });

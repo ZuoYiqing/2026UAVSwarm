@@ -21,7 +21,14 @@ const dashboard = window.SwarmMissionDashboard;
 const pageParams = new URL(window.location?.href || "http://127.0.0.1:5178/").searchParams;
 const stageMode = pageParams.get("mode") === "stage";
 const builtInDemo = stageMode && pageParams.get("source") !== "live";
-const stageStarted = performanceNow();
+const liveStages = [
+  { view: "map", title: "任务地图", detail: "任务区、覆盖记录与载具位置。" },
+  { view: "kpi", title: "任务状态", detail: "遥测接收新鲜度、任务进度与安全状态。" },
+  { view: "timeline", title: "审计事件", detail: "查看近期策略裁决和动作结果。" },
+  { view: "twin", title: "三维态势", detail: "由 Runtime 快照驱动的三维视图。" },
+];
+const liveStageSeconds = 18;
+const stagePlayback = { elapsed: 0, startedAt: builtInDemo ? performanceNow() : null };
 let vehicleContractModule;
 
 const state = {
@@ -43,7 +50,7 @@ const state = {
   dataStatus: "checking",
   lastBackendResult: null,
   lastActionResult: null,
-  lastPlanResult: null,
+  templatePlan: { objective: "", inFlight: false, reply: null, error: null },
   semanticPreview: {},
   semanticPreviewDetailsOpen: false,
   semanticLive: { objective: "", inFlight: false, result: {}, health: null, healthInFlight: false, healthError: null },
@@ -206,8 +213,6 @@ function applyApiSuccess(source, payload) {
     state.lastBackendResult = payload;
   } else if (source === "action") {
     applyActionResult(payload);
-  } else if (source === "plan") {
-    state.lastPlanResult = payload;
   }
 }
 
@@ -788,7 +793,8 @@ function updatePolicyBanner() {
 
 function isDemoEvent(entry) {
   return String(entry.raw.data_mode ?? entry.raw.execution_mode ?? entry.raw.mode ?? entry.raw.source ?? "").toLowerCase() === "demo"
-    || entry.raw.demo === true || entry.type.startsWith("demo_") || entry.raw.backend_mode === "fake";
+    || entry.raw.demo === true || entry.raw.simulated === true || entry.type.startsWith("demo_")
+    || entry.raw.backend_mode === "fake" || entry.raw.adapter === "fake";
 }
 
 function renderPolicyBanner() {
@@ -829,7 +835,9 @@ function sourceLabel() {
   if (state.mission?.mode === "DEMO") return { text: "DEMO · Runtime 任务演习", color: "amber" };
   if (isFixture) return { text: "DEMO · 测试数据", color: "amber" };
   const fresh = state.apiStatus === "live" && state.dataStatus === "live";
-  return { text: fresh ? "LIVE · Runtime 遥测" : "LIVE · 等待新鲜遥测", color: fresh ? "green" : "amber" };
+  const telemetrySource = snapshot?.source?.kind === "simulation"
+    ? (/\bSITL\b/i.test(snapshot.source.label ?? "") ? "PX4 SITL 遥测" : "仿真遥测") : "Runtime 遥测";
+  return { text: fresh ? `LIVE · ${telemetrySource}` : "LIVE · 等待新鲜遥测", color: fresh ? "green" : "amber" };
 }
 
 function missionIndicators(compact = false) {
@@ -864,9 +872,10 @@ function missionIndicators(compact = false) {
     <section class="mission-kpi ${color}">
       <h2>链路质量</h2><strong>${quality === null ? "—" : formatNumber(quality, Number.isInteger(quality) ? 0 : 1)}
         <span class="kpi-trend" aria-hidden="true">${esc(linkArrow || "")}</span></strong>
-      <p>${node ? `${override ? "DEMO 注入" : "最低已上报"} · ${esc(node)} / 100
+      <p>${node ? `${builtInDemo ? "演习最低读数" : override ? "DEMO 注入" : "最低已上报"} · ${esc(node)} / 100
         ${measured === null ? "" : ` · 实测 ${measured}`}
         ${links.size < (builtInDemo ? frame.fleet : state.fleet).filter(v => v.enabled !== false).length ? " · 部分节点缺数据" : ""}` : "等待链路质量数据"}</p>
+      ${quality !== null && !builtInDemo ? '<p>遥测接收新鲜度评分</p>' : ""}
     </section>
     <section class="mission-kpi cyan">
       <h2>${completionLabel}</h2><strong>${completion === null ? "—" : formatNumber(completion, Number.isInteger(completion) ? 0 : 1) + "%"}
@@ -878,12 +887,12 @@ function missionIndicators(compact = false) {
     <section class="mission-kpi ${safety === "正常" || safety === "normal" ? "green" : safety ? "amber" : "muted"}">
       <h2>剩余安全裕度</h2><strong class="kpi-word">${esc(safety || "未知")}
         ${builtInDemo && frame?.safetyTrend ? `<span class="kpi-trend" aria-hidden="true">${frame.safetyTrend}</span>` : ""}</strong>
-      <p>${safety ? "任务层上报" : "等待安全证据"}</p>
+      <p>${safety ? (builtInDemo ? "演习脚本" : "任务层上报") : "等待安全证据"}</p>
     </section>
-    <div class="mission-evidence"><span>已侦察区域 <b>${esc(area)}</b></span><span>目标发现 <b>${esc(targets)}</b></span>
+    <div class="mission-evidence"><span>覆盖面积 <b>${esc(area)}</b></span><span>目标发现 <b>${esc(targets)}</b></span>
       ${mission?.vehiclesActive == null ? "" : `<span>任务中载具 <b>${mission.vehiclesActive}</b></span>`}
       ${missionCurrent && mission?.degraded === true ? badge("降级任务", "amber") : ""}
-      ${mission?.timestamp ? `<span>${missionCurrent ? "采样" : "最后采样"} <b>${esc(eventTime(mission.timestamp))}</b></span>` : ""}
+      ${mission?.timestamp ? `<span>${builtInDemo ? "演习时刻" : missionCurrent ? "采样" : "最后采样"} <b>${esc(eventTime(mission.timestamp))}</b></span>` : ""}
     </div>
   </div>`;
 }
@@ -911,8 +920,10 @@ function missionMapPanel() {
   const mission = builtInDemo ? frame?.progress : state.mission;
   const fleet = builtInDemo ? frame?.fleet || [] : state.fleet;
   const current = builtInDemo || (state.apiStatus === "live" && state.missionStatus === "live");
-  const map = dashboard?.missionMap(mission, current ? (builtInDemo ? frame.vehicleSnapshot
-    : state.dataStatus === "live" ? state.vehicleSnapshot : null) : null);
+  const snapshot = builtInDemo ? frame?.vehicleSnapshot
+    : state.apiStatus === "live" && state.dataStatus === "live" ? state.vehicleSnapshot : null;
+  const map = dashboard?.missionMap(mission, current ? snapshot : null);
+  const positionMap = map ? null : dashboard?.fleetMap(snapshot);
   const assignments = mission?.assignments || [];
   const ids = new Set([...fleet.map(v => v.id), ...assignments.map(a => a.node_id || a.vehicle_id).filter(Boolean)]);
   const roster = [...ids].map(id => {
@@ -920,9 +931,10 @@ function missionMapPanel() {
     const vehicle = fleet.find(v => v.id === id);
     const pct = dashboard?.assignmentProgress(assignment) ?? null;
     const region = assignment?.region_label || assignment?.region_id || assignment?.task_name
-      || (assignment?.waypoints_total > 0 ? `航点 ${assignment.waypoints_reached ?? "—"} / ${assignment.waypoints_total}` : "等待分配");
-    const phase = assignment?.status || (assignment?.active === true ? "任务中" : assignment?.active === false ? "未在任务中"
-      : state.dataStatus === "live" && vehicle?.connected && !vehicle.stale ? "遥测在线" : "等待遥测");
+      || (assignment?.waypoints_total > 0 ? `航点 ${assignment.waypoints_reached ?? "—"} / ${assignment.waypoints_total}` : "未收到任务分工");
+    const telemetry = vehicle?.stale ? "遥测过期" : state.dataStatus === "live" && vehicle
+      ? (vehicle.connected ? "遥测在线" : "遥测离线") : "等待遥测";
+    const phase = assignment?.status || (assignment?.active === true ? "任务中" : assignment?.active === false ? "未在任务中" : telemetry);
     return `<div class="mission-roster-row">
       <b>${esc(id)}</b><span>${esc(region)}</span>
       <span>${pct === null ? "—" : formatNumber(pct, Number.isInteger(pct) ? 0 : 1, "%")}${pct === null ? "" : `<progress aria-label="${esc(id)} 进度" max="100" value="${pct}"></progress>`}</span>
@@ -934,7 +946,7 @@ function missionMapPanel() {
     if (grid && grid.areaId === region.area_id) return "uncovered";
     return builtInDemo && ["covered", "uncovered"].includes(region.coverage_status) ? region.coverage_status : "unknown";
   };
-  const markerHtml = map?.markers.map(marker => `<span class="mission-map-node" style="left:${marker.x}%;top:${marker.y}%">${esc(marker.id)}</span>`).join("") || "";
+  const markerHtml = (map ?? positionMap)?.markers.map(marker => `<span class="mission-map-node" style="left:${marker.x}%;top:${marker.y}%">${esc(marker.id)}</span>`).join("") || "";
   const geometry = map ? `<div class="mission-map">
     <span class="mission-compass" aria-hidden="true">↑ 北</span>
     ${map.regions.map(region => `<div class="mission-region ${coverage(region)}" title="${esc(region.label || region.area_id || "任务区域")}"
@@ -948,16 +960,25 @@ function missionMapPanel() {
     : builtInDemo ? '<span class="covered">已覆盖</span><span class="uncovered">未覆盖</span><span class="unknown">覆盖未知</span>'
       : '<span class="unknown">覆盖分布未知</span>'}
     ${current ? "" : "<span>最后上报区域</span>"}</div>`
-    : `<div class="mission-wait"><b>等待任务区域数据</b><span>Runtime 上报区域边界后显示地图。载具分配与进度列于下方。</span></div>`;
+    : positionMap
+      ? `<div class="mission-map mission-position-map" aria-label="载具位置俯视图">
+          <span class="mission-compass" aria-hidden="true">↑ 北</span>${markerHtml}
+          <span class="mission-map-caption">载具位置 · ${esc(positionMap.scene)} · 场景坐标</span></div>
+        <p class="small mission-grid-note">任务区域与覆盖分布待 Runtime 上报</p>`
+      : `<div class="mission-wait"><b>${mission ? "暂无任务区域边界" : "尚未收到任务执行数据"}</b>
+          <span>${state.dataStatus === "live" ? "遥测在线，俯视图仍需可用的共享坐标或任务区边界。" : "等待 Runtime 上报任务区域或载具共享坐标。"}</span></div>`;
   const phases = { running: "执行中", executing: "执行中", completed: "已完成", failed: "失败",
     blocked: "受阻", partially_completed: "部分完成" };
   const phaseLabel = current ? phases[mission?.status] : mission ? "最后上报" : "";
-  return `<section class="panel mission-map-panel"><div class="panel-title"><h2>任务地图</h2><span class="small">俯视 · ${esc(mission?.title || "区域侦察")}${phaseLabel ? " · " + phaseLabel : ""}</span></div>
+  const titleDetail = mission ? `${mission.title}${phaseLabel ? " · " + phaseLabel : ""}` : "任务区域与载具位置";
+  return `<section class="panel mission-map-panel"><div class="panel-title"><h2>任务地图</h2><span class="small">${esc(titleDetail)}</span></div>
     ${missionMapMetrics(mission, current)}
     ${geometry}
     ${grid ? `<p class="small mission-grid-note">${grid.size} m 网格 · ${grid.cells.length
       ? `${grid.cells.length} 个格有覆盖记录，格内可能仅部分覆盖` : "已有观测，当前没有覆盖记录"}${current ? "" : " · 最后上报"}</p>` : ""}
-    <div class="mission-roster">${roster || '<div class="empty-state">等待载具与任务分配数据</div>'}</div>
+    <div class="mission-roster">
+      <div class="mission-roster-row mission-roster-head"><span>载具</span><span>任务分工</span><span>进度</span><span>状态</span></div>
+      ${roster || '<p class="small">尚未收到载具或任务分工</p>'}</div>
   </section>`;
 }
 
@@ -987,20 +1008,28 @@ function missionMetricsBar() {
   </div>`;
 }
 
-function timelinePanel({ full = false, summary = false } = {}) {
+function timelinePanel({ full = false } = {}) {
   const entries = missionTimeline();
   const important = entries.filter(entry => entry.label !== "记录" || entry.type.startsWith("mission_"));
-  const displayed = full ? entries : important.slice(-10);
+  const ordered = [...(full ? entries : important)].sort((a, b) =>
+    (Date.parse(b.timestamp) || -Infinity) - (Date.parse(a.timestamp) || -Infinity));
+  const displayed = full ? ordered : ordered.slice(0, 10);
   const selected = entries.find(entry => entry.key === state.timelineKey);
   const historical = !builtInDemo && (state.apiStatus !== "live" || state.auditStatus !== "live"
     || !state.decisionsLoaded || !state.lifecycleLoaded);
-  return `<section class="panel mission-timeline${summary ? " mission-timeline-summary" : ""}"><div class="panel-title"><h2>主时间轴</h2>
-    <span class="small">${historical && entries.length ? "部分或最后上报 · " : ""}${full ? "最近审计窗口" : "最近关键事件"}</span></div>
+  const eventRows = displayed.map(entry => {
+    const subject = [entry.node, entry.action].filter(Boolean).join(" · ");
+    const summary = entry.summary || "未记录说明";
+    const title = subject || (builtInDemo ? summary : entry.label === "记录" ? entry.type : "未记录载具或动作");
+    const details = title !== summary ? `<small>${!builtInDemo && isDemoEvent(entry) ? "DEMO · " : ""}${esc(summary)}</small>` : "";
+    return `<li><button class="mission-event ${entry.color}" data-timeline-key="${esc(entry.key)}"
+      aria-pressed="${entry.key === state.timelineKey}"><time title="${esc(entry.timestamp ?? "未记录时间")}">${entry.timestamp ? esc(eventTime(entry.timestamp)) : "时间未知"}</time>
+      <b>${esc(entry.label)}</b><span><strong>${esc(title)}</strong>${details}</span></button></li>`;
+  }).join("");
+  return `<section class="panel mission-timeline"><div class="panel-title"><h2>${builtInDemo ? "演习事件" : "策略与动作记录"}</h2>
+    <span class="small">${historical && entries.length ? "部分或最后上报 · " : ""}${builtInDemo ? "脚本记录" : full ? "最近审计窗口" : "最近关键事件"}</span></div>
     <div class="timeline-legend"><span class="green">允许</span><span class="red">拒绝</span><span class="amber">降级 / 告警</span><span class="blue">恢复</span><span>结果</span></div>
-    <ol class="mission-events">${displayed.map(entry => `<li><button class="mission-event ${entry.color}" data-timeline-key="${esc(entry.key)}"
-      aria-pressed="${entry.key === state.timelineKey}"><time>${esc(eventTime(entry.timestamp))}</time>
-      <b>${esc(entry.label)}</b><span><strong>${esc([entry.node, entry.action].filter(Boolean).join(" · ") || entry.type)}</strong>
-      <small>${isDemoEvent(entry) ? "DEMO · " : ""}${esc(entry.summary)}</small></span></button></li>`).join("")}</ol>
+    <ol class="mission-events">${eventRows}</ol>
     ${displayed.length ? "" : '<div class="empty-state">等待策略、适配器与结果事件</div>'}
     ${selected ? `<div class="timeline-detail"><div class="panel-title"><h2>事件原文</h2><span class="small">${builtInDemo ? "内置 DEMO" : esc(selected.source)}</span></div>
       <pre class="json">${esc(JSON.stringify(selected.raw, null, 2))}</pre></div>` : ""}
@@ -1011,7 +1040,7 @@ function demoControls() {
   if (stageMode) return "";
   const node = selectedVehicle();
   if (!state.demoRuntime || !node || node.enabled === false || state.apiStatus !== "live") {
-    return `<p class="small">${esc(state.demoWriteStatus || "Runtime 演示注入未启用。")}</p>`;
+    return state.demoWriteStatus ? `<p class="small" role="status">${esc(state.demoWriteStatus)}</p>` : "";
   }
   const assignments = dashboard.rows(state.demoRuntime.assignments);
   const held = Array.isArray(state.demoRuntime.held_out) ? state.demoRuntime.held_out : [];
@@ -1054,40 +1083,80 @@ async function changeDemoLink(operation) {
   }
 }
 
-function stagePage() {
-  const liveStages = [
-    ["map", "任务地图", "任务区域与载具分工"],
-    ["kpi", "任务状态", "链路、完成度和安全裕度"],
-    ["timeline", "任务回放", "最新的策略裁决与执行证据"],
-    ["twin", "三维态势", "现场几何与载具姿态"],
-  ];
-  const liveElapsed = Math.floor((performanceNow() - stageStarted) / 1000);
-  const [view, title, detail] = builtInDemo ? state.stageFrame.stage
-    : liveStages[Math.floor(liveElapsed / dashboard.demoStepSeconds) % liveStages.length];
-  const count = builtInDemo ? dashboard.stages.length : liveStages.length;
-  const index = builtInDemo ? Math.floor(state.stageFrame.second / dashboard.demoStepSeconds)
-    : Math.floor(liveElapsed / dashboard.demoStepSeconds) % count;
-  const header = `<div class="stage-heading"><div><h1>${esc(title)}</h1><p>${esc(detail)}</p></div><span>${index + 1} / ${count}</span></div>`;
-  return { view, header };
+function stageNavigation() {
+  const views = builtInDemo ? dashboard.demoChapters : liveStages;
+  return `<nav class="stage-navigation" aria-label="${builtInDemo ? "演习章节" : "实时大屏视图"}">
+    ${views.map(({ title }, index) => `<button class="button" type="button" id="stage-view-${index}" data-stage-view="${index}" aria-pressed="false">${esc(title)}</button>`).join("")}
+    <button class="button stage-play" type="button" id="stage-play" data-stage-play>${builtInDemo ? "暂停" : "自动轮播"}</button>
+    ${builtInDemo ? '<button class="button" type="button" data-stage-restart>从头播放</button>' : ""}
+  </nav>`;
+}
+
+function stageElapsed() {
+  const runningSeconds = stagePlayback.startedAt === null ? 0 : (performanceNow() - stagePlayback.startedAt) / 1000;
+  return stagePlayback.elapsed + runningSeconds;
+}
+
+function seekStage(index) {
+  const views = builtInDemo ? dashboard.demoChapters : liveStages;
+  if (!Number.isInteger(index) || !views[index]) return;
+  // Manual chapter selection shows the evidence collected by the end of that chapter.
+  stagePlayback.elapsed = builtInDemo ? (index + 1) * dashboard.demoChapterSeconds - 0.01 : index * liveStageSeconds;
+  stagePlayback.startedAt = null;
+  state.timelineKey = null;
+  renderStage();
+}
+
+function toggleStagePlayback(restart = false) {
+  if (restart || builtInDemo && stagePlayback.elapsed >= dashboard.demoDuration) {
+    stagePlayback.elapsed = 0;
+    stagePlayback.startedAt = performanceNow();
+    state.timelineKey = null;
+  } else if (stagePlayback.startedAt === null) {
+    stagePlayback.startedAt = performanceNow();
+  } else {
+    stagePlayback.elapsed = stageElapsed();
+    stagePlayback.startedAt = null;
+  }
+  renderStage();
 }
 
 function stageContent(view) {
+  if (view === "demo") return `${missionIndicators()}<div class="mission-workspace">${missionMapPanel()}${timelinePanel({ full: true })}</div>`;
   if (view === "map") return missionMapPanel();
-  if (view === "timeline") return timelinePanel({ full: true, summary: builtInDemo && state.stageFrame.second >= 162 });
+  if (view === "timeline") return timelinePanel({ full: true });
   if (view === "kpi") return missionIndicators();
   return `<section class="panel stage-three"><div class="panel-title"><h2>三维态势</h2>
-    <span class="small">${builtInDemo ? "DEMO · Cesium 独立场景演示" : "LIVE · Runtime 快照"}</span></div>${simulationFrame()}</section>`;
+    <span class="small">LIVE · Runtime 快照</span></div>${simulationFrame()}</section>`;
 }
 
 function renderStage() {
-  if (builtInDemo) state.stageFrame = dashboard.demoFrame((performanceNow() - stageStarted) / 1000);
-  const { view, header } = stagePage();
+  const elapsed = stageElapsed();
+  if (builtInDemo) {
+    state.stageFrame = dashboard.demoFrame(elapsed);
+    if (elapsed >= dashboard.demoDuration) {
+      stagePlayback.elapsed = dashboard.demoDuration;
+      stagePlayback.startedAt = null;
+    }
+  }
+  const index = builtInDemo ? state.stageFrame.chapterIndex : Math.floor(elapsed / liveStageSeconds) % liveStages.length;
+  const count = builtInDemo ? dashboard.demoChapters.length : liveStages.length;
+  const { view = "demo", title: heading, detail } = builtInDemo ? state.stageFrame.chapter : liveStages[index];
   const title = document.getElementById("stage-title");
   const indicators = document.getElementById("stage-indicators");
   const body = document.getElementById("stage-content");
   if (!body) return;
-  if (title) title.innerHTML = header;
-  if (indicators) indicators.innerHTML = missionMetricsBar() + (view === "kpi" ? "" : missionIndicators(true));
+  if (title) title.innerHTML = `<div class="stage-heading"><div><h1>${esc(heading)}</h1><p>${esc(detail)}</p></div><span>${index + 1} / ${count}</span></div>`;
+  if (indicators) indicators.innerHTML = missionMetricsBar() + (builtInDemo || view === "kpi" ? "" : missionIndicators(true));
+  for (let slot = 0; slot < count; slot++) {
+    document.getElementById(`stage-view-${slot}`)?.setAttribute("aria-pressed", String(slot === index));
+  }
+  const playButton = document.getElementById("stage-play");
+  if (playButton) {
+    const isPlaying = stagePlayback.startedAt !== null;
+    playButton.textContent = builtInDemo ? (isPlaying ? "暂停" : elapsed >= dashboard.demoDuration ? "重新播放" : "继续播放")
+      : (isPlaying ? "暂停轮播" : "自动轮播");
+  }
   if (view !== "twin" || state.renderedPage !== view) {
     if (view === "twin") state.simulationReady = false;
     const markup = stageContent(view);
@@ -1098,7 +1167,7 @@ function renderStage() {
     state.renderedPage = view;
   }
   if (view === "map") drawMissionCoverage();
-  updatePolicyBanner();
+  if (!builtInDemo) updatePolicyBanner();
 }
 
 function policyAuditPanel() {
@@ -1127,12 +1196,13 @@ function policyAuditPanel() {
 
 function overviewPage() {
   return `<div class="page mission-overview">
-    ${pageTitle("集群任务态势", "区域覆盖、链路健康与自主处置", `
-      <a class="button stage-link" href="?mode=stage&amp;source=live">LIVE 大屏</a>
-      <a class="button stage-link" href="?mode=stage">DEMO 大屏</a>`)}
+    ${pageTitle("总览驾驶舱", "", `
+      <a class="button stage-link" href="?mode=stage&amp;source=live">实时大屏</a>
+      <a class="button stage-link" href="?mode=stage">离线演习</a>`)}
     ${missionMetricsBar()}
     ${missionIndicators()}
-    <div class="mission-workspace">${missionMapPanel()}${timelinePanel()}</div>
+    <div class="mission-workspace">${missionMapPanel()}
+      <div class="grid">${panel("载具状态", vehicleTable(), "scroll")}${timelinePanel()}</div></div>
     ${demoControls()}
   </div>`;
 }
@@ -1140,7 +1210,7 @@ function overviewPage() {
 function pageTitle(title, subtitle, actions = "") {
   return `<div class="page-title">
     <h1>${esc(title)}</h1>
-    <p>${esc(subtitle)}</p>
+    ${subtitle ? `<p>${esc(subtitle)}</p>` : ""}
     <div class="page-actions">${actions}</div>
   </div>`;
 }
@@ -1396,64 +1466,85 @@ function twinPage() {
 }
 
 function planningPage() {
+  const { objective, inFlight } = state.templatePlan;
   return `<div class="page semantic-planning-page">
-    ${pageTitle("任务规划", "自然语言生成任务 · 结构化编排 · 策略预检 · 仿真预演", `
-      <button class="button primary" onclick="generateRequest()">生成请求</button><button class="button planned" onclick="policyPrecheck()">策略预检 · 规划中</button><button class="button" onclick="simulationPreview()">仿真预演</button><button class="button planned" onclick="dispatchMission()">下发任务 · 规划中</button>
-    `)}
-    ${designPreviewNotice("任务图、地图标记、风险分值和策略通过状态是交互设计稿；只有生成请求、载具列表与 Runtime 状态来自 LIVE 接口。")}
-    <div class="three-main">
+    ${pageTitle("任务规划", "", '<button class="button" onclick="setPage(\'twin\')">查看三维集群态势</button>')}
+    <div class="planning-workspace">
       <div class="grid">
-        ${panel("1 任务输入（自然语言）", `<div class="field"><textarea rows="8">在东区工业园执行巡检任务，重点检查 3 号仓库和周边围墙，识别异常人员与车辆。发现火点后立即上报并拍照取证，优先保证人员安全。</textarea></div>
-          <div class="mini-tabs" style="margin-top:10px"><span class="chip">园区巡检</span><span class="chip">边界巡逻</span><span class="chip">应急搜救</span><span class="chip">消防侦察</span></div>`)}
-        ${panel("地图预览", scene3d("small"), "")}
+        ${panel("任务输入", `<div class="field"><label for="template-plan-objective">任务目标</label>
+          <textarea rows="4" id="template-plan-objective" data-template-plan-objective placeholder="输入或粘贴任务书"${inFlight ? " disabled" : ""}>${esc(objective)}</textarea></div>
+          <div class="planning-actions">
+            <button class="button" id="template-plan-example" type="button" onclick="useTemplatePlanExample()"${inFlight ? " disabled" : ""}>填入巡检示例</button>
+            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inFlight ? " disabled" : ""}>${inFlight ? "等待 Runtime…" : "预览巡检模板"}</button>
+          </div>
+          <p class="small">原话随请求传入，步骤取自固定的巡检拍照模板。</p>`)}
+        ${panel("载具状态", vehicleTable(), "scroll")}
       </div>
-      <div class="grid semantic-planning-previews">
-        ${panel("2 任务编排（结构化任务图）", flowGraph(), "")}
-        ${panel("3 请求预览（JSON）", `<pre class="json">${esc(JSON.stringify(sampleActionRequest(), null, 2))}</pre>`, "scroll")}
-        ${semanticLivePanel()}
-        ${semanticPreviewPanel()}
-      </div>
-      <div class="grid">
-        ${panel("4 策略预检（Policy Gate）", `<div class="donut"><div class="donut-inner"><b class="green">通过</b><span class="small">18 条策略</span></div></div>
-          ${checkList(["飞行安全策略", "空域合规策略", "数据安全策略", "设备健康策略"])}`)}
-        ${panel("5 风险评估", `<h2 class="amber">中等风险 42 / 100</h2>${checkList(["夜间飞行：需确认照明条件", "人员密集区：建议提高告警阈值", "电量窗口：建议预留 15% 余量"])}`)}
-        ${panel("6 目标节点选择", vehicleTable(), "scroll")}
-      </div>
+      <div id="template-plan-preview" class="grid" aria-live="polite">${templatePlanPreview()}</div>
     </div>
+    <div class="planning-algorithm">${semanticLivePanel()}${semanticPreviewPanel()}</div>
   </div>`;
 }
 
-function flowGraph() {
-  const nodes = [
-    ["开始", 6, 42, "green"], ["起飞 TakeOff", 22, 25, ""], ["航线巡检 Patrol", 42, 25, ""],
-    ["异常识别 Detect", 66, 19, "violet"], ["热源定位", 67, 49, "violet"], ["拍照取证", 83, 49, "violet"],
-    ["返航 RTL", 47, 72, ""], ["结束", 13, 76, "green"],
-  ];
-  return `<div class="flow-canvas">
-    <svg class="scene-svg" viewBox="0 0 1000 420">
-      <path class="path cyan" d="M140 190 L260 150 L460 150 L650 130 L720 220 L840 220" />
-      <path class="path green" d="M690 250 L520 325 L210 335" />
-    </svg>
-    ${nodes.map((n) => `<div class="node ${n[3]}" style="left:${n[1]}%;top:${n[2]}%">${n[0]}</div>`).join("")}
-  </div>`;
+const templateActionNames = new Map([["takeoff", "起飞"], ["report_status", "报告状态"], ["camera_capture", "采集照片"], ["land", "降落"]]);
+const templateResultNames = new Map([["ready", "模板已生成"], ["awaiting_confirmation", "需确认"], ["blocked", "计划受阻"]]);
+const templateDecisionNames = new Map([["allow", "预检允许"], ["deny", "预检拒绝"], ["require_confirm", "需确认"]]);
+
+function templatePlanPreview() {
+  const { inFlight, reply, error } = state.templatePlan;
+  const plan = reply?.plan;
+  const steps = Array.isArray(plan?.steps) ? plan.steps.filter(step => step && typeof step.action_type === "string") : [];
+  const resultName = reply ? templateResultNames.get(reply.result) || "结果未识别" : null;
+  const stepList = steps.map(step => `<li><b>${esc(templateActionNames.get(step.action_type) || step.action_type)}</b>
+      <small>${esc(step.node_id || "未指定载具")}${step.status === "dry_run_only" ? " · 仅预览" : ""}</small></li>`).join("");
+  const precheck = steps.map(step => {
+    const decision = step.policy_precheck?.decision_code;
+    const decisionLabel = templateDecisionNames.get(decision);
+    const risk = Number.isInteger(step.risk_level) && step.risk_level >= 0 ? step.risk_level : "未上报";
+    return `<tr><td>${esc(templateActionNames.get(step.action_type) || step.action_type)}</td>
+      <td>${esc(decisionLabel || decision || "未预检")}</td>
+      <td>${esc(step.policy_precheck?.primary_reason_code || "未上报原因")}</td>
+      <td>${risk}</td></tr>`;
+  }).join("");
+
+  return `${panel("任务编排", `${error ? `<p class="inline-error">${esc(error)}</p>` : ""}
+      ${resultName ? `<p>${badge(resultName, reply.result === "ready" ? "cyan" : "amber")}
+       ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>` : ""}
+      ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : error ? "" : `<p class="small">${inFlight ? "正在生成模板计划…" : reply ? "Runtime 未返回计划步骤" : "待生成模板计划"}</p>`}
+      ${reply ? `<details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>` : ""}`)}
+    ${panel("策略预检与风险", precheck ? `<div class="planning-table"><table class="table">
+      <thead><tr><th>步骤</th><th>模板预检</th><th>依据</th><th>动作风险级别</th></tr></thead><tbody>${precheck}</tbody></table></div>
+      <p class="small">风险级别来自 Runtime 动作能力登记。现场条件由 Runtime 在执行时重新核验。</p>` : '<p class="small">等待 Runtime 返回逐步预检结果</p>')}
+    ${panel("航线预览", '<p class="small">巡检模板尚不提供航线。三维集群态势可查看 Runtime 上报的载具位置。</p>')}`;
 }
 
-function checkList(items) {
-  return `<div class="event-list">${items.map((item) => `<div class="event" style="grid-template-columns:24px 1fr"><div class="green">OK</div><div>${esc(item)}</div></div>`).join("")}</div>`;
+function renderTemplatePlan() {
+  const slot = document.getElementById("template-plan-preview");
+  if (slot) slot.innerHTML = templatePlanPreview();
+  const { inFlight } = state.templatePlan;
+  for (const id of ["template-plan-objective", "template-plan-example", "template-plan-submit"]) {
+    const control = document.getElementById(id);
+    if (!control) continue;
+    control.disabled = inFlight;
+    if (id === "template-plan-submit") control.textContent = inFlight ? "等待 Runtime…" : "预览巡检模板";
+  }
 }
 
-function sampleActionRequest() {
-  return {
-    action_request: {
-      mission_id: "M-20260705-001",
-      action_type: "takeoff",
-      skill_group: "flight_core",
-      target_set: ["UAV-01", "UAV-02", "UAV-03"],
-      requested_scope: "self_only",
-      risk_hint: 2,
-      params: { altitude_m: 20, area: "east_industrial_park" },
-    },
-  };
+function setTemplatePlanObjective(value) {
+  const draft = state.templatePlan;
+  if (draft.inFlight || draft.objective === value) return;
+  draft.objective = value;
+  const input = document.getElementById("template-plan-objective");
+  if (input && input.value !== value) input.value = value;
+  if (draft.reply || draft.error) {
+    draft.reply = null;
+    draft.error = null;
+    renderTemplatePlan();
+  }
+}
+
+function useTemplatePlanExample() {
+  setTemplatePlanObjective("记录园区设备的状态和照片，完成后报告巡检结果。");
 }
 
 function vehiclePage() {
@@ -1691,7 +1782,7 @@ async function checkBackend(options = {}) {
 
 function saveApiBaseUrl(value) {
   if (stageMode) return;
-  if (state.actionRequestsInFlight.size || state.pendingActions.length || state.demoWriteInFlight) {
+  if (state.actionRequestsInFlight.size || state.pendingActions.length || state.demoWriteInFlight || state.templatePlan.inFlight) {
     notify("地址未更改", "仍有请求在执行或等待核实，请先确认原 Runtime 的动作状态", "amber");
     render();
     return;
@@ -1700,6 +1791,8 @@ function saveApiBaseUrl(value) {
   state.apiStatus = "checking";
   state.runtimeHealth = null;
   state.lastBackendResult = null;
+  state.templatePlan.reply = null;
+  state.templatePlan.error = null;
   state.backendConnected = false;
   state.actionRecords = [];
   state.lifecycleRecords = [];
@@ -1826,42 +1919,30 @@ function simCard(name, detail, status, color) {
 }
 
 async function generateRequest() {
-  if (stageMode) return;
-  const payload = await callRuntime(
-    "plan",
-    () => window.SwarmRuntimeApi.planMission({
-      mission_type: "inspection_snapshot",
-      source: "ground_station",
-      profile: "standard",
-      objective: "园区巡检、拍照取证、返航降落",
-      dry_run: true,
-    }),
-    () => ({ result: "unavailable", plan: null, failure_reason: "runtime_api_unreachable" })
-  );
-  const planned = payload.result !== "unavailable";
-  notify(planned ? "已生成 ActionRequest" : "任务规划失败", planned ? "已从 Runtime API 获取 plan-mission 结果。" : "Runtime API 未返回可用计划。", planned ? "green" : "red");
-  state.lastPlanResult = payload;
-  render();
-}
-
-function policyPrecheck() {
-  notify("策略预检 · 规划中", "当前 HTTP API 没有独立的策略预检入口。", "amber");
-  render();
-}
-
-function simulationPreview() {
-  state.page = "simulation";
-  notify("仿真中心", "仅切换视图，未启动或控制仿真进程。", "cyan");
-  render();
-}
-
-function dispatchMission() {
-  plannedCapability("/api/plans/execute");
-}
-
-function plannedCapability(path) {
-  notify("界面规划中", `Runtime 能力入口 ${path}。主控台尚未接入该操作。`, "amber");
-  render();
+  const draft = state.templatePlan;
+  if (stageMode || state.page !== "planning" || draft.inFlight) return;
+  if (!draft.objective.trim()) {
+    draft.error = "请先填写任务目标";
+    renderTemplatePlan();
+    return;
+  }
+  draft.inFlight = true;
+  draft.reply = null;
+  draft.error = null;
+  renderTemplatePlan();
+  try {
+    draft.reply = await callRuntime("plan", () => window.SwarmRuntimeApi.planMission({
+      mission_type: "inspection_snapshot", source: "ground_station", profile: "standard",
+      objective: draft.objective, dry_run: true,
+    }), error => {
+      draft.error = error.message;
+      return null;
+    }, { notifyFailure: false });
+  } finally {
+    draft.inFlight = false;
+    renderTemplatePlan();
+    render();
+  }
 }
 
 function actionIdentifiers(nodeId, actionType) {
@@ -2478,10 +2559,6 @@ function placeholderPage(title, subtitle, text, action = "") {
   </div>`;
 }
 
-function designPreviewNotice(message) {
-  return `<div class="design-preview-notice"><b>DEMO · 界面预览</b><span>${esc(message)}</span></div>`;
-}
-
 /**
  * 重新渲染界面。
  *
@@ -2523,12 +2600,13 @@ function ensureShell() {
   if (!host) return;
   if (host.dataset?.shellMounted === "1") return;
   if (stageMode && dashboard) {
-    host.innerHTML = `<main class="stage-shell">
+    host.innerHTML = `<main class="stage-shell${builtInDemo ? " stage-demo" : ""}">
       <header class="stage-bar">
         <b>2026UAVSwarm</b>
         <div id="stage-indicators"></div>
         <a class="button stage-link" href="./">返回主控台</a>
       </header>
+      ${stageNavigation()}
       <div id="stage-title"></div><div id="stage-content"></div>
       <div id="slot-banner"></div>
     </main>`;
@@ -2685,7 +2763,7 @@ function topbar() {
     <div class="top-pill">目标载具<strong>${esc(state.selectedUav || "--")}</strong></div>
     <div class="top-pill">当前 Action<strong>${esc(state.currentAction)}</strong></div>
     <div class="top-pill">Runtime API<strong class="${api.color}">${api.label}</strong></div>
-    <div class="top-pill">数据源<strong class="${dataSource.color}">${dataSource.label}</strong></div>
+    <div class="top-pill">遥测状态<strong class="${dataSource.color}">${dataSource.label}</strong></div>
     <div class="top-actions">
       <button class="icon-btn" title="三维态势" onclick="setPage('twin')">3D</button><button class="icon-btn" title="状态说明" onclick="showStatusHelp()">?</button><button class="icon-btn" title="刷新 Runtime" onclick="probeRuntime({notifyUser:true})">R</button>
       <div class="operator"><div class="avatar"></div><div><div>Operator_01</div><div class="small">管理员</div></div></div>
@@ -2736,6 +2814,12 @@ render();
 if (!builtInDemo) probeRuntime();
 
 app.addEventListener("click", (event) => {
+  if (stageMode && dashboard) {
+    const view = event.target.closest("[data-stage-view]");
+    if (view) return seekStage(Number(view.dataset.stageView));
+    if (event.target.closest("[data-stage-restart]")) return toggleStagePlayback(true);
+    if (event.target.closest("[data-stage-play]")) return toggleStagePlayback();
+  }
   const decision = event.target.closest("[data-policy-open]");
   if (decision && state.policyBanner) {
     state.timelineKey = state.policyBanner.entry.key;
@@ -2751,6 +2835,7 @@ app.addEventListener("click", (event) => {
   const timeline = event.target.closest("[data-timeline-key]");
   if (timeline) {
     state.timelineKey = state.timelineKey === timeline.dataset.timelineKey ? null : timeline.dataset.timelineKey;
+    if (stageMode && stagePlayback.startedAt !== null) return toggleStagePlayback();
     render();
     return;
   }
@@ -2769,6 +2854,7 @@ app.addEventListener("click", (event) => {
 });
 
 app.addEventListener("input", (event) => {
+  if (event.target.hasAttribute?.("data-template-plan-objective")) setTemplatePlanObjective(event.target.value);
   if (event.target.hasAttribute?.("data-semantic-live-objective")) setSemanticLiveObjective(event.target.value);
 });
 
@@ -2884,4 +2970,6 @@ setInterval(async () => {
   renderRuntimeUpdate();
 }, 5000);
 
-if (stageMode && dashboard) setInterval(renderStage, 1000);
+if (stageMode && dashboard) setInterval(() => {
+  if (stagePlayback.startedAt !== null) renderStage();
+}, 1000);
