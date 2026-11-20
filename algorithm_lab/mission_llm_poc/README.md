@@ -83,6 +83,28 @@ python -B scripts/export_local_model_scene_preview.py ../../docs/fixtures/simple
 端口与别名须对应已启动的本地模型；脚本不自动启动模型、不覆盖原证据、不向 Runtime 提交。
 每条输出包含可导入的 `*.preview.json` 和可追溯的 `*.raw.json`。
 
+### 本机实时试推理接口（开发版）
+
+这和已合入主控台的回放是两个入口。模型已经在本机运行后，从本目录启动算法服务：
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -B scripts/serve_semantic_preview.py
+```
+
+默认 Lab 端口为 `127.0.0.1:18118`，推理服务为 `127.0.0.1:18116/v1`，模型别名为
+`qwen3.5-0.8b-q4-lab`。Lab 不调用 Runtime，不启动模型，不写审计或飞行状态。
+浏览器只允许 5178 控制台的两个回环来源：`http://127.0.0.1:5178` 和 `http://localhost:5178`。
+
+- `GET /lab/semantic-preview/health`：只检查 Lab 服务，`model_status: "not_checked"` 不表示模型可用。
+- `POST /lab/semantic-preview`：JSON 只允许 `objective`。例如 `{"objective":"请登记已导出目录里，北侧首排东半幅比20米高2米的那栋楼。"}`。首版仅受理这一范围的楼栋题。
+- HTTP 200 返回 `api_version: "0.1"`、`mode: "live"`、`elapsed_ms`、`preview`（沿用回放
+  格式）及 `evidence_json`（与 `preview.source.evidence_sha256` 对应的原始 UTF-8 文本）。
+  200 不一定是绑定成功；看 `preview.status`。外层和预览都明确声明 `execution_authorized: false`。
+- 422（目标不受理）、429（已有推理进行）、502（模型回复被拒）、503（模型不可用）、504（模型超时）
+  通过 `error.reason_code` 区分；均无可用预览，不用回放数据替代实时失败。未加载前端也可用
+  本模块的回环 HTTP 测试验证协议（`python -B -m unittest discover -s tests -q`）。
+
 2026-10-05 最新：[三款模型的逐例输入输出及测试方法](docs/MODEL_EXPERIMENT_WALKTHROUGH_20261005.md)，
 [MiniCPM 采样/格式实验与背景地标修复](docs/MINICPM_SAMPLING_AND_ROLE_FIX_20261005.md)。
 旧报告的分数均是旧代码实验记录；修复后的规则基线另列，不能回写成旧实验的成绩。
