@@ -1,0 +1,47 @@
+{
+  "contract_version": "1.0",
+  "node_id": "UAV-02",
+  "task_id": "offline-flight-validation-001",
+  "task_version": 1,
+  "execution_id": "exec-001",
+  "step_id": "step-hold",
+  "request_id": "candidate-001",
+  "trace_id": "trace-001",
+  "snapshot_id": "candidate-001",
+  "decision_timeout_ms": 2000,
+  "ground_link": {"state": "lost", "last_received_at": null, "age_ms": null},
+  "authorization": {
+    "operator_id": "operator-01",
+    "expires_at": "2026-10-22T12:05:00Z",
+    "max_altitude_m": 3.0,
+    "max_hold_s": 5.0,
+    "offline_policy": "continue_authorized"
+  },
+  "next_step": {
+    "step_id": "step-hold",
+    "action": "hold_position",
+    "params": {"hold_s": 3.0}
+  },
+  "observation": {
+    "source": "fake",
+    "sample_timestamp": "2026-10-22T12:00:00Z",
+    "stale": false,
+    "local_position": {"x_m": 0.0, "y_m": 0.0, "z_down_m": -3.0, "altitude_m": 3.0},
+    "armed": true,
+    "landed_state": 2,
+    "landed_fresh": true,
+    "battery": {"battery_remaining": 80}
+  },
+  "allowed_options": [
+    {
+      "option_id": "execute_authorized_step",
+      "action_type": "hold_position",
+      "params": {"hold_s": 3.0}
+    },
+    {
+      "option_id": "abort_to_land",
+      "action_type": "land",
+      "params": {}
+    }
+  ]
+}
