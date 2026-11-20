@@ -694,8 +694,10 @@ a.button {
 
 .twin-main { grid-template-columns: minmax(0, 1.42fr) minmax(280px, .58fr); }
 .twin-details { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
-.twin-nodes { grid-template-rows: auto auto 1fr; min-width: 0; }
+.twin-nodes { grid-template-rows: auto auto auto 1fr; min-width: 0; }
 .semantic-preview { min-width: 0; overflow-wrap: anywhere; }
+.semantic-live textarea { resize: vertical; width: 100%; }
+.semantic-live .field { margin-bottom: 8px; }
 .semantic-preview-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .semantic-preview-controls .field { margin: 0; max-width: 100%; min-width: 0; }
 .semantic-preview-controls select { max-width: 100%; }
@@ -1288,7 +1290,7 @@ a.button {
 }
 
 .semantic-planning-page { height: auto; }
-.semantic-planning-previews { grid-template-rows: auto auto 1fr; min-width: 0; }
+.semantic-planning-previews { grid-template-rows: auto auto auto 1fr; min-width: 0; }
 
 .three-main {
   display: grid;

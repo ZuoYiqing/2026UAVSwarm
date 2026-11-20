@@ -46,6 +46,8 @@ const state = {
   lastPlanResult: null,
   semanticPreview: {},
   semanticPreviewDetailsOpen: false,
+  semanticLive: { objective: "", inFlight: false, result: {}, health: null, healthInFlight: false, healthError: null },
+  semanticLiveDetailsOpen: false,
   runtimeSnapshot: null,
   telemetry: null,
   vehicleSnapshot: null,
@@ -1176,6 +1178,107 @@ const modelReplayFiles = [
   ["higher-27.preview.json", "47 米：目录范围内无匹配，待澄清"],
 ];
 
+const semanticLiveExamples = [
+  [12, "32 米题"],
+  [2, "22 米题"],
+  [27, "47 米题"],
+];
+
+function semanticLivePanel() {
+  const live = state.semanticLive;
+  return panel("本地试推理", `
+    <p class="small">当前仅支持导出目录中北侧首排东半幅的限定楼栋题。</p>
+    <div class="field"><label for="semantic-live-example">输入示例</label>
+      <select id="semantic-live-example" data-semantic-live-example${live.inFlight ? " disabled" : ""}>
+        <option value="">选择题目，只填入原话</option>
+        ${semanticLiveExamples.map(([difference, label]) => `<option value="${difference}">${label}</option>`).join("")}
+      </select></div>
+    <div class="field"><label for="semantic-live-objective">原话（最多 160 字）</label>
+      <textarea id="semantic-live-objective" rows="2" maxlength="160" data-semantic-live-objective${live.inFlight ? " disabled" : ""}>${esc(live.objective)}</textarea></div>
+    <div class="semantic-preview-controls">
+      <button type="button" class="button primary" id="semantic-live-submit" data-semantic-infer${live.inFlight ? " disabled" : ""}>${live.inFlight ? "推理中…" : "本地试推理"}</button>
+      <button type="button" class="button" id="semantic-lab-check" data-semantic-health${live.healthInFlight ? " disabled" : ""}>检查 Lab</button>
+    </div>
+    <p class="small" id="semantic-lab-health" role="status">${semanticLabHealth()}</p>
+    <div id="semantic-live-result" aria-live="polite">${semanticLiveResult()}</div>`, "semantic-preview semantic-live");
+}
+
+function semanticLabHealth() {
+  const live = state.semanticLive;
+  if (live.healthInFlight) return "正在检查 Lab · 模型状态未检查";
+  if (live.healthError) return esc(live.healthError);
+  return live.health ? "Lab 可接收请求 · 模型状态未检查" : "Lab 尚未检查 · 模型状态未检查";
+}
+
+function semanticLiveResult() {
+  const preview = state.semanticLive.result;
+  if (!preview.mode) return '<p class="small">提交后显示本次模型原答、算法结论和 Lab 耗时。</p>';
+  return semanticPreviewResult(preview);
+}
+
+function renderSemanticLive() {
+  const result = document.getElementById("semantic-live-result");
+  if (result) result.innerHTML = semanticLiveResult();
+  const health = document.getElementById("semantic-lab-health");
+  if (health) health.innerHTML = semanticLabHealth();
+  const live = state.semanticLive;
+  const submit = document.getElementById("semantic-live-submit");
+  if (submit) {
+    submit.disabled = live.inFlight;
+    submit.textContent = live.inFlight ? "推理中…" : "本地试推理";
+  }
+  const check = document.getElementById("semantic-lab-check");
+  if (check) check.disabled = live.healthInFlight;
+  for (const id of ["semantic-live-example", "semantic-live-objective"]) {
+    const input = document.getElementById(id);
+    if (input) input.disabled = live.inFlight;
+  }
+}
+
+function setSemanticLiveObjective(value) {
+  if (value === state.semanticLive.objective) return;
+  state.semanticLive.objective = value;
+  state.semanticLive.result = {};
+  const input = document.getElementById("semantic-live-objective");
+  if (input && input.value !== value) input.value = value;
+  renderSemanticLive();
+}
+
+async function checkSemanticLab() {
+  if (stageMode || state.semanticLive.healthInFlight) return;
+  const live = state.semanticLive;
+  live.healthInFlight = true;
+  live.health = null;
+  live.healthError = null;
+  renderSemanticLive();
+  try {
+    live.health = await window.SwarmSemanticLab.health();
+  } catch (error) {
+    live.healthError = `${error.reasonCode || "LAB_UNREACHABLE"} · ${error.message}`;
+  } finally {
+    live.healthInFlight = false;
+    renderSemanticLive();
+  }
+}
+
+async function inferSemanticPreview() {
+  if (stageMode || state.semanticLive.inFlight) return;
+  const live = state.semanticLive;
+  const result = { mode: "live", label: "本次请求", objective: live.objective, loading: true };
+  live.result = result;
+  live.inFlight = true;
+  renderSemanticLive();
+  try {
+    Object.assign(result, await window.SwarmSemanticLab.infer(result.objective));
+  } catch (error) {
+    result.error = `${error.httpStatus ? `HTTP ${error.httpStatus} · ` : ""}${error.reasonCode || "LAB_RESPONSE_INVALID"} · ${error.message}`;
+  } finally {
+    result.loading = false;
+    live.inFlight = false;
+    renderSemanticLive();
+  }
+}
+
 function semanticPreviewPanel() {
   return panel("离线算法证据 · 只读预览", `
     <div class="semantic-preview-controls">
@@ -1191,10 +1294,12 @@ function semanticPreviewPanel() {
     <div id="semantic-preview-result" aria-live="polite">${semanticPreviewResult()}</div>`, "semantic-preview");
 }
 
-function semanticPreviewResult() {
-  const { record, label, error, scopeText } = state.semanticPreview;
-  if (error) return `<p class="inline-error">${esc(label)}：${esc(error)}</p>`;
-  if (!record) return `<p class="small">${label ? `正在读取 ${esc(label)}…` : "选择一份离线导出以查看绑定依据。"}</p>`;
+function semanticPreviewResult(preview = state.semanticPreview) {
+  const { record, label, error, scopeText, mode, objective, elapsedMs, evidenceText } = preview;
+  const modes = { live: "本地实时推理", replay: "录制证据回放", import: "本地文件导入" };
+  const origin = mode ? `<p>${badge(modes[mode], "amber")}${Number.isFinite(elapsedMs) ? ` <span class="small">Lab 耗时 ${elapsedMs} ms</span>` : ""}</p>` : "";
+  if (error) return `${origin}<p class="inline-error">${esc(label)}：${esc(error)}</p>${objective ? `<p>本次原话 ${esc(objective)}</p>` : ""}`;
+  if (!record) return `${origin}<p class="small">${preview.loading ? "正在等待本次模型响应…" : label ? `正在读取 ${esc(label)}…` : "选择一份离线导出以查看绑定依据。"}</p>`;
 
   const { source } = record;
   const statuses = { bound: ["已绑定", "cyan"], clarify: ["待澄清", "amber"], unknown: ["未知", "amber"] };
@@ -1205,9 +1310,9 @@ function semanticPreviewResult() {
     ? "模型选项与目录规则一致：按所需高度核对唯一匹配，绑定目录对象，不下发任务。"
     : record.reason_code === "MODEL_CHOICE_REQUIRES_REVIEW"
       ? "模型选项与目录规则不一致，没有绑定；下方对象只是候选。" : null;
-  return `<p>${badge(...statuses[record.status])} <span class="small">${esc(record.reason_code)}</span></p>
+  return `${origin}<p>${badge(...statuses[record.status])} <span class="small">${esc(record.reason_code)}</span></p>
     <p class="small">${source.model_executed
-      ? "模型实测回放（文件标注）" + (modelAlias ? " · " + esc(modelAlias) : "") : "离线规则验证 · 模型未运行"}</p>
+      ? (mode === "live" ? "本次模型响应" : mode === "import" ? "导入模型记录（文件标注）" : "模型实测回放（文件标注）") + (modelAlias ? " · " + esc(modelAlias) : "") : "离线规则验证 · 模型未运行"}</p>
     <p class="small">${esc(record.scene_id)} / ${esc(record.map_version)} · schema ${esc(record.schema_version)}</p>
     <p><span class="small">原话</span> ${esc(record.objective)}</p>
     ${source.model_executed && modelRaw ? `<p><span class="small">模型原始回复</span> <code>${esc(modelRaw)}</code></p>` : ""}
@@ -1220,18 +1325,19 @@ function semanticPreviewResult() {
       ${item.evidence ? `<div>原文依据 ${esc(item.evidence)}</div>` : ""}
       ${item.source_reference ? `<div class="small">${esc(item.source_reference)}</div>` : ""}
     </li>`).join("")}</ul>` : ""}
-    <details data-semantic-details${state.semanticPreviewDetailsOpen ? " open" : ""}>
+    <details ${mode === "live" ? "data-semantic-live-details" : "data-semantic-details"}${(mode === "live" ? state.semanticLiveDetailsOpen : state.semanticPreviewDetailsOpen) ? " open" : ""}>
       <summary>来源与限定条件</summary>
       <div class="semantic-preview-provenance">
         <dl class="semantic-preview-source">
           <dt>来源类型</dt><dd>${esc(source.kind)}</dd>
-          <dt>导入文件</dt><dd>${esc(label)}</dd>
+          <dt>${mode === "live" ? "请求来源" : "导入文件"}</dt><dd>${esc(label)}</dd>
           <dt>原始证据</dt><dd>${esc(source.evidence_file)}</dd>
-          <dt>原证据 SHA-256（导出记录）</dt><dd><code>${esc(source.evidence_sha256)}</code></dd>
+          <dt>原证据 SHA-256（${mode === "live" ? "已核对" : "导出记录"}）</dt><dd><code>${esc(source.evidence_sha256)}</code></dd>
           <dt>场景目录</dt><dd>${esc(source.catalog_file)}</dd>
           <dt>目录内容 SHA-256（导出记录）</dt><dd><code>${esc(source.catalog_content_sha256)}</code></dd>
           <dt>目录审核状态</dt><dd>${source.catalog_review_status === "exported_from_physics_pending_review" ? "物理导出待审核 · " : ""}${esc(source.catalog_review_status)}</dd>
         </dl>
+        ${evidenceText ? `<p>本次原始证据</p><pre class="json">${esc(evidenceText)}</pre>` : ""}
         ${scopeText !== null ? `<p>限定范围</p><pre class="json">${esc(scopeText)}</pre>` : ""}
         ${record.limitations.length ? `<ul>${record.limitations.map(limit => `<li>${esc(limit)}</li>`).join("")}</ul>` : ""}
       </div>
@@ -1243,9 +1349,9 @@ function renderSemanticPreviewResult() {
   if (slot) slot.innerHTML = semanticPreviewResult();
 }
 
-async function loadSemanticPreview(read, label, fileSize = 0) {
+async function loadSemanticPreview(read, label, fileSize = 0, mode = "import") {
   const model = window.SwarmSemanticPreview;
-  const preview = { label };
+  const preview = { label, mode };
   state.semanticPreview = preview;
   renderSemanticPreviewResult();
   try {
@@ -1262,7 +1368,7 @@ function loadSemanticSample(file) {
     const response = await fetch("./evidence/semantic-preview/" + file);
     if (!response.ok) throw new Error("Evidence file unavailable");
     return response.text();
-  }, file);
+  }, file, 0, "replay");
 }
 
 function twinPage() {
@@ -1272,6 +1378,7 @@ function twinPage() {
     <div class="twin-main">
       ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "twin-panel")}
       <div class="grid twin-nodes">
+        ${semanticLivePanel()}
         ${semanticPreviewPanel()}
         <div class="metrics">
           ${metric("在线节点", `${summary.online}/${summary.total}`, "Runtime", "cyan", "online")}
@@ -1303,6 +1410,7 @@ function planningPage() {
       <div class="grid semantic-planning-previews">
         ${panel("2 任务编排（结构化任务图）", flowGraph(), "")}
         ${panel("3 请求预览（JSON）", `<pre class="json">${esc(JSON.stringify(sampleActionRequest(), null, 2))}</pre>`, "scroll")}
+        ${semanticLivePanel()}
         ${semanticPreviewPanel()}
       </div>
       <div class="grid">
@@ -2652,17 +2760,32 @@ app.addEventListener("click", (event) => {
     return;
   }
   if (stageMode) return;
+  if (event.target.closest("[data-semantic-infer]")) return inferSemanticPreview();
+  if (event.target.closest("[data-semantic-health]")) return checkSemanticLab();
   const sample = event.target.closest("[data-semantic-sample]");
   if (sample) return loadSemanticSample(sample.dataset.semanticSample);
   const target = event.target.closest("[data-vehicle-id]");
   if (target) selectVehicle(target.dataset.vehicleId);
 });
 
+app.addEventListener("input", (event) => {
+  if (event.target.hasAttribute?.("data-semantic-live-objective")) setSemanticLiveObjective(event.target.value);
+});
+
 app.addEventListener("toggle", (event) => {
+  if (event.target.hasAttribute?.("data-semantic-live-details")) state.semanticLiveDetailsOpen = event.target.open;
   if (event.target.hasAttribute?.("data-semantic-details")) state.semanticPreviewDetailsOpen = event.target.open;
 }, true);
 
 app.addEventListener("change", (event) => {
+  if (event.target.hasAttribute?.("data-semantic-live-example")) {
+    const difference = Number(event.target.value);
+    event.target.value = "";
+    if (semanticLiveExamples.some(([value]) => value === difference)) {
+      setSemanticLiveObjective(`请登记已导出目录里，北侧首排东半幅比20米高${difference}米的那栋楼。`);
+    }
+    return;
+  }
   if (event.target.hasAttribute?.("data-semantic-model-sample")) {
     const file = event.target.value;
     event.target.value = "";
