@@ -1,0 +1,9 @@
+{
+  "benchmark_version": "B-v0.2",
+  "cards": {"A":5,"B":4,"C":3,"D":2},
+  "matches": [
+    {"match_id":"amber-regular","opponent_choices":[["A","C"],["A","C"],["A","C"],["A","C"]]},
+    {"match_id":"jade-regular","opponent_choices":[["B","D"],["B","D"],["B","D"],["B","D"]]},
+    {"match_id":"ruby-switch","opponent_choices":[["A","C"],["A","C"],["B","D"],["B","D"]]}
+  ]
+}

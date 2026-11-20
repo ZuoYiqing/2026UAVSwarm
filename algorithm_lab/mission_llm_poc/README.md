@@ -1,5 +1,68 @@
 # Mission LLM Lab v0.1
 
+## 离线协作评测（M-v0.1 / B-v0.2）
+
+这两套题分别测模拟巡检的异构派工，以及抽象记分游戏里的队友协作和对手响应。
+评测不调用 Runtime、主控台、Harness 或飞控，结果不授权执行。
+
+- **原题仍在**：[A-v0.4 的 12 条草案](docs/ANCHORING_A_V04_SWARM_GAME_DRAFT.md)原样保留；
+  它测读懂指代和顺序，不测分工。旧工作树的 B-v0.1 是一个模型替两枚棋子填答案的单轮快照，
+  与下述多回合题不混比分。
+- **异构派工 M-v0.1**：[8 个决策快照和 1 局反馈模拟](src/uavswarm_llm_lab/benchmarks/platform_coordination_m_v0_1.json)。
+  无人机查光伏板，无人车读表；同一资产的已核实异常才触发地面复核。覆盖只拍到图、
+  串错证据、掉线换人、没有合适平台等情况。固定派工 7/8，反馈局未跑完；可重分配规则 8/8，
+  三轮完成模拟任务：原机掉线 → 备用机只补未完成的屋顶任务 → 地面按核实证据复核。
+- **独立棋盘 B-v0.2**：[3 局 × 4 轮](src/uavswarm_llm_lab/benchmarks/board_coordination_b_v0_2.json)。
+  两个棋子分别作答，只在共享条件下向第二枚公开队友意向，只查已结算的对手历史。
+  三种规则策略均 24/24 合法；独选、共享意向、再看对手历史分别得 30、54、69 分，
+  同队重复 12/12、0/12、0/12 轮。最后一种在有 5 次前轮争抢的情况下 0 次重复原选；
+  本队得分提高不等于分差或胜率提高。
+
+### 本地 0.8B 实测（2026-11-20）
+
+RTX 4050、D 盘既有 Qwen3.5-0.8B Q4、llama.cpp b10964、2048 上下文、seed 0、temperature 0。
+题集与规则基线的内容哈希一致。第一轮 83 次请求，单变量对照 70 次，均收到回复，无执行链、
+训练或模型下载；这些含同题复跑，不能当作 153 道新题。复跑的原派工和棋盘共享意向条件
+与第一轮同分。两轮可用 RAM 最低点样 2751 MiB，GPU 最高点样 49 °C，临时模型进程均已关闭。
+
+- **派工**：原模型方案 0/8 合法，三轮反馈局未完成。模型给足了字段，但对 8 个状态都返回
+  同一组四个派工、`deferred: []`。例如只有 RGB 时仍派地面复核；原机掉线后仍将 B 区给原机，
+  同时重排已有证据的 A 区。去掉每项任务的 `preferred` 字段（其余提示、知识和裁判不变），
+  8 份候选仍逐题等价，结果 0/8，不能把失败只归因于默认人选。合格的规则基线是 8/8 并完成反馈局。
+- **棋盘**：模型每项条件各 24 个真实选择，均是单步合法动作。分数与同队重复率另计。
+  看对手历史比只看队友意向少重复上一轮被争抢的牌（2/8 对 6/10），但仍每轮队内撞牌。
+  另给棋子 2 加一句明确的避重提醒、保持选项和裁判不变后，它 12/12 轮弃权，没有提高得分。
+
+| 0.8B 条件 | 本队得分 | 队内重复 / 12 轮 | 有其他不撞牌选项却弃权 |
+| --- | ---: | ---: | ---: |
+| 独立选择 | 17 | 9 | 0 |
+| 共享队友意向 | 13 | 12 | 0 |
+| 再看对手历史 | 19 | 12 | 0 |
+| 共享意向 + 明确避重提醒 | 13 | 0 | 12 |
+
+裁判新增「有不同于队友的公开牌却弃权」和「实际得到分的不同牌张数」指标。前者不假定知道
+对手本轮的选择；用原始选牌重新计分，没有再次推理或覆盖历史数据。最终 **64 项单元测试通过**。
+
+- 逐题规则基线与模拟反馈：`artifacts/coordination-baselines-20261120T035046332Z/`。
+- 真实原答及对照：`artifacts/coordination-qwen08-real-20261120T061228971562Z/` 和
+  `artifacts/coordination-qwen08-ablation-20261120T061602190555Z/`。
+  两个目录的 `responses.jsonl` 留存模型实际看到的消息、约束和原始回复，而非仅最终得分。
+- 新指标复算：`artifacts/coordination-board-regrade-20261120T061820694326Z.json`。制品均由 Git 忽略。
+
+在本模块目录复现两套无模型基线：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/coordination-check -Force
+python -B -m uavswarm_llm_lab.coordination_bench --suite mission --method rules --output artifacts/coordination-check/mission-rules.json
+python -B -m uavswarm_llm_lab.coordination_bench --suite board --method history --output artifacts/coordination-check/board-history.json
+```
+
+输出文件不能事先存在。已有同机离线模型时，切换到 `model` 或 `model-history`，并显式提供
+`--model-url`（回环地址，例如 `http://127.0.0.1:18116/v1`）与 `--model-id`。
+下一步先由规则筛掉掉线、缺证据和已完成的任务，再用新的优先级冲突题检验模型是否能在
+多个合法候选之间做取舍。本轮未测 4B；不把少撞牌、语义正确或模拟完成当作真实巡检通过。
+
 2026-11-20：[主控台的模型实测回放](../../frontend/swarm-console/README.md#当前已接入的按钮)。
 它只验证限定目录中的目标楼栋选择，不测完整任务规划。程序从
 `simple_recon_v0_1 / simple_recon_v0_1-map-1` 的部分导出中选最近的正北坐标排，

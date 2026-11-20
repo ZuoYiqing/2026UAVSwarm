@@ -586,6 +586,8 @@ a.button {
   text-align: center;
 }
 
+#vehicle-table-empty[hidden] { display: none; }
+
 .selectable-row {
   cursor: pointer;
 }
@@ -694,8 +696,10 @@ a.button {
 
 .twin-main { grid-template-columns: minmax(0, 1.42fr) minmax(280px, .58fr); }
 .twin-details { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
-.twin-nodes { grid-template-rows: auto auto 1fr; min-width: 0; }
+.twin-nodes { grid-template-rows: auto auto auto 1fr; min-width: 0; }
 .semantic-preview { min-width: 0; overflow-wrap: anywhere; }
+.semantic-live textarea { resize: vertical; width: 100%; }
+.semantic-live .field { margin-bottom: 8px; }
 .semantic-preview-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .semantic-preview-controls .field { margin: 0; max-width: 100%; min-width: 0; }
 .semantic-preview-controls select { max-width: 100%; }
@@ -1060,36 +1064,6 @@ a.button {
   max-height: 300px;
 }
 
-.flow-canvas {
-  min-height: 300px;
-  position: relative;
-  border: 1px solid rgba(91, 161, 181, 0.18);
-  border-radius: 8px;
-  background:
-    linear-gradient(transparent 27px, rgba(91, 161, 181, 0.09) 28px),
-    linear-gradient(90deg, transparent 27px, rgba(91, 161, 181, 0.09) 28px),
-    rgba(4, 13, 17, 0.66);
-  background-size: 28px 28px;
-}
-
-.node {
-  position: absolute;
-  width: 118px;
-  min-height: 52px;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  padding: 8px;
-  border: 1px solid rgba(54, 199, 244, 0.42);
-  border-radius: 8px;
-  background: rgba(12, 39, 50, 0.9);
-  font-size: 12px;
-}
-
-.node.green { border-color: rgba(66, 216, 131, 0.48); }
-.node.amber { border-color: rgba(245, 184, 76, 0.48); }
-.node.violet { border-color: rgba(154, 124, 255, 0.48); }
-
 .vehicle-diagram {
   min-height: 315px;
   position: relative;
@@ -1154,26 +1128,6 @@ a.button {
 .sparkline {
   height: 48px;
   width: 100%;
-}
-
-.donut {
-  width: 132px;
-  height: 132px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: conic-gradient(var(--green) 0 74%, var(--amber) 74% 86%, var(--red) 86% 91%, #18323c 91%);
-  margin: 10px auto;
-}
-
-.donut-inner {
-  width: 92px;
-  height: 92px;
-  border-radius: 50%;
-  background: var(--surface);
-  display: grid;
-  place-items: center;
-  text-align: center;
 }
 
 .progress {
@@ -1288,15 +1242,32 @@ a.button {
 }
 
 .semantic-planning-page { height: auto; }
-.semantic-planning-previews { grid-template-rows: auto auto 1fr; min-width: 0; }
-
-.three-main {
+.semantic-planning-page .page-title { flex-wrap: wrap; }
+.planning-workspace, .planning-algorithm {
   display: grid;
-  grid-template-columns: 0.72fr 1.2fr 0.72fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 10px;
-  min-height: 0;
-  flex: 1;
+  align-items: start;
 }
+.planning-workspace > *, .planning-algorithm > * { min-width: 0; }
+.planning-algorithm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.planning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.planning-table { overflow: auto; }
+.template-plan-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style-position: inside;
+  padding: 0;
+}
+.template-plan-steps li {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+}
+.template-plan-steps small { display: block; margin-top: 4px; color: var(--muted); }
+.semantic-planning-page .json { max-height: 320px; overflow: auto; }
 
 @media (max-width: 1440px) {
   .metrics { grid-template-columns: repeat(3, 1fr); }
@@ -1316,12 +1287,15 @@ a.button {
   .page { height: auto; min-height: calc(100vh - 92px); }
   .content { overflow: auto; }
   .two-main,
-  .three-main,
   .split-2,
   .split-3 { grid-template-columns: 1fr !important; }
   .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .action-lifecycle { grid-template-columns: repeat(5, minmax(112px, 1fr)); overflow-x: auto; }
+}
+
+@media (max-width: 850px) {
+  .planning-workspace, .planning-algorithm { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 720px) {

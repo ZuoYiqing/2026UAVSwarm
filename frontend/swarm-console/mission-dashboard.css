@@ -137,7 +137,7 @@
 .mission-roster { margin-top: 6px; }
 .mission-roster-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(3rem, .5fr) minmax(0, .6fr);
+  grid-template-columns: minmax(55px, .38fr) minmax(0, 1fr) minmax(3rem, .5fr) minmax(0, .6fr);
   gap: 10px;
   align-items: center;
   min-height: 35px;
@@ -146,6 +146,8 @@
   font-size: 12px;
 }
 .mission-roster-row small { color: var(--muted); overflow-wrap: anywhere; }
+.mission-roster-head { color: var(--muted); min-height: 30px; }
+.mission-position-map { max-width: min(100%, 52vh); margin-inline: auto; }
 .mission-events { list-style: none; padding: 0; margin: 0; }
 .mission-event {
   display: grid;
@@ -198,6 +200,9 @@
 }
 .stage-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .stage-bar > b { font-size: clamp(17px, 2vw, 24px); }
+.stage-navigation { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.stage-navigation [aria-pressed="true"] { border-color: var(--cyan); background: var(--surface-3); }
+.stage-play { margin-inline-start: auto; }
 #stage-indicators { flex: 1 1 auto; }
 .stage-kpi-strip { display: flex; flex-wrap: wrap; gap: 5px 16px; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .stage-kpi-strip b { margin-left: 4px; }
@@ -214,10 +219,12 @@
 .stage-shell .mission-event { font-size: clamp(12px, 1.5vw, 17px); }
 .stage-shell .mission-event { grid-template-columns: 76px 100px minmax(0, 1fr); }
 .stage-shell .mission-events { max-height: 61vh; overflow: auto; }
-@media (min-width: 850px) {
-  .mission-timeline-summary .mission-events { columns: 2; column-gap: 16px; }
-  .mission-timeline-summary .mission-events li { break-inside: avoid; }
-}
+.stage-demo .mission-kpi { min-height: 0; padding: 10px; }
+.stage-demo .mission-kpi strong { font-size: clamp(24px, 4vw, 52px); }
+.stage-demo .mission-kpi strong.kpi-word { font-size: clamp(22px, 3vw, 44px); }
+.stage-demo .mission-workspace { margin-top: 12px; }
+.stage-demo .mission-map { max-width: min(100%, 48vh); max-height: none; }
+.stage-demo .mission-event { font-size: clamp(12px, 1.15vw, 15px); }
 .stage-three .simulation-frame { min-height: 58vh; }
 .stage-three iframe { pointer-events: none; }
 
@@ -227,6 +234,7 @@
 @media (max-width: 850px) {
   .mission-workspace { grid-template-columns: 1fr; }
   .mission-status-strip { gap: 5px 12px; }
+  .stage-play { margin-inline-start: 0; }
 }
 @media (max-width: 620px) {
   .mission-kpis { gap: 5px; }
