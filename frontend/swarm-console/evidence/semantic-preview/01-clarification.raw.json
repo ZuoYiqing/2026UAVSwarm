@@ -1,0 +1,41 @@
+{
+  "mode": "scene_reference_binding",
+  "model_executed": false,
+  "authority": "objective",
+  "objective": "请标记最高的那栋楼。",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "coordinate_frame": "scene_ned",
+  "affordances_hash": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+  "affordances_status": "exported_from_physics_pending_review",
+  "execution_ready": false,
+  "proposal": null,
+  "bindings": [],
+  "candidates": [
+    {
+      "target_id": "link-block-4-3-2-1",
+      "height_m": 52.0,
+      "center_north_m": 350.0,
+      "center_east_m": 53.25,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    },
+    {
+      "target_id": "link-block-4-3-3-2",
+      "height_m": 52.0,
+      "center_north_m": 432.0,
+      "center_east_m": 179.75,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    }
+  ],
+  "warnings": [
+    "Object coordinates are reference geometry, not approved flight waypoints.",
+    "No route, obstacle clearance, timing, energy or payload feasibility was checked.",
+    "Physical export is pending provider review.",
+    "Affordance coverage is incomplete."
+  ],
+  "status": "clarification_required",
+  "accepted": false,
+  "reason_code": "AMBIGUOUS_HIGHEST_BUILDING",
+  "matched_text": "最高的那栋楼",
+  "clarification_question": "最高建筑并列；请指定目标建筑 ID。"
+}

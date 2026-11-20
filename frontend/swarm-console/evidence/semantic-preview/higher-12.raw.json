@@ -1,0 +1,58 @@
+{
+  "case": "higher-12",
+  "objective": "请登记已导出目录里，北侧首排东半幅比20米高12米的那栋楼。",
+  "model": "qwen3.5-0.8b-q4-lab",
+  "model_trace": {
+    "model_request": {
+      "phrase": "比20米高12米的那栋楼",
+      "candidates": [
+        {
+          "number": "1",
+          "labels": [
+            "32 米高的建筑"
+          ],
+          "description": "建筑的已导出高度为 32 米。"
+        },
+        {
+          "number": "2",
+          "labels": [
+            "22 米高的建筑"
+          ],
+          "description": "建筑的已导出高度为 22 米。"
+        }
+      ]
+    },
+    "prompt_sha256": "d1b047571bfa0d77935c8c595281420a29dc0c80b1315ec4793d50ddab5dbaa7",
+    "schema_sha256": "61662d965db7ff6e51a9d3bafbe05a2b71349e05c02f8e5677748133712563f1",
+    "model_raw_response": "{\"choice\":\"1\"}",
+    "usage": {
+      "completion_tokens": 6,
+      "prompt_tokens": 170,
+      "total_tokens": 176,
+      "prompt_tokens_details": {
+        "cached_tokens": 87
+      }
+    },
+    "model_reported": "qwen3.5-0.8b-q4-lab"
+  },
+  "rows": [
+    {
+      "entity_id": "link-block-4-3-2-0",
+      "height_m": 32.0,
+      "center_east_m": 53.25,
+      "center_north_m": 268.0
+    },
+    {
+      "entity_id": "link-block-4-3-3-0",
+      "height_m": 22.0,
+      "center_east_m": 179.75,
+      "center_north_m": 268.0
+    }
+  ],
+  "expected": "link-block-4-3-2-0",
+  "model_choice": "link-block-4-3-2-0",
+  "verified": true,
+  "status": "bound",
+  "catalog_content_sha256": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+  "execution_authorized": false
+}

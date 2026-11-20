@@ -175,6 +175,9 @@ GET  /api/simulation/status
 ## 当前已接入的按钮
 
 - `任务规划 -> 生成请求`：调用 `/api/planner/plan-mission`。
+- `任务规划 -> 离线算法证据 · 只读预览`：可加载规则样例、选择「模型实测回放（不触发推理）」或导入 `*.preview.json`。「三维集群态势」在现有三维窗旁显示同一份证据，也可从那里切换。回放只读静态文件，试测者只需启动本页，不需要模型、Runtime 或三维服务。
+  - 模型回放源于本地 Qwen3.5-0.8B 的三条录制响应：32 米题核对通过，22 米和目录范围内无 47 米匹配的两题被挡下。展开「来源与限定条件」可查看证据文件名、目录版本和 SHA-256；同目录的 `*.raw.json` 保留实际模型输入及原始响应。
+  - 「并列澄清」「明确实体后的绑定」是离线规则样例，模型未运行。所有记录均使用 `simple_recon_v0_1 / simple_recon_v0_1-map-1` 的待审核物理导出目录；预览不标注实时地图，不生成航线或动作，也不构成执行授权。
 - `Adapter / Backend -> Check Backend`：调用 `/api/backend/check`。
 - `飞行控制与 Runtime -> 正式起飞`：调用 `/api/actions/takeoff`。
 - `飞行控制与 Runtime -> Smoke Test`：调用 `/api/actions/smoke-takeoff`，与人工起飞明确分开。

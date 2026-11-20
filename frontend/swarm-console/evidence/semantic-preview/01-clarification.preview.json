@@ -1,0 +1,41 @@
+{
+  "kind": "uavswarm-semantic-preview",
+  "schema_version": "0.1",
+  "execution_authorized": false,
+  "source": {
+    "kind": "offline_scene_reference",
+    "model_executed": false,
+    "evidence_file": "01-clarification.raw.json",
+    "evidence_sha256": "1603d7dd0503dcfeb08434d068de90b47e2695abdfecbcc30e868f865366fef3",
+    "catalog_file": "docs/fixtures/simple_recon_v0_1_scene_affordances.json",
+    "catalog_content_sha256": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+    "catalog_review_status": "exported_from_physics_pending_review"
+  },
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "objective": "请标记最高的那栋楼。",
+  "status": "clarify",
+  "reason_code": "AMBIGUOUS_HIGHEST_BUILDING",
+  "bindings": [],
+  "candidates": [
+    {
+      "entity_id": "link-block-4-3-2-1",
+      "entity_kind": "building",
+      "height_m": 52,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    },
+    {
+      "entity_id": "link-block-4-3-3-2",
+      "entity_kind": "building",
+      "height_m": 52,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    }
+  ],
+  "clarification_question": "最高建筑并列；请指定目标建筑 ID。",
+  "limitations": [
+    "Object coordinates are reference geometry, not approved flight waypoints.",
+    "No route, obstacle clearance, timing, energy or payload feasibility was checked.",
+    "Physical export is pending provider review.",
+    "Affordance coverage is incomplete."
+  ]
+}

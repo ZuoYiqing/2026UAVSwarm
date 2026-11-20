@@ -694,7 +694,21 @@ a.button {
 
 .twin-main { grid-template-columns: minmax(0, 1.42fr) minmax(280px, .58fr); }
 .twin-details { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
-.twin-nodes { grid-template-rows: auto 1fr; min-width: 0; }
+.twin-nodes { grid-template-rows: auto auto 1fr; min-width: 0; }
+.semantic-preview { min-width: 0; overflow-wrap: anywhere; }
+.semantic-preview-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.semantic-preview-controls .field { margin: 0; max-width: 100%; min-width: 0; }
+.semantic-preview-controls select { max-width: 100%; }
+.semantic-preview-controls input[type="file"] { width: 100%; }
+.semantic-preview p { margin: 6px 0; }
+.semantic-preview-entities { margin: 8px 0; padding-left: 18px; }
+.semantic-preview-entities li + li { margin-top: 5px; }
+.semantic-preview summary { cursor: pointer; color: var(--cyan); }
+.semantic-preview-source { margin: 8px 0; }
+.semantic-preview-source dt { color: var(--muted); }
+.semantic-preview-source dd { margin: 0 0 4px; }
+.twin-nodes .semantic-preview-provenance { max-height: 185px; overflow: auto; }
+
 .twin-nodes .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .twin-nodes .metric { min-width: 0; padding-inline: 8px; }
 
@@ -1272,6 +1286,9 @@ a.button {
   min-height: 0;
   flex: 1;
 }
+
+.semantic-planning-page { height: auto; }
+.semantic-planning-previews { grid-template-rows: auto auto 1fr; min-width: 0; }
 
 .three-main {
   display: grid;
