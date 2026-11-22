@@ -1,0 +1,58 @@
+{
+  "kind": "uavswarm-offline-target-review-example",
+  "scope": "fake_adapter_only",
+  "evidence_origin": "synthetic_test_fixture",
+  "baseline": "2d01ffc889d70e64f74391a5dce6f8eadd77ce38",
+  "execution_authorized": false,
+  "capture_source": {
+    "commit": "6952513e8ee8482d7cf48e364603b2893909dbfe",
+    "path": "docs/simulation/fixtures/simple_recon_v0_1_target_001_capture_v1.json",
+    "content_sha256": "caf93b5f03e94187c469a608c2cdb2e334f8fb564ba86982a0cca59731e129c5"
+  },
+  "binding": {
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "plan_id": "fake-target-001-patrol-v1",
+    "runtime_run_id": "fixture-runtime-run-1",
+    "arrival_step_id": "goto-1",
+    "proposed_observe_step_id": "observe-01",
+    "node_id": "UAV-02",
+    "target_id": "target-001",
+    "capture_request_id": "fixture-capture-request-1",
+    "gazebo_run_id": "fixture-gazebo-run-1",
+    "image_sim_stamp_ns": 30033000000,
+    "capture_id_origin": "derived_fixture_only",
+    "iso_time_origin": "synthetic_epoch_2000_plus_simulation_offset"
+  },
+  "review": {
+    "review_version": "0.1",
+    "review_id": "rev-6b0fd6110cade0c1",
+    "created_at": "2000-01-01T00:00:31.000Z",
+    "task_id": "TASK-target-001",
+    "target_id": "target-001",
+    "capture_id": "cap-11f8579bf75d7dd8",
+    "image": {
+      "ref": "sha256:3a11c372e38c0b7241bef450ac072818f18d678f201f3d75493098c53d84a353",
+      "sha256": "3a11c372e38c0b7241bef450ac072818f18d678f201f3d75493098c53d84a353",
+      "width": 1280,
+      "height": 960,
+      "encoding": "RGB8",
+      "captured_at": "2000-01-01T00:00:30.033Z",
+      "vehicle_id": "UAV-02",
+      "camera_id": "/world/simple_recon_v0_1/model/x500_mono_cam_1/link/camera_link/sensor/camera"
+    },
+    "criterion_version": "target-001-green-disk-pixels-v0.1",
+    "reviewer": "human:fixture-reviewer",
+    "reviewed_at": "2000-01-01T00:00:31.000Z",
+    "outcome": "undetermined",
+    "confidence": null,
+    "linked_task_completion": "not_asserted",
+    "note": "离线合成反例：整帧是交替色条，没有可辨认的绿色圆盘和轮廓，无法确认目标是否在画面；不推断目标不存在。"
+  },
+  "expected": {
+    "capture": "fixture_valid",
+    "observation": "undetermined",
+    "advance_observe_step": false,
+    "linked_task_completion": "not_asserted"
+  }
+}
