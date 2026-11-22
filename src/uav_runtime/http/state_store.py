@@ -133,6 +133,7 @@ class RuntimeStateStore:
         self._backend_status_by_node: dict[str, dict[str, Any]] = {}
         self._latest_plan: dict[str, Any] | None = None
         self._plans: dict[str, dict[str, Any]] = {}
+        self._plan_executions: dict[str, dict[str, Any]] = {}
         self._recent_events: list[dict[str, Any]] = []
         self._recent_policy: list[dict[str, Any]] = []
         self._actions: list[dict[str, Any]] = []
@@ -143,6 +144,36 @@ class RuntimeStateStore:
         self._ground_reference_binding: dict[str, Any] | None = None
         self._coordinate_calibrations: dict[str, dict[str, Any]] = {}
         self._landing_sites: dict[str, dict[str, Any]] = {}
+
+    def claim_plan_execution(self, plan_id: str, fingerprint: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Process-local duplicate suppression; never authorizes or resumes a flight."""
+        encoded = json.dumps(fingerprint, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        with self._lock:
+            prior = self._plan_executions.get(plan_id)
+            if prior is not None:
+                if prior["fingerprint"] != encoded:
+                    raise ActionLifecycleError("plan_id_conflict", details={"plan_id": plan_id})
+                result = prior["result"]
+                if result is not None:
+                    return copy.deepcopy(result), False
+                return {
+                    "result": "running", "plan": copy.deepcopy(fingerprint["plan"]),
+                    "run_id": prior.get("run_id"), "execution_mode": "real",
+                    "step_outcomes": [], "_http_status": 202,
+                }, False
+            self._plan_executions[plan_id] = {"fingerprint": encoded, "result": None}
+            return {}, True
+
+    def bind_plan_run(self, plan_id: str, run_id: str) -> None:
+        with self._lock:
+            self._plan_executions[plan_id]["run_id"] = run_id
+
+    def finish_plan_execution(self, plan_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            entry = self._plan_executions[plan_id]
+            receipt = {**result, "run_id": entry.get("run_id")}
+            entry["result"] = copy.deepcopy(receipt)
+            return receipt
 
     def mark_collector_started(self, *, endpoint: str) -> None:
         with self._lock:

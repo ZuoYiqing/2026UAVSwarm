@@ -1,0 +1,25 @@
+{
+  "fixture_only": true,
+  "description": "Read-only geometry excerpts for a synthetic equipment inspection. No executable plan, authorization, observations or inspection result.",
+  "context": {
+    "mission_id": "fixture-equipment-inspection",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "coordinate_frame": "scene_ned",
+    "waypoints": [
+      {"waypoint_id": "fixture-panel-a", "position_m": {"north_m": 12, "east_m": 18, "down_m": -5}},
+      {"waypoint_id": "fixture-panel-b", "position_m": {"north_m": 20, "east_m": 18, "down_m": -5}}
+    ]
+  },
+  "proposal": {
+    "mission_id": "fixture-equipment-inspection",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "coordinate_frame": "scene_ned",
+    "status": "proposed",
+    "execution_authorized": false,
+    "assignments": [
+      {"task_id": "fixture-panel-inspection", "node_id": "UAV-02", "waypoint_ids": ["fixture-panel-a", "fixture-panel-b"]}
+    ]
+  }
+}

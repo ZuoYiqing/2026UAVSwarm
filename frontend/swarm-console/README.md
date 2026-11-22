@@ -54,6 +54,21 @@ Runtime 启动时设置 `UAV_RUNTIME_DEMO_ENABLED=1` 并接入有可选载具的
 
 Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/state`。显式启用 Runtime 演习后，可从首屏选中载具并发出 DEMO 注入或清除请求。注入分与实测分分别显示，模拟处置与分配记录标为 DEMO。默认 API 地址仍为 `http://127.0.0.1:8765/api`。
 
+## 设备巡检的离线验收
+
+| 阶段 | 输入与显示 |
+| --- | --- |
+| Runtime 模板预览 | 把任务原话以 `dry_run: true` 提交到 `/api/planner/plan-mission`。显示固定模板步骤和对应的预检回执。 |
+| 可校验计划候选 | 等待算法提供已校验的场景版本、载具和航点。DOM 测试使用内存接口桩按任务原话返回导航候选，供操作员确认。 |
+| 人工确认与执行 | 测试桩先展示候选航点，再由操作员填写 ID 并确认。提交体沿用 `{ plan, operator_id, decision: "approve" }`，Runtime 的准入、Policy 和动作生命周期保留在服务端验收中。 |
+| Runtime 进度 | LIVE 首页和大屏消费 `GET /api/mission/progress` 的 `runtime_plan_executor` 记录。无任务、读取失败和缺少身份字段分别显示，旧进度停止显示。 |
+
+进度关联使用 `mission_id = plan_id`、`run_id`、`scene_id` 和 `map_version`。Runtime 本地提交 `9398b10` 在执行回执提供与进度相同的 `run_id`。基线 `6a680fe` 的回执缺少该字段，规划页因此显示无法关联。航点百分比依照 Runtime 的已验证到达计数，覆盖率依照同场景同地图的覆盖样本。航点 100% 时仍按 Runtime 单独上报的执行状态展示。
+
+在主控台目录运行 `node --test tests/mission-dashboard.test.js`。用例使用 [target-001 导航测试桩证据](tests/fixtures/equipment-inspection-lifecycle.json)。证据来自 `9398b10` 的 `test_plan_execution_progress_fake.py` 内存调度与假动作传输，使用仿真场景参考 `f6e5a1a`，并为覆盖试验显式配置区域 `three-uav-patrol-coverage-v1` 和 10 m 的夹具采样半径。证据包含完整运行、到达超时、未执行以及落地前航点全部到达的进度返回。普通浏览器入口提供模板预览和只读进度，执行控件仅由测试桩注入。
+
+算法本地提交 `d752354` 已提供可复核的分工与航点候选，设备巡检中的 `OBSERVE` 在转换时明确受阻。导航测试桩的通过只证明导航、进度和失败显示。设备观测能力及其执行映射需由算法与 Runtime 共同确认，真实仿真验收还需同版本场景及当次有效标定。
+
 ## 页面
 
 - 总览驾驶舱
