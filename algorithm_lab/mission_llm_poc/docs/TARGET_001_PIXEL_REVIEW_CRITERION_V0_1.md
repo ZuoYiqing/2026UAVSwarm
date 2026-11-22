@@ -58,3 +58,42 @@ python -B algorithm_lab/mission_llm_poc/scripts/check_target_001_review_fixture.
 
 预计得到 `cap-11f8579bf75d7dd8` / `rev-6b0fd6110cade0c1`，验证结果是
 `fixture_valid` 与 `undetermined` 同时成立。
+
+## 可复核的合成正例
+
+[正例标注](../examples/target_001_visible_pixel_annotation_v0_1.json) 引用仿真本地提交
+`940a9d93a74e1fa98d312a39969f8e220212d107` 的原 PNG 和对应清单。原图下部中央只有一个
+完整绿色实心椭圆，记录原像素框 `(500,736,281,121)` 和可供人工复核的理由。PNG 文件
+与解码后的 RGB8 分别算哈希，图像、采集和 Runtime run 身份均与旧色条反例不同。
+这只是一份可复核标注：`observed` 是合成条件下的**预期**，`review_record` 仍为
+`null`。没有签发人工结论就仍是观察未判定，不改变任务或收尾，也不证明现场相机成像。
+
+可用本机已安装的 Pillow 做独立解码验证；没装时可在仿真分支运行其
+`tests/unit/test_target_001_visible_capture_fixture.py`（不请求安装依赖）。
+从本算法短分支仓库根目录运行：
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -B algorithm_lab/mission_llm_poc/scripts/check_target_001_visible_annotation.py --simulation-root 'D:/2026UAVSwarm-worktrees/simulation-observation-positive'
+```
+
+## 观察失败后的 Fake 收尾验收断言
+
+这组断言给 Runtime 测试使用，不新增线上状态或权限：
+
+- `OBSERVE` 超时或失败后，保留任务失败及原始原因，后续名义任务步骤不推进。
+  合格采集后 `undetermined/not_observed` 不算观察完成；复核记录本身不执行或授权收尾。
+- 收尾独立于原计划的剩余步骤，仍需从 Runtime 自己的授权和 Policy 路径进入。
+  Runtime 的本地 Fake 实现（`4df1408`）要求本节点、同计划/run 与同标定会话下的新鲜且对齐的证据，
+  同时确认 landed、disarmed 和已标定的近地判据 `at_ground`。已证实收尾也不改变原任务失败，
+  不补报后续动作成功。
+- 普通 `LAND` 处在 pending、只有 ACK、只证实落地或只证实解锁关闭、证据陈旧、
+  错节点或错 run，均不能报「收尾已证实」。超出 Fake 收尾验证窗口后缺证据，应保留收尾
+  未证实及原因，不将其当作任务完成。双向对照更换 L2 为 `observed` 且
+  `linked_task_completion:not_asserted` 时，不能因此得到收尾授权或把任一结论补为成功。
+
+分别在 Runtime 的两个独立工作树复跑：`e26cc23` 的
+`tests/integration/test_observe_offline_evidence_handoff.py` 用固定色条/未判定夹具，31 通过；
+`4df1408` 的 `tests/integration/test_observe_failure_cleanup_fake.py`，35 通过。
+后者还覆盖了「航点全到达但任务失败」：`completion_basis=verified_waypoints` 时的 100% 只是航点到达率，
+不能当巡检完成率，也不证明收尾；收尾状态另看对应证据。本次没有接生产收尾执行链路或写入 Runtime。
