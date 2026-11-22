@@ -1,0 +1,62 @@
+{
+  "format": "uavswarm-offline-capture-evidence-fixture",
+  "version": "1.0",
+  "status": "proposal",
+  "source_baseline": "2d01ffc889d70e64f74391a5dce6f8eadd77ce38",
+  "evidence_origin": "synthetic_test_fixture",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "world_sha256_scheme": "sha256-lf-v1",
+  "world_sha256": "9086de5bea22ae0470fe76f6b06cf9e73b6ac9bdf96477c2171ae304a7b575fa",
+  "target_id": "target-001",
+  "arrival": {
+    "plan_id": "fake-target-001-patrol-v1",
+    "runtime_run_id": "fixture-runtime-run-1",
+    "step_id": "goto-1",
+    "node_id": "UAV-02",
+    "arrival_observed": true,
+    "position_scene_ned_m": {"north_m": 30, "east_m": 25, "down_m": -6}
+  },
+  "capture_request": {
+    "request_id": "fixture-capture-request-1",
+    "gazebo_run_id": "fixture-gazebo-run-1",
+    "gazebo_model_entity_id": 202,
+    "after_sim_stamp_ns": 30000000000,
+    "requested_monotonic_ns": 1000000000
+  },
+  "proposal_limits": {
+    "max_receive_age_wall_ns": 500000000,
+    "max_pose_skew_sim_ns": 100000000,
+    "max_camera_info_skew_sim_ns": 100000000
+  },
+  "sample": {
+    "request_id": "fixture-capture-request-1",
+    "gazebo_run_id": "fixture-gazebo-run-1",
+    "gazebo_model_entity_id": 202,
+    "image_topic": "/world/simple_recon_v0_1/model/x500_mono_cam_1/link/camera_link/sensor/camera/image",
+    "camera_info_topic": "/world/simple_recon_v0_1/model/x500_mono_cam_1/link/camera_link/sensor/camera/camera_info",
+    "image_sim_stamp_ns": 30033000000,
+    "pose_sim_stamp_ns": 30032000000,
+    "camera_info_sim_stamp_ns": 30033000000,
+    "received_monotonic_ns": 1130000000,
+    "checked_monotonic_ns": 1180000000,
+    "body_pose_enu": {"position_m": [25, 30, 6], "orientation_xyzw": [0, 0, 1, 0]},
+    "camera_frame": "camera_link",
+    "width": 1280,
+    "height": 960,
+    "row_stride_bytes": 3840,
+    "encoding": "RGB8",
+    "intrinsics_k": [539.93633, 0, 640, 0, 539.93637, 480, 0, 0, 1],
+    "synthetic_rows_rgb": [[20, 40, 60], [60, 40, 20]],
+    "payload_sha256": "3a11c372e38c0b7241bef450ac072818f18d678f201f3d75493098c53d84a353",
+    "image_ref": "sha256:3a11c372e38c0b7241bef450ac072818f18d678f201f3d75493098c53d84a353"
+  },
+  "positive_expected": {"arrival": "arrived", "capture": "fixture_valid", "observation": "undetermined"},
+  "negative_case": {
+    "name": "same_hash_and_timestamp_but_another_vehicle_topic",
+    "override_sample": {
+      "image_topic": "/world/simple_recon_v0_1/model/x500_mono_cam_0/link/camera_link/sensor/camera/image"
+    },
+    "expected": {"arrival": "arrived", "capture": "image_source_mismatch", "observation": "undetermined"}
+  }
+}
