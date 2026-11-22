@@ -380,6 +380,57 @@ test("the fixture binds an explicitly approved candidate to the Runtime run and 
   assert.match(h.run("missionMapPanel()"), /· 失败.*1 \/ 5 个航点/s);
 });
 
+test("LIVE overview and stage reject contradictory area evidence and retain verified waypoints", () => {
+  const report = inspection.completed_run.first_arrival;
+  const { coverage } = report;
+  const coveredRate = report.coverage_pct.toFixed(2) + "%";
+  const conflicts = {
+    foreignReport: { ...report, map_version: "foreign-map" },
+    foreignArea: { ...report, area_id: "another-area" },
+    topLevelArea: { ...report, area_covered_km2: report.area_covered_km2 * 2 },
+    topLevelRate: { ...report, coverage_pct: 99 },
+    reportRate: { ...report, coverage: { ...coverage, completion_pct: 99 } },
+    foreignGrid: { ...report, coverage: { ...coverage, grid: { ...coverage.grid, map_version: "foreign-map" } } },
+    inconsistentCells: { ...report, coverage: { ...coverage, grid: { ...coverage.grid, covered_cells: [] } } },
+  };
+  const summaryOnly = {
+    ...report, coverage_pct: null, coverage: { ...coverage, completion_pct: null, grid: null },
+  };
+  const observedZero = {
+    ...report, area_covered_km2: 0, coverage_pct: 0,
+    coverage: { ...coverage, area_covered_km2: 0, completion_pct: 0, grid: { ...coverage.grid, covered_cells: [] } },
+  };
+
+  for (const href of ["http://127.0.0.1:5178/", "http://127.0.0.1:5178/?mode=stage&source=live"]) {
+    const h = harness(href);
+    const render = value => {
+      h.run(`state.apiStatus="live"; updateMissionDashboard({ missionProgress: { status: "fulfilled", value: ${JSON.stringify(value)} } });`);
+      if (!href.includes("mode=stage")) return h.run("overviewPage()");
+      h.run("renderStage()");
+      return h.html("stage-content");
+    };
+
+    const matching = render(report);
+    assert.ok(matching.includes(`面积覆盖率</span><b>${coveredRate}</b>`));
+    assert.match(matching, /mission-coverage-grid/);
+    const noGrid = render(summaryOnly);
+    assert.ok(noGrid.includes(`面积覆盖率</span><b>${coveredRate}</b>`));
+    assert.doesNotMatch(noGrid, /mission-coverage-grid/);
+    const validZero = render(observedZero);
+    assert.ok(validZero.includes("面积覆盖率</span><b>0%</b>"));
+    assert.match(validZero, /已有观测，当前没有覆盖记录/);
+
+    for (const [issue, conflicting] of Object.entries(conflicts)) {
+      const html = render(conflicting);
+      assert.ok(html.includes("面积覆盖率</span><b>—</b>"), `${issue} on ${href}`);
+      assert.match(html, /1 \/ 5 个航点/);
+      assert.doesNotMatch(html, /mission-coverage-grid/);
+      assert.equal(h.run("state.mission.areaCovered"), null);
+      assert.equal(h.run("state.mission.areaTotal"), null);
+    }
+  }
+});
+
 test("the planning fixture refuses ambiguous, unsupported and cross-map candidates before approval", async () => {
   const h = inspectionConsole();
   h.run('setTemplatePlanObjective("巡检模拟设备")');
