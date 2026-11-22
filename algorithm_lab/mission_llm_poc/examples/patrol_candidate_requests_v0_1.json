@@ -1,0 +1,7 @@
+[
+  {"objective":"请巡检模拟冷却泵和模拟仪表柜。","scene_id":"simple_recon_v0_1","map_version":"simple_recon_v0_1-map-1","fixture_evidence_id":"offline-equipment-inspection-v0.1"},
+  {"objective":"请巡检模拟仪表柜。","scene_id":"simple_recon_v0_1","map_version":"simple_recon_v0_1-map-1","fixture_evidence_id":"offline-equipment-inspection-v0.1"},
+  {"objective":"请巡检模拟设备。","scene_id":"simple_recon_v0_1","map_version":"simple_recon_v0_1-map-1","fixture_evidence_id":"offline-equipment-inspection-v0.1"},
+  {"objective":"请巡检模拟冷却泵。","scene_id":"simple_recon_v0_1","map_version":"simple_recon_v0_1-map-1"},
+  {"objective":"仅验证绿色场景标记的模拟移动，不判定巡检。","scene_id":"simple_recon_v0_1","map_version":"simple_recon_v0_1-map-1","fixture_evidence_id":"offline-equipment-inspection-v0.1"}
+]
