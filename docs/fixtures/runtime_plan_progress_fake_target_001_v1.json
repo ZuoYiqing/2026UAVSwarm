@@ -1,0 +1,352 @@
+{
+  "evidence_kind": "isolated_fake_adapter_not_flight_or_sensor_inspection",
+  "baseline": "6a680feb6e50bdc7729e3ded6069cce6c0928dd3",
+  "execution_authorized": false,
+  "network_io": "forbidden",
+  "plan_request_used_in_test": {
+    "plan": {
+      "plan_id": "fake-target-001-patrol-v1",
+      "intent_id": "equipment-inspection-fixture",
+      "mission_type": "equipment_inspection_navigation_only",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "explanation": "Fake navigation to target-001 visual marker; NOT sensor inspection.",
+      "steps": [
+        {
+          "step_id": "takeoff",
+          "node_id": "UAV-02",
+          "action_type": "takeoff",
+          "params": {
+            "altitude_m": 6
+          }
+        },
+        {
+          "step_id": "goto-0",
+          "node_id": "UAV-02",
+          "action_type": "goto",
+          "params": {
+            "north_m": 0,
+            "east_m": 25,
+            "down_m": -6,
+            "arrival_tolerance_m": 0.5,
+            "hold_s": 0.5
+          }
+        },
+        {
+          "step_id": "goto-1",
+          "node_id": "UAV-02",
+          "action_type": "goto",
+          "params": {
+            "north_m": 30,
+            "east_m": 25,
+            "down_m": -6,
+            "arrival_tolerance_m": 0.5,
+            "hold_s": 0.5
+          }
+        },
+        {
+          "step_id": "goto-2",
+          "node_id": "UAV-02",
+          "action_type": "goto",
+          "params": {
+            "north_m": 30,
+            "east_m": 15,
+            "down_m": -6,
+            "arrival_tolerance_m": 0.5,
+            "hold_s": 0.5
+          }
+        },
+        {
+          "step_id": "goto-3",
+          "node_id": "UAV-02",
+          "action_type": "goto",
+          "params": {
+            "north_m": 30,
+            "east_m": 25,
+            "down_m": -6,
+            "arrival_tolerance_m": 0.5,
+            "hold_s": 0.5
+          }
+        },
+        {
+          "step_id": "goto-4",
+          "node_id": "UAV-02",
+          "action_type": "goto",
+          "params": {
+            "north_m": 0,
+            "east_m": 25,
+            "down_m": -6,
+            "arrival_tolerance_m": 0.5,
+            "hold_s": 0.5
+          }
+        },
+        {
+          "step_id": "land",
+          "node_id": "UAV-02",
+          "action_type": "land",
+          "params": {}
+        }
+      ]
+    },
+    "operator_id": "fake-acceptance-operator",
+    "decision": "approve"
+  },
+  "progress_before_execution": {
+    "contract_version": "1.0",
+    "status": "unavailable",
+    "mode": "LIVE",
+    "source": "runtime_plan_executor",
+    "mission_id": null,
+    "run_id": null,
+    "scene_id": null,
+    "map_version": null,
+    "source_timestamp": null,
+    "completion_basis": null,
+    "completion_pct": null,
+    "waypoints_reached": null,
+    "waypoints_total": null,
+    "area_total_km2": null,
+    "area_covered_km2": null,
+    "coverage_pct": null,
+    "targets_found": null,
+    "targets_total": null,
+    "degraded": null,
+    "vehicles_active": null,
+    "vehicles": [],
+    "coverage": null,
+    "coverage_reason": null,
+    "reason": "no_runtime_plan_execution"
+  },
+  "progress_during_execution": [
+    {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "25238d3040434bcd8af10afb16528c65",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:44:59.703898+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 0,
+      "waypoints_reached": 0,
+      "waypoints_total": 5,
+      "area_total_km2": null,
+      "area_covered_km2": null,
+      "coverage_pct": null,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 0,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": null,
+      "coverage_reason": "coverage_not_configured",
+      "reason": null
+    },
+    {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "25238d3040434bcd8af10afb16528c65",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:44:59.734011+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 40,
+      "waypoints_reached": 2,
+      "waypoints_total": 5,
+      "area_total_km2": null,
+      "area_covered_km2": null,
+      "coverage_pct": null,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 2,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": null,
+      "coverage_reason": "coverage_not_configured",
+      "reason": null
+    },
+    {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "25238d3040434bcd8af10afb16528c65",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:44:59.771631+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 100,
+      "waypoints_reached": 5,
+      "waypoints_total": 5,
+      "area_total_km2": null,
+      "area_covered_km2": null,
+      "coverage_pct": null,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 5,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": null,
+      "coverage_reason": "coverage_not_configured",
+      "reason": null
+    }
+  ],
+  "progress_after_execution": {
+    "contract_version": "1.0",
+    "status": "completed",
+    "mode": "LIVE",
+    "source": "runtime_plan_executor",
+    "mission_id": "fake-target-001-patrol-v1",
+    "run_id": "25238d3040434bcd8af10afb16528c65",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "source_timestamp": "2026-11-22T08:44:59.780069+00:00",
+    "completion_basis": "verified_waypoints",
+    "completion_pct": 100,
+    "waypoints_reached": 5,
+    "waypoints_total": 5,
+    "area_total_km2": null,
+    "area_covered_km2": null,
+    "coverage_pct": null,
+    "targets_found": null,
+    "targets_total": null,
+    "degraded": false,
+    "vehicles_active": 0,
+    "vehicles": [
+      {
+        "node_id": "UAV-02",
+        "active": false,
+        "waypoints_reached": 5,
+        "waypoints_total": 5
+      }
+    ],
+    "coverage": null,
+    "coverage_reason": "coverage_not_configured",
+    "reason": null
+  },
+  "waypoints_reached_at_each_backend_call": [
+    0,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "execution_receipt_projection": {
+    "result": "completed",
+    "plan": {
+      "plan_id": "fake-target-001-patrol-v1"
+    },
+    "run_id": "25238d3040434bcd8af10afb16528c65",
+    "execution_mode": "real"
+  },
+  "duplicate_receipt_projection": {
+    "result": "completed",
+    "run_id": "25238d3040434bcd8af10afb16528c65",
+    "idempotent_replay": true
+  },
+  "step_evidence_projection": [
+    {
+      "step_id": "takeoff",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_930dbf7bf766",
+      "request_id": "plan-step-230db5171c4cb21052b2df8ee72b3a20e391d9bef81c0b167e978f8387078bc5",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": null
+    },
+    {
+      "step_id": "goto-0",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_0cca2ff4cdc4",
+      "request_id": "plan-step-bde9eb39a6db90c559884b472acbf892483220083c879ee3150968ae1d167d57",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": true
+    },
+    {
+      "step_id": "goto-1",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_9bcef7cbd8e6",
+      "request_id": "plan-step-1f0aacd5a04034a08acb6709b7972917d86d298395e76c37476371179ae0c9d3",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": true
+    },
+    {
+      "step_id": "goto-2",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_bf6b932a38e7",
+      "request_id": "plan-step-0f2c556171e2df818f053c53f7b9da6e982c7547b5e2e18c9cd807d39713b8ac",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": true
+    },
+    {
+      "step_id": "goto-3",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_0a7bfc696586",
+      "request_id": "plan-step-b34a3ee6e14405f2a7ae7362af8f46a71e3efdc9ede6bfb0986f89dc67bbce55",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": true
+    },
+    {
+      "step_id": "goto-4",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_18876b0278ff",
+      "request_id": "plan-step-80eb3d8f69c2beac7e506380b505af952d802612fa020ae1f4cc44b4fe4022fb",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": true
+    },
+    {
+      "step_id": "land",
+      "node_id": "UAV-02",
+      "ok": true,
+      "action_id": "act_32cb3d0d4fb4",
+      "request_id": "plan-step-d6918fb86414d465b543e65f9bc4e9bcec5764e73278b64b483ccfb5863dcaf6",
+      "trace_id": "plan-19e472204f3b9dd559a7ef8e8cc70c8d9f0eef8a2584de9a0ab6415bc7e0ec8f",
+      "lifecycle_status": "succeeded",
+      "arrival_observed": null
+    }
+  ],
+  "policy_allow_count": 7,
+  "peers_untouched": true,
+  "active_actions_after": [],
+  "backend_calls_after_duplicate": 7
+}

@@ -47,8 +47,9 @@ def exercise_current_mission(request, monkeypatch, tmp_path):
 
     monkeypatch.setattr(routes, "RealActionExecutor", lambda **kwargs: SimpleNamespace(execute_step=execute))
     plan = {"plan_id": "r3-coverage-api-check", "scene_id": scene["scene_id"], "map_version": scene["map_version"],
-            "steps": [{"step_id": f"wp{i}", "action_type": "goto", "node_id": "UAV-02", "params": {}}
-                      for i in range(len(points))]}
+            "steps": [{"step_id": f"wp{i}", "action_type": "goto", "node_id": "UAV-02",
+                       "params": {"north_m": n, "east_m": e, "down_m": -3}}
+                      for i, (n, e) in enumerate(points)]}
     result = request("POST", "/api/plans/execute", {"plan": plan, "operator_id": "fixture-operator", "decision": "approve"})
     assert result["result"] == "completed"
     return unavailable, observed, request("GET", PROGRESS)

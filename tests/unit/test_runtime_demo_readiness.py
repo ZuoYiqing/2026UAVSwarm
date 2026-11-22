@@ -340,7 +340,8 @@ def test_plan_route_publishes_progress_between_existing_steps(monkeypatch, tmp_p
     monkeypatch.setattr(routes, "RealActionExecutor", lambda **kw: SimpleNamespace(execute_step=execute))
     plan = {
         "plan_id": "observed-mission", "scene_id": GROUND["scene_id"], "map_version": GROUND["map_version"],
-        "steps": [{"step_id": f"wp{i}", "action_type": "goto", "node_id": "UAV-02", "params": {}}
+        "steps": [{"step_id": f"wp{i}", "action_type": "goto", "node_id": "UAV-02",
+                   "params": {"north_m": i, "east_m": 8, "down_m": -3}}
                   for i in range(2)],
     }
     code, result = routes.dispatch("POST", "/api/plans/execute",

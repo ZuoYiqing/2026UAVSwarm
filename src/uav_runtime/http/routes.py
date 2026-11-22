@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
+from uav_runtime.agent import executor as plan_execution
 from uav_runtime.agent.executor import RealActionExecutor
 from uav_runtime.agent.lifecycle import PlanApproval, PlanExecutionController, PlanStatus
 from uav_runtime.agent.planner import (
@@ -853,6 +854,29 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     the response names the failing step and the ones that never ran.
     """
     req = PlanExecuteRequest.from_json(payload)
+    try:
+        prior, created = RUNTIME_STATE_STORE.claim_plan_execution(req.plan["plan_id"], {
+            "plan": req.plan, "operator_id": req.operator_id, "decision": req.decision,
+        })
+    except ActionLifecycleError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise RequestValidationError("invalid_plan_json", "plan", "plan 必须为有限 JSON") from exc
+    if not created:
+        return {**prior, "idempotent_replay": True}
+    try:
+        result = _plans_execute_once(req)
+    except Exception as exc:
+        RUNTIME_STATE_STORE.finish_plan_execution(req.plan["plan_id"], {
+            "result": "failed", "failure_reason": "plan_execution_exception",
+            "error_class": type(exc).__name__, "plan": req.plan,
+            "execution_mode": "real", "step_outcomes": [],
+        })
+        raise
+    return RUNTIME_STATE_STORE.finish_plan_execution(req.plan["plan_id"], result)
+
+
+def _plans_execute_once(req: PlanExecuteRequest) -> dict[str, Any]:
     payload_plan = req.plan
 
     # --- 场景身份核对：在任何一步起飞之前 -------------------------------
@@ -882,6 +906,24 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
             "step_outcomes": [],
         }
 
+    # Validate every target before any step: a bad later node cannot permit
+    # partial takeoff on an earlier node.
+    if req.decision == "approve":
+        for raw in payload_plan["steps"]:
+            reason = _plan_step_rejection(raw)
+            if reason is None:
+                continue
+            result = {
+                "result": "blocked", "failure_reason": reason, "plan": payload_plan,
+                "execution_mode": "real", "step_outcomes": [],
+                "detail": {"step_id": raw["step_id"], "node_id": raw.get("node_id")},
+            }
+            RUNTIME_STATE_STORE.record_event({
+                "type": "agent_plan_rejected_preflight", "plan_id": payload_plan["plan_id"],
+                "failure_reason": reason, "detail": result["detail"], "timestamp": _utc_now(),
+            })
+            return result
+
     steps = [
         MissionPlanStep(
             step_id=str(raw["step_id"]),
@@ -906,7 +948,7 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
         # 用与动作链路同一个审计文件。注意这里**不能**用 rt：RuntimeOrchestrator
         # 是按次为单个动作构造的（见 _policy_checked_sitl_action），不是模块级对象。
         audit=AuditLog(AUDIT_PATH),
-        action_executor=RealActionExecutor(api_base=_self_api_base()),
+        action_executor=RealActionExecutor(api_base=_self_api_base(), plan_id=plan.plan_id),
     )
     loaded = controller.load_plan(plan)
     approval = PlanApproval.create(
@@ -944,6 +986,7 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     )
     controller.action_executor = progress
     with _MISSION_PROGRESS_LOCK:
+        RUNTIME_STATE_STORE.bind_plan_run(plan.plan_id, progress.run_id)
         _MISSION_PROGRESS = progress
     try:
         result = controller.execute_plan_real(approved, operator_id=req.operator_id)
@@ -954,6 +997,7 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     RUNTIME_STATE_STORE.record_event({
         "type": "agent_plan_execution_result", "timestamp": _utc_now(),
         "plan_id": plan.plan_id,
+        "run_id": progress.run_id,
         "mission_type": plan.mission_type,
         "operator_id": req.operator_id,
         "result": result.get("result"),
@@ -963,6 +1007,35 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     })
     RUNTIME_STATE_STORE.record_plan_result(result)
     return result
+
+
+def _plan_step_rejection(step: dict[str, Any]) -> str | None:
+    node = step.get("node_id", "")
+    if not node.strip():
+        return "step_target_vehicle_missing"
+    try:
+        handle = VEHICLE_REGISTRY.get_vehicle(node)
+    except VehicleRegistryError as exc:
+        return exc.code
+    if not handle.config.enabled:
+        return "vehicle_disabled"
+    action = step["action_type"].strip().lower()
+    try:
+        plan_execution.RealActionExecutor._require_endpoint(action)
+    except plan_execution.StepExecutionRefused as exc:
+        return exc.code
+    if action == "goto":
+        _, status = RUNTIME_STATE_STORE.coordinate_calibration(node)
+        if status != "calibrated":
+            return "coordinate_calibration_unavailable"
+        params = step.get("params", {})
+        if any(type(params.get(axis)) not in (int, float) for axis in ("north_m", "east_m", "down_m")):
+            return "goto_coordinates_required"
+        try:
+            GotoRequest.from_json({"node_id": node, **params})
+        except (RequestValidationError, OverflowError):
+            return "invalid_goto_parameters"
+    return None
 
 
 def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
@@ -998,8 +1071,7 @@ def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
         }
 
     # map_version 以当前节点的标定为准（它是坐标换算实际依据的那份地图版本）。
-    # 没有可用标定时不做判断 —— 那属于 coordinate_calibration_unavailable，
-    # 应由 goto 自己在执行时报告，不在这里冒充场景不匹配。
+    # 没有可用标定不冒充版本不匹配；计划预检和 GOTO 路由另行拒绝。
     node_ids = {str(step.get("node_id") or "") for step in plan.get("steps", [])}
     node_ids.discard("")
     for node_id in sorted(node_ids):
@@ -1016,7 +1088,6 @@ def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
                     "node_id": node_id,
                 },
             }
-        break
 
     return None
 
@@ -1295,7 +1366,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         result = return_home(payload)
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/plans/execute":
-        return 200, plans_execute(payload)
+        result = plans_execute(payload)
+        return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/simulation/evidence":
         result = publish_simulation_evidence(payload)
         if PLATFORM_GATEWAY is not None:
