@@ -1,5 +1,55 @@
 # Mission LLM Lab v0.1
 
+## 任务书到候选计划：隔离联调样例
+
+本样例固定于项目基线 `6a680fe`。它复用现有 Mission Context / Proposal v0.1：
+原话决定选择哪些目录设备，选中的设备才产生任务和航点。候选只给测试桩或隔离 Fake Adapter
+作输入；示例包装不是新冻结契约，`execution_authorized` 和 `runtime_submission_allowed`
+始终为 `false`。不启动模型、Runtime、仿真或执行链。
+
+| 输入 | 结果 |
+| --- | --- |
+| 请巡检模拟冷却泵和模拟仪表柜。 | UAV-01 负责泵、UAV-02 负责柜，各有两个夹具航点并保留 `OBSERVE` |
+| 请巡检模拟仪表柜。 | 只输出柜的两个航点和 UAV-02 分工，不生成泵的任务 |
+| 请巡检模拟设备。 | 目标有两个候选，`TARGET_AMBIGUOUS`，无部分计划 |
+| 有明确目标，但缺少夹具证据标识 | `FIXTURE_EVIDENCE_REQUIRED`，无计划 |
+
+样例标记 `simple_recon_v0_1 / simple_recon_v0_1-map-1`、共享 `scene_ned`。试验泵/柜、
+节点状态和航点不是物理场景导出或标定证据。任务分工只比较夹具里可用节点到入口的平面距离；
+电量是筛选阈值，不是续航估计。已过滤 stale 节点；任务任一不确定就不交部分结果。
+实际场景可供性清单仍不完整，本样例没有认证障碍物、禁飞区、几何间距、返航或相机能力。
+
+Runtime 的 `PlanExecuteRequest` 不直接收 `assignments[]`：执行形状需要
+`plan_id / scene_id / map_version / steps[]`，步骤需明确 `step_id / action_type / node_id / params`，
+并由独立入口负责人工确认和 Policy。现有 `proposalToPlan` 会查同一份 Context 的有序航点 ID；
+两份巡检候选都因为 `OBSERVE` 尚不可展开被**整份拒绝**。不删观察步骤把飞完当巡检完成。
+候选只要求后续提供采集证据；目前没有观测、检测结果或完工声明。
+
+另有**独立的仅移动用例**：`target-001` 是场景的绿色标记，不是真实设备或检测结果。
+Fake 夹具假定 UAV-02 已在起始点，仅验证两个有序 `goto` 的输入形状及 `plan_id` 关联，
+不含起飞、降落、返航、采集和观察。形状通过请求解析器时只使用内存里的 `decision=reject`，
+不构造可以直接提交的外层审批请求。真实执行入口不能凭额外的 `scope` 或
+`execution_authorized` 字段判断可执行；联调方必须把测试产物留在独立 Fake 入口。
+用例的 `plan_id` 可给 Runtime 的 `mission_id` 做关联，`run_id` 只能由实际的 Fake
+生命周期生成，算法不伪造。`completed` 也只能由对应执行阶段的证据产生。
+
+移动例的已在位起点和去程两点，与仿真侧本地提交 `f6e5a1a` 的离线参考一致；
+这个参考不作为本模块的依赖。起点不是 UAV-02 的实际起降点，也没有从起降点前往起点的
+首航段。该样例不能作为实机或 SITL 上机许可。
+前端和三维可把这些数据标为候选供审阅，但不能用候选点补载具位姿，也不能用轨迹经过目标、
+模型文本或测试报告补造任务进度。进度只消费同一次执行的 Runtime 证据。
+
+在本模块目录复现（新目录，文件不会覆盖）：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/patrol-fixture-check
+python -B -m uavswarm_llm_lab.patrol_candidate --input examples/patrol_candidate_requests_v0_1.json --output artifacts/patrol-fixture-check/candidates.json
+node scripts/check_patrol_candidate_mapping.mjs artifacts/patrol-fixture-check/candidates.json artifacts/patrol-fixture-check/mapping-proof.json
+$env:PYTHONPATH = 'src;../../src'
+python -B scripts/check_patrol_candidate_runtime_shape.py artifacts/patrol-fixture-check/candidates.json artifacts/patrol-fixture-check/mapping-proof.json artifacts/patrol-fixture-check/runtime-schema-proof.json
+```
+
 ## 离线协作评测（M-v0.1 / B-v0.2）
 
 这两套题分别测模拟巡检的异构派工，以及抽象记分游戏里的队友协作和对手响应。

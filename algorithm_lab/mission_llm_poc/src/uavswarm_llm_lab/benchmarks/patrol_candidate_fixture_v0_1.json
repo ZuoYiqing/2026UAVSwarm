@@ -1,0 +1,43 @@
+{
+  "fixture_id": "offline-equipment-inspection-v0.1",
+  "scope": "fake_adapter_only",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "coordinate_frame": "scene_ned",
+  "note": "场景标签仅用于契约测试。设备、节点状态和航点全部为夹具，不是世界导出、标定或实飞证据。",
+  "fleet": [
+    {"node_id":"UAV-01","connected":true,"stale":false,"battery_pct":80,"position_m":{"north_m":6,"east_m":-8,"down_m":-4}},
+    {"node_id":"UAV-02","connected":true,"stale":false,"battery_pct":76,"position_m":{"north_m":6,"east_m":8,"down_m":-4}},
+    {"node_id":"UAV-03","connected":true,"stale":true,"battery_pct":82,"position_m":{"north_m":6,"east_m":0,"down_m":-4}}
+  ],
+  "targets": [
+    {
+      "region_id": "FIXTURE-PUMP",
+      "labels": ["模拟冷却泵", "模拟设备"],
+      "waypoints": [
+        {"waypoint_id":"FX-PUMP-ENTRY","position_m":{"north_m":8,"east_m":-8,"down_m":-4}},
+        {"waypoint_id":"FX-PUMP-SAMPLE","position_m":{"north_m":12,"east_m":-8,"down_m":-4}}
+      ]
+    },
+    {
+      "region_id": "FIXTURE-METER",
+      "labels": ["模拟仪表柜", "模拟设备"],
+      "waypoints": [
+        {"waypoint_id":"FX-METER-ENTRY","position_m":{"north_m":8,"east_m":8,"down_m":-4}},
+        {"waypoint_id":"FX-METER-SAMPLE","position_m":{"north_m":12,"east_m":8,"down_m":-4}}
+      ]
+    }
+  ],
+  "motion_only": {
+    "objective": "仅验证绿色场景标记的模拟移动，不判定巡检。",
+    "region_id": "target-001",
+    "source_reference": "scenarios/simple_recon_v0_1/scene.json",
+    "node_id": "UAV-02",
+    "start_position_m": {"north_m":0,"east_m":25,"down_m":-6},
+    "waypoints": [
+      {"waypoint_id":"FX-MARKER-CORRIDOR","position_m":{"north_m":30,"east_m":25,"down_m":-6}},
+      {"waypoint_id":"FX-MARKER-VISIT","position_m":{"north_m":30,"east_m":15,"down_m":-6}}
+    ],
+    "assumption": "Fake Adapter 中 UAV-02 已在起始点，无起飞、降落、返航、采集或观察。"
+  }
+}

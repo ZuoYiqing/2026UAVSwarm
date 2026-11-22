@@ -59,6 +59,8 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
   "decision": "approve",
   "plan": {
     "plan_id": "plan-20260928-001",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
     "intent_id": "intent-001",
     "mission_type": "takeoff_goto_land",
     "explanation": "园区 A 巡检",
@@ -93,7 +95,7 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `operator_id` | string | **是** | 非空。真实执行必须可追溯到人。空白字符串会被拒。 |
-| `decision` | string | 否 | `approve`（默认）或 `reject`。`reject` 是**合法请求**：审批被记录，但不执行任何动作。 |
+| `decision` | string | **是** | 必须显式提交 `approve` 或 `reject`；不再默认批准。`reject` 被记录，不执行动作。 |
 | `plan` | object | **是** | 见下。 |
 
 ### 2.2 `plan`
@@ -117,6 +119,7 @@ Runtime 默认监听 `127.0.0.1:8765`，仅本机回环可达。
 | `action_type` | string | **是** | 非空。取值见第 3 节，**小写**。 |
 | `node_id` | string | **是（执行时）** | 目标载具，例如 `UAV-01`。**没有合理默认值——缺失会被拒绝**，见 5.2。 |
 | `params` | object | 否 | 动作参数，见第 3 节。缺省 `{}`。 |
+| `status` | string | 否 | 提交时只允许 `ready`（默认）或 `pending`；不能靠填 `succeeded` 跳过验证。 |
 
 > `step_id` / `action_type` / `params` 的类型错误在 **HTTP 400** 阶段就被拒；
 > `node_id` 允许为空字符串通过校验（以便报出"哪一步缺目标"），但**执行时会被拒绝**。
@@ -360,7 +363,7 @@ Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实
 
 ```json
 { "result": "blocked", "failure_reason": "step_target_vehicle_missing",
-  "detail": { "steps_without_target": ["step-2-goto"] } }
+  "detail": { "step_id": "step-2-goto", "node_id": "" } }
 ```
 
 之所以在起飞前全量校验：否则会出现"飞了第 1 步才发现第 2 步没目标"。
@@ -388,9 +391,8 @@ Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实
 > 缺失字段同样被拒绝（HTTP 400）。不能因为"字段没填"就跳过校验：无法核对的
 > 计划正是最该拒绝的情况。
 
-**一个刻意的克制**：没有标定时**不**报 `map_version_mismatch`。缺标定是 `goto`
-自己该报的 `coordinate_calibration_unavailable`，在此冒充"地图不匹配"会把调用方
-引向错误的排查方向。
+**一个刻意的区分**：没有标定时**不**报 `map_version_mismatch`。计划预检会用
+`coordinate_calibration_unavailable` 拒绝需要该标定的 GOTO，动作端点执行时仍会重新检查。
 
 #### 5.4 计划必须经审批
 
@@ -403,6 +405,29 @@ Runtime 的策略注册表声明了 **21 个动作**，其中 **6 个**有真实
 ---
 
 ## 6. 响应
+
+### 6.0 阶段一：回执、重复提交与进度关联
+
+以下是本次 Runtime 分支的联调语义，待跨线复核；不新增执行入口。
+
+- `plan.plan_id` 与 `GET /api/mission/progress` 的 `mission_id` 对应。
+  启动后回执附 `run_id`，与进度中的 `run_id` 相同；该 ID 不是 Gazebo run ID。
+  未建立执行实例的拒绝或早期重复响应可返回 `run_id: null`，不能拿别的任务进度补齐。
+- 同进程同一 `plan_id`、相同计划体、操作者和决策重复提交：执行中返回 HTTP 202 /
+  `result: "running"`，结束后返回原回执。两者均标 `idempotent_replay: true`。
+  同 ID 但提交内容不同返回 HTTP 409 / `plan_id_conflict`。真正的新一轮需重新验证并人工批准；
+  不把修改计划 ID 当作丢失回执后的自动重试。此去重**不跨 Runtime 重启**。
+- 先检查所有步骤的目标、支持能力和 GOTO 坐标/标定，再开始执行。
+  GOTO 必须明确提供三轴数值，不能让缺轴静默变成默认目标。各步骤仍通过现有 Policy；
+  步骤回执保留 `action_id`、`request_id` 和共享 `trace_id`，待终态才可成功。
+  GOTO 还须由动作端点明确报告 `arrival_observed: true`。
+- 进度是确认的 GOTO 航点占比。航点达到 100% 时计划仍可能在 LAND；以计划状态判断完成。
+  当前进度接口仍只投影最近启动的执行。没有成像或传感器证据时，导航完成不代表设备巡检完成。
+
+[同一轮 Fake 计划的原始进度 JSON](fixtures/runtime_plan_progress_fake_target_001_v1.json)
+包含未执行、执行中及已完成的进度，以及执行回执/步骤字段摘录。虽然接口保留
+`mode: "LIVE"` / `execution_mode: "real"` 的既有枚举，**该样例只来自隔离测试桩**，
+没有网络或实飞，不得提交到运行中的服务。末尾 Fake LAND 在最后航点，不是回原机位。
 
 ### 6.1 成功（HTTP 200）
 

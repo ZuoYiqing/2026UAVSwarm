@@ -137,6 +137,53 @@
     };
   }
 
+  const executionStates = new Set(["running", "completed", "failed", "blocked"]);
+  const hasId = value => typeof value === "string" && value.trim().length > 0;
+
+  function waypointCountsValid({ waypoints_reached: reached, waypoints_total: total }) {
+    return Number.isSafeInteger(reached) && Number.isSafeInteger(total) && reached >= 0 && reached <= total;
+  }
+
+  function runtimeMissionProgress(payload) {
+    if (payload?.contract_version !== "1.0" || payload.source !== "runtime_plan_executor" || payload.mode !== "LIVE"
+      || !executionStates.has(payload.status) || !Number.isFinite(time(payload.source_timestamp))
+      || ![payload.mission_id, payload.run_id, payload.scene_id, payload.map_version].every(hasId)) return null;
+
+    const verifiedWaypoints = payload.completion_basis === "verified_waypoints"
+      && waypointCountsValid(payload) && payload.waypoints_total > 0
+      && pct(payload.completion_pct) !== null
+      && Math.abs(payload.completion_pct - 100 * payload.waypoints_reached / payload.waypoints_total) <= 0.005001;
+    const coverage = payload.coverage?.scene_id === payload.scene_id && payload.coverage.map_version === payload.map_version
+      && payload.coverage.frame === "scene_ned" ? payload.coverage : null;
+    const hasAreaEvidence = coverage && Number.isSafeInteger(coverage.sample_count) && coverage.sample_count > 0
+      && coverage.area_total_km2 === payload.area_total_km2 && coverage.area_covered_km2 === payload.area_covered_km2
+      && nonnegative(payload.area_covered_km2) !== null && nonnegative(payload.area_total_km2) > 0
+      && payload.area_covered_km2 <= payload.area_total_km2;
+    return {
+      ...missionProgress({
+        mission_id: payload.mission_id, run_id: payload.run_id, status: payload.status, mode: payload.mode,
+        scene_id: payload.scene_id, map_version: payload.map_version, source_timestamp: payload.source_timestamp,
+        completion_basis: verifiedWaypoints ? "verified_waypoints" : null,
+        completion_pct: verifiedWaypoints ? payload.completion_pct : null,
+        waypoints_reached: verifiedWaypoints ? payload.waypoints_reached : null,
+        waypoints_total: verifiedWaypoints ? payload.waypoints_total : null,
+        area_total_km2: hasAreaEvidence ? payload.area_total_km2 : null,
+        area_covered_km2: hasAreaEvidence ? payload.area_covered_km2 : null,
+        coverage: hasAreaEvidence ? coverage : coverage && { ...coverage, grid: null },
+        vehicles: rows(payload.vehicles).filter(row => hasId(row.node_id)).map(row => ({
+          node_id: row.node_id,
+          active: row.active,
+          ...(verifiedWaypoints && waypointCountsValid(row)
+            ? { waypoints_reached: row.waypoints_reached, waypoints_total: row.waypoints_total } : {}),
+        })),
+        vehicles_active: payload.vehicles_active, degraded: payload.degraded,
+        safety_margin: payload.safety_margin, targets_found: payload.targets_found, targets_total: payload.targets_total,
+      }),
+      sceneId: payload.scene_id,
+      mapVersion: payload.map_version,
+    };
+  }
+
   function assignmentProgress(assignment) {
     const direct = pct(assignment?.completion_pct ?? assignment?.progress_pct);
     if (direct !== null) return direct;
@@ -346,6 +393,6 @@
     };
   }
 
-  return { pct, rows, timeline, missionProgress, assignmentProgress, linkScores, trend, missionMap, fleetMap,
+  return { pct, rows, timeline, missionProgress, runtimeMissionProgress, assignmentProgress, linkScores, trend, missionMap, fleetMap,
     demoChapters, demoChapterSeconds, demoDuration, demoFrame };
 });

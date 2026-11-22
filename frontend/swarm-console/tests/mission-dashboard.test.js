@@ -8,6 +8,7 @@ const model = require("../console-model.js");
 const coverageGrid = require("../coverage-grid.js");
 // Synthetic producer fixture preserved from 82729c9, not flight telemetry.
 const s7Fixture = require("./fixtures/coverage_grid_s7_v1.json");
+const inspection = require("./fixtures/equipment-inspection-lifecycle.json");
 
 const stamp = (second) => new Date(Date.UTC(2026, 10, 13, 2, 0, second)).toISOString();
 const allow = { type:"policy_decision_event", timestamp:stamp(2), request_id:"req-1",
@@ -29,17 +30,19 @@ function progressWithGrid(coverage = s7Fixture.coverage) {
   };
 }
 
-function harness(href = "http://127.0.0.1:5178/") {
+function harness(href = "http://127.0.0.1:5178/", apiOverrides = {}) {
   let elapsed = 0;
   const timers = [];
   const calls = [];
   const intervals = [];
   const listeners = {};
-  const slots = new Map(["app", "stage-title", "stage-content", "stage-indicators", "slot-banner", "slot-content"]
+  const slots = new Map(["app", "stage-title", "stage-content", "stage-indicators", "slot-banner", "slot-content",
+    "mission-fixture-candidate", "mission-fixture-progress"]
     .map(id => [id, { innerHTML:"", dataset:{}, addEventListener:(type,fn) => { listeners[type]=fn; } }]));
   const api = {
     getConfiguredBaseUrl:() => "http://127.0.0.1:8765/api",
     health:() => { calls.push("health"); return new Promise(() => {}); },
+    ...apiOverrides,
   };
   const context = vm.createContext({
     console, URL, crypto:require("node:crypto").webcrypto,
@@ -291,6 +294,163 @@ test("template preview submits the operator's text and renders only returned pol
   assert.doesNotMatch(h.run("planningPage()"), /模板接口故障/);
 });
 
+const inspectionObjective = "检查场景里的 target-001 设备标记并记录航点到达。";
+
+function inspectionConsole() {
+  const { completed_run: completed } = inspection;
+  let progress = completed.before;
+  let respond;
+  const approvals = [];
+  const validateCandidate = async ({ objective }) => objective === inspectionObjective
+    ? { result: "validated", plan: inspection.plan }
+    : { result: "clarify", failure_reason: "请明确巡检样例的设备标记" };
+  const h = harness(undefined, {
+    snapshot: async () => ({ active_actions: [], mission_progress: completed.progress }),
+    telemetryLatest: async () => ({ nodes: [] }),
+    vehicleSnapshot: async () => ({ vehicles: [] }),
+    agentStatus: async () => ({}),
+    simulationStatus: async () => ({}),
+    vehicles: async () => ({ vehicles: [] }),
+    skills: async () => ({}),
+    policyDecisions: async () => [],
+    recentActions: async () => [],
+    actionLifecycle: async () => [],
+    missionProgress: async () => {
+      if (progress instanceof Error) throw progress;
+      return progress;
+    },
+    missionFixture: {
+      validateCandidate,
+      execute: body => {
+        approvals.push(JSON.parse(JSON.stringify(body)));
+        return new Promise(resolve => { respond = resolve; });
+      },
+    },
+  });
+  h.run(`setPage("planning"); setTemplatePlanObjective(${JSON.stringify(inspectionObjective)});`);
+  return {
+    ...h, approvals, validateCandidate,
+    respond: receipt => respond(receipt),
+    read: async next => {
+      progress = next;
+      await h.run("syncRuntimeState()");
+      h.run("renderRuntimeUpdate()");
+    },
+  };
+}
+
+test("the fixture binds an explicitly approved candidate to the Runtime run and reported progress fields", async () => {
+  const h = inspectionConsole();
+  const { completed_run: completed, failed_run: failed, plan } = inspection;
+  await h.read(completed.before);
+  assert.match(h.run("overviewPage()"), /Runtime 尚无任务执行/);
+  assert.doesNotMatch(h.run("overviewPage()"), /<progress|mission-coverage-grid/);
+  await h.run("validateFixtureCandidate()");
+  assert.match(h.html("mission-fixture-candidate"), /测试桩 · 设备巡检导航.*fake-target-001-patrol-v1.*UAV-02.*N\/E\/D.*人工确认与执行/s);
+  assert.equal(h.approvals.length, 0);
+  await h.run('confirmFixtureExecution("   ")');
+  assert.match(h.html("mission-fixture-candidate"), /请填写操作员 ID 后再确认/);
+  assert.equal(h.approvals.length, 0);
+
+  const submission = h.run('confirmFixtureExecution(" fake-acceptance-operator ")');
+  await h.run('confirmFixtureExecution("fake-acceptance-operator")');
+  assert.deepEqual(h.approvals, [{ plan, operator_id: "fake-acceptance-operator", decision: "approve" }]);
+  assert.match(h.html("mission-fixture-candidate"), /等待执行回执/);
+  await h.read(completed.starting);
+  assert.match(h.run("missionMapPanel()"), /0 \/ 5 个航点.*等待覆盖证据/s);
+  assert.doesNotMatch(h.run("missionMapPanel()"), /mission-coverage-grid/);
+  await h.read(completed.first_arrival);
+  const map = h.run("missionMapPanel()");
+  assert.match(map, /1 \/ 5 个航点/);
+  assert.match(map, /mission-coverage-grid/);
+  assert.ok(map.includes(completed.first_arrival.coverage_pct.toFixed(2) + "%"));
+  assert.ok(map.includes(completed.receipt.run_id));
+  assert.match(h.run("overviewPage()"), /测试桩 · 设备巡检导航/);
+
+  await h.read(completed.before_land);
+  assert.match(h.run("missionMapPanel()"), /· 执行中.*100%.*5 \/ 5 个航点/s);
+  await h.read(completed.progress);
+  h.respond(completed.receipt);
+  await submission;
+  assert.match(h.html("mission-fixture-candidate"), /执行已完成/);
+  assert.ok(h.html("mission-fixture-progress").includes(completed.receipt.run_id));
+  assert.match(h.html("mission-fixture-progress"), /已完成 · 已验证航点 5 \/ 5/);
+  await h.read(failed.progress);
+  assert.match(h.run("fixtureProgressContent()"), /等待 Runtime 上报本次任务进度/);
+  assert.match(h.run("missionMapPanel()"), /· 失败.*1 \/ 5 个航点/s);
+});
+
+test("the planning fixture refuses ambiguous, unsupported and cross-map candidates before approval", async () => {
+  const h = inspectionConsole();
+  h.run('setTemplatePlanObjective("巡检模拟设备")');
+  await h.run("validateFixtureCandidate()");
+  assert.match(h.html("mission-fixture-candidate"), /请明确巡检样例的设备标记/);
+  assert.doesNotMatch(h.html("mission-fixture-candidate"), /确认并执行/);
+
+  h.run(`setTemplatePlanObjective(${JSON.stringify(inspectionObjective)})`);
+  for (const plan of [
+    { ...inspection.plan, map_version: "another-map" },
+    { ...inspection.plan, execution_authorized: true },
+    { ...inspection.plan, steps: [...inspection.plan.steps, { step_id: "observe", action_type: "observe", node_id: "UAV-02" }] },
+    { ...inspection.plan, steps: inspection.plan.steps.map(step => ({ ...step, status: "dry_run_only" })) },
+  ]) {
+    h.api.missionFixture.validateCandidate = async () => ({ result: "validated", plan });
+    await h.run("validateFixtureCandidate()");
+    assert.match(h.html("mission-fixture-candidate"), /缺少已校验的载具、航点或场景版本/);
+    await h.run('confirmFixtureExecution("fake-acceptance-operator")');
+  }
+  assert.equal(h.approvals.length, 0);
+  h.api.missionFixture.validateCandidate = h.validateCandidate;
+  await h.run("validateFixtureCandidate()");
+  h.run('setTemplatePlanObjective("修改后的任务")');
+  await h.run('confirmFixtureExecution("fake-acceptance-operator")');
+  assert.equal(h.approvals.length, 0);
+  const regularConsole = harness();
+  assert.match(regularConsole.run("planningPage()"), /等待算法提供校验过的载具分工/);
+  assert.doesNotMatch(regularConsole.run("planningPage()"), /确认并执行/);
+});
+
+test("a receipt lacking run identity cannot claim progress from a matching plan id", async () => {
+  const h = inspectionConsole();
+  const { completed_run: completed } = inspection;
+  await h.run("validateFixtureCandidate()");
+  const submitted = h.run('confirmFixtureExecution("fake-acceptance-operator")');
+  h.respond({ ...completed.receipt, run_id: undefined });
+  await submitted;
+  await h.read(completed.progress);
+  assert.match(h.run("fixtureProgressContent()"), /回执未提供运行 ID/);
+  assert.doesNotMatch(h.run("fixtureProgressContent()"), /5 \/ 5/);
+});
+
+test("a failed run keeps its verified partial evidence and unsuccessful reads clear current progress", async () => {
+  const h = inspectionConsole();
+  const { completed_run: completed, failed_run: failed } = inspection;
+  await h.run("validateFixtureCandidate()");
+  const submitted = h.run('confirmFixtureExecution("fake-acceptance-operator")');
+  h.respond(failed.receipt);
+  await submitted;
+  await h.read(failed.progress);
+  assert.match(h.run("fixtureCandidateContent()"), /执行失败 · arrival_timeout.*中止步骤/s);
+  assert.match(h.run("fixtureProgressContent()"), /失败 · 已验证航点 1 \/ 5/);
+  assert.match(h.run("missionMapPanel()"), /1 \/ 5 个航点/);
+
+  await h.read({ ...failed.progress, coverage: { ...failed.progress.coverage, map_version: "foreign-map" } });
+  assert.match(h.run("missionMapPanel()"), /1 \/ 5 个航点.*等待覆盖证据/s);
+  assert.doesNotMatch(h.run("missionMapPanel()"), /mission-coverage-grid/);
+
+  for (const [report, label] of [
+    [new Error("fixture read failure"), /Runtime 任务进度读取失败/],
+    [{ ...completed.progress, run_id: null }, /Runtime 任务进度证据不完整/],
+    [{ ...completed.progress, mode: "DEMO" }, /Runtime 任务进度证据不完整/],
+    [completed.before, /Runtime 尚无任务执行/],
+  ]) {
+    await h.read(report);
+    const home = h.run("overviewPage()");
+    assert.match(home, label);
+    assert.doesNotMatch(home, /<progress|mission-coverage-grid|fake-target-001-patrol-v1/);
+  }
+});
+
 test("live demo writes require an explicitly enabled safe Runtime rehearsal and keep audit evidence labeled", async () => {
   const h = harness();
   const body = [];
@@ -315,9 +475,12 @@ test("live demo writes require an explicitly enabled safe Runtime rehearsal and 
   assert.match(h.run("missionIndicators()"), /mission-kpi red/);
   assert.match(h.run("missionIndicators()"), /链路质量.*18.*DEMO 注入 · UAV-02 \/ 100.*实测 0/s);
   assert.match(h.run("missionIndicators()"), /等待安全证据/);
-  h.run(`state.apiStatus="offline"; state.mission={id:"fixture",title:"Fixture",completion:30};`);
+  h.run(`state.mission={id:"fixture",title:"Fixture",completion:30}; state.missionStatus="live";
+    applyApiFailure("health", {kind:"network", message:"offline"}, false);`);
   assert.match(h.run("missionIndicators()"), /最后上报 · 当前进度未知/);
-  assert.doesNotMatch(h.run("missionIndicators()"), /mission-kpi red/);
+  assert.doesNotMatch(h.run("missionIndicators()"), /mission-kpi red|30%/);
+  h.run('state.apiStatus = "live"');
+  assert.doesNotMatch(h.run("missionIndicators()"), /30%/);
 });
 
 test("clearing an override remains distinct from a confirmed link recovery", () => {

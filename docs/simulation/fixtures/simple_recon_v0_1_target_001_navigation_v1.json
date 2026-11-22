@@ -1,0 +1,76 @@
+{
+  "format": "uavswarm-offline-navigation-fixture",
+  "version": "1.0",
+  "status": "proposal",
+  "source_baseline": "6a680feb6e50bdc7729e3ded6069cce6c0928dd3",
+  "sources": {
+    "scene": "scenarios/simple_recon_v0_1/scene.json",
+    "world": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf",
+    "city_geometry": "docs/fixtures/simple_recon_v0_1_scene_affordances.json",
+    "default_manifest": "simulation/px4_gazebo/config/three_uav_sitl.json",
+    "camera_manifest": "simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json"
+  },
+  "scene_identity": {
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "frame": "scene_ned",
+    "units": "m",
+    "origin": {"lat_deg": 47.3979709, "lon_deg": 8.5461639, "alt_m": 0}
+  },
+  "scope": {
+    "coverage_area_id": "three-uav-patrol-coverage-v1",
+    "centerline_bounds": {"north_min_m": -45, "north_max_m": 50, "east_min_m": -25, "east_max_m": 25},
+    "complete_physical_map": false
+  },
+  "ground": {"object_id": "ground_plane", "surface_down_m": 0, "size_north_m": 2000, "size_east_m": 2000},
+  "target": {
+    "object_id": "target-001",
+    "gazebo_model": "target-001-marker",
+    "kind": "visual_marker",
+    "collision": false,
+    "reference": {"north_m": 30, "east_m": 15, "down_m": 0},
+    "radius_m": 3
+  },
+  "obstacles": [
+    {
+      "object_id": "building-001",
+      "shape": "box",
+      "collision": true,
+      "center": {"north_m": 15, "east_m": 0, "down_m": -5},
+      "size": {"north_m": 6, "east_m": 6, "down_m": 10}
+    }
+  ],
+  "no_fly_zones": [
+    {
+      "object_id": "nfz-001",
+      "gazebo_model": "nfz-001-marker",
+      "shape": "cylinder",
+      "collision": false,
+      "center": {"north_m": 10, "east_m": 10, "down_m": 0},
+      "radius_m": 5,
+      "down_min_m": -20,
+      "down_max_m": 0
+    }
+  ],
+  "spawns": [
+    {"node_id": "UAV-01", "pad_id": "landing-pad-UAV-01", "position": {"north_m": 0, "east_m": 0, "down_m": 0}},
+    {"node_id": "UAV-02", "pad_id": "landing-pad-UAV-02", "position": {"north_m": 0, "east_m": 8, "down_m": 0}},
+    {"node_id": "UAV-03", "pad_id": "landing-pad-UAV-03", "position": {"north_m": 0, "east_m": -8, "down_m": 0}}
+  ],
+  "reference_navigation": {
+    "purpose": "hand_authored_fake_io_reference",
+    "node_id": "UAV-02",
+    "target_id": "target-001",
+    "target_waypoint_index": 2,
+    "takeoff_height_m": 6,
+    "arrival_tolerance_m": 2,
+    "static_check_margin_m": 2,
+    "waypoints": [
+      {"north_m": 0, "east_m": 25, "down_m": -6},
+      {"north_m": 30, "east_m": 25, "down_m": -6},
+      {"north_m": 30, "east_m": 15, "down_m": -6},
+      {"north_m": 30, "east_m": 25, "down_m": -6},
+      {"north_m": 0, "east_m": 25, "down_m": -6}
+    ]
+  }
+}
