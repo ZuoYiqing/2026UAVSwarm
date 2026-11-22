@@ -18,6 +18,13 @@ const navItems = [
 
 const ACTION_STORAGE_KEY = "swarm-console.pending-actions.v1";
 const dashboard = window.SwarmMissionDashboard;
+const missionPhases = new Map([["running", "执行中"], ["completed", "已完成"], ["failed", "失败"], ["blocked", "受阻"]]);
+const fixtureReceiptNames = new Map([
+  ["running", "Runtime 已受理"], ["completed", "执行已完成"], ["failed", "执行失败"],
+  ["blocked", "执行受阻"], ["declined", "审批已拒绝"],
+]);
+// The browser Runtime API provides no plan-write transport. Tests inject this adapter in memory.
+const missionFixture = window.SwarmRuntimeApi?.missionFixture;
 const pageParams = new URL(window.location?.href || "http://127.0.0.1:5178/").searchParams;
 const stageMode = pageParams.get("mode") === "stage";
 const builtInDemo = stageMode && pageParams.get("source") !== "live";
@@ -51,6 +58,7 @@ const state = {
   lastBackendResult: null,
   lastActionResult: null,
   templatePlan: { objective: "", inFlight: false, reply: null, error: null },
+  fixturePlan: {},
   semanticPreview: {},
   semanticPreviewDetailsOpen: false,
   semanticLive: { objective: "", inFlight: false, result: {}, health: null, healthInFlight: false, healthError: null },
@@ -227,6 +235,8 @@ function applyApiFailure(source, error, notifyFailure = true) {
   if (state.apiStatus === "offline") {
     state.links.clear();
     state.linkTrends.clear();
+    if (state.mission) state.missionStatus = "stale";
+    state.missionTrend = "";
     state.demoRuntime = null;
     state.dataStatus = state.dataStatus === "live" ? "stale" : "unavailable";
     state.fleet = window.SwarmConsoleModel.markFleetStale(state.fleet);
@@ -722,10 +732,8 @@ function selectVehicle(nodeId, { fromSimulation = false } = {}) {
 function updateMissionDashboard(reads) {
   if (!dashboard) return;
   const progressRead = reads.missionProgress;
-  const payload = progressRead?.status === "fulfilled" ? progressRead.value : null;
-  const snapshotMission = reads.runtimeSnapshot?.status === "fulfilled"
-    ? reads.runtimeSnapshot.value?.mission_progress : null;
-  const progress = dashboard.missionProgress(payload ?? snapshotMission);
+  const payload = progressRead?.status === "fulfilled" ? progressRead.value : undefined;
+  const progress = dashboard.runtimeMissionProgress(payload);
   const previous = state.mission;
   if (progress) {
     if (previous?.id !== progress.id || previous?.runId !== progress.runId || state.missionStatus !== "live") {
@@ -733,9 +741,20 @@ function updateMissionDashboard(reads) {
     } else if (previous.completion !== progress.completion) {
       state.missionTrend = dashboard.trend(previous.completion, progress.completion);
     }
-    state.mission = progress;
+    state.missionStatus = "live";
+  } else {
+    state.missionTrend = "";
+    if (progressRead?.status === "rejected") {
+      state.missionStatus = "error";
+    } else if (payload?.contract_version === "1.0" && payload.source === "runtime_plan_executor" && payload.mode === "LIVE"
+      && payload.status === "unavailable"
+      && payload.reason === "no_runtime_plan_execution") {
+      state.missionStatus = "empty";
+    } else {
+      state.missionStatus = payload === undefined ? "waiting" : "invalid";
+    }
   }
-  state.missionStatus = progress ? "live" : previous ? "stale" : "waiting";
+  state.mission = progress;
   const demo = reads.demoRuntime;
   const demoState = demo?.status === "fulfilled" ? demo.value : null;
   state.demoRuntime = demoState?.enabled === true && demoState.mode === "DEMO"
@@ -823,6 +842,7 @@ function renderPolicyBanner() {
 
 function sourceLabel() {
   if (builtInDemo) return { text: "DEMO · 内置演习", color: "amber" };
+  if (missionFixture) return { text: "测试桩 · 设备巡检导航", color: "amber" };
   const snapshot = state.vehicleSnapshot;
   const hasOverride = Array.isArray(snapshot?.vehicles)
     && snapshot.vehicles.some(row => String(row?.link_quality_mode).toUpperCase() === "DEMO");
@@ -840,9 +860,22 @@ function sourceLabel() {
   return { text: fresh ? `LIVE · ${telemetrySource}` : "LIVE · 等待新鲜遥测", color: fresh ? "green" : "amber" };
 }
 
+function currentMission() {
+  if (builtInDemo) return state.stageFrame?.progress;
+  return state.apiStatus === "live" && state.missionStatus === "live" ? state.mission : null;
+}
+
+function missionReadLabel() {
+  if (state.missionStatus === "stale") return "最后上报 · 当前进度未知";
+  if (state.apiStatus === "offline" || state.missionStatus === "error") return "Runtime 任务进度读取失败";
+  if (state.missionStatus === "empty") return "Runtime 尚无任务执行";
+  if (state.missionStatus === "invalid") return "Runtime 任务进度证据不完整";
+  return "尚未收到任务执行数据";
+}
+
 function missionIndicators(compact = false) {
   const frame = state.stageFrame;
-  const mission = builtInDemo ? frame?.progress : state.mission;
+  const mission = currentMission();
   const links = builtInDemo ? frame?.links : state.links;
   const degraded = !builtInDemo && state.apiStatus !== "live";
   const overrides = builtInDemo ? [] : dashboard?.rows(state.vehicleSnapshot?.vehicles)
@@ -855,8 +888,7 @@ function missionIndicators(compact = false) {
   const completion = mission?.completion ?? null;
   const completionLabel = mission?.completionBasis === "verified_waypoints" ? "航点完成度" : "任务完成度";
   const missionArrow = builtInDemo ? frame?.progressTrend : state.missionTrend;
-  const missionCurrent = builtInDemo || state.missionStatus === "live" && !degraded;
-  const safety = missionCurrent && typeof mission?.safety === "string" ? mission.safety : null;
+  const safety = typeof mission?.safety === "string" ? mission.safety : null;
   const color = quality === null ? "muted" : quality < 40 ? "red" : quality < 80 ? "amber" : "green";
   const areaDigits = mission?.areaTotal < 0.01 ? 6 : 3;
   const area = mission?.areaCovered != null
@@ -865,7 +897,7 @@ function missionIndicators(compact = false) {
     ? `${mission.targetsFound} / ${mission.targetsTotal ?? "—"}` : "等待目标证据";
   if (compact) return `<div class="stage-kpi-strip">
     <span>链路质量 <b class="${color}">${quality === null ? "—" : esc(quality + " " + (linkArrow || ""))}</b></span>
-    <span>${completionLabel} <b>${completion === null ? "—" : esc(completion + "%" + (missionCurrent ? " " + (missionArrow || "") : " · 最后上报"))}</b></span>
+    <span>${completionLabel} <b>${completion === null ? "—" : esc(`${completion}% ${missionArrow || ""}`)}</b></span>
     <span>剩余安全裕度 <b>${esc(safety || "未知")}</b></span>
   </div>`;
   return `<div class="mission-kpis" aria-label="任务状态指标">
@@ -879,9 +911,9 @@ function missionIndicators(compact = false) {
     </section>
     <section class="mission-kpi cyan">
       <h2>${completionLabel}</h2><strong>${completion === null ? "—" : formatNumber(completion, Number.isInteger(completion) ? 0 : 1) + "%"}
-        <span class="kpi-trend" aria-hidden="true">${esc(missionCurrent ? missionArrow || "" : "")}</span></strong>
+        <span class="kpi-trend" aria-hidden="true">${esc(completion === null ? "" : missionArrow || "")}</span></strong>
       ${completion === null ? "" : `<progress max="100" value="${completion}" aria-label="${completionLabel}"></progress>`}
-      <p>${completion === null ? "等待任务进度" : missionCurrent ? esc(mission.title) : "最后上报 · 当前进度未知"}
+      <p>${mission ? esc(mission.title) : missionReadLabel()}
         ${mission?.completionBasis === "verified_waypoints" ? " · 已验证航点" : ""}</p>
     </section>
     <section class="mission-kpi ${safety === "正常" || safety === "normal" ? "green" : safety ? "amber" : "muted"}">
@@ -891,13 +923,14 @@ function missionIndicators(compact = false) {
     </section>
     <div class="mission-evidence"><span>覆盖面积 <b>${esc(area)}</b></span><span>目标发现 <b>${esc(targets)}</b></span>
       ${mission?.vehiclesActive == null ? "" : `<span>任务中载具 <b>${mission.vehiclesActive}</b></span>`}
-      ${missionCurrent && mission?.degraded === true ? badge("降级任务", "amber") : ""}
-      ${mission?.timestamp ? `<span>${builtInDemo ? "演习时刻" : missionCurrent ? "采样" : "最后采样"} <b>${esc(eventTime(mission.timestamp))}</b></span>` : ""}
+      ${mission?.degraded === true ? badge("降级任务", "amber") : ""}
+      ${!builtInDemo && mission ? `<span>执行状态 <b>${esc(missionPhases.get(mission.status) || "未知")}</b></span>` : ""}
+      ${mission?.timestamp ? `<span>${builtInDemo ? "演习时刻" : "采样"} <b>${esc(eventTime(mission.timestamp))}</b></span>` : ""}
     </div>
   </div>`;
 }
 
-function missionMapMetrics(mission, current) {
+function missionMapMetrics(mission) {
   const verifiedWaypoints = mission?.completionBasis === "verified_waypoints";
   const completion = verifiedWaypoints || builtInDemo ? mission?.completion ?? null : null;
   const reached = mission?.waypointsReached;
@@ -905,24 +938,23 @@ function missionMapMetrics(mission, current) {
   const hasWaypointCount = reached != null && total > 0 && reached <= total;
   const coverage = mission?.coveragePercent ?? null;
   const areaDigits = mission?.areaTotal < 0.01 ? 6 : 3;
-  const sampleLabel = current ? "" : " · 最后上报";
+  const waypointDetail = hasWaypointCount ? `${reached} / ${total} 个航点` : builtInDemo ? "内置演习进度" : "已验证到达";
   const percent = value => value === null ? "—" : formatNumber(value, Number.isInteger(value) ? 0 : 2, "%");
   return `<div class="mission-map-metrics">
     <div><span>${builtInDemo && !verifiedWaypoints ? "任务完成度" : "航点完成度"}</span><b>${percent(completion)}</b>
-      <small>${completion === null ? "等待已验证航点" : `${hasWaypointCount ? `${reached} / ${total} 个航点` : builtInDemo ? "内置演习进度" : "已验证到达"}${sampleLabel}`}</small></div>
+      <small>${completion === null ? "等待已验证航点" : waypointDetail}</small></div>
     <div><span>面积覆盖率</span><b>${percent(coverage)}</b>
-      <small>${coverage === null ? "等待覆盖证据" : `${formatNumber(mission.areaCovered, areaDigits)} / ${formatNumber(mission.areaTotal, areaDigits)} km²${sampleLabel}`}</small></div>
+      <small>${coverage === null ? "等待覆盖证据" : `${formatNumber(mission.areaCovered, areaDigits)} / ${formatNumber(mission.areaTotal, areaDigits)} km²`}</small></div>
   </div>`;
 }
 
 function missionMapPanel() {
   const frame = state.stageFrame;
-  const mission = builtInDemo ? frame?.progress : state.mission;
+  const mission = currentMission();
   const fleet = builtInDemo ? frame?.fleet || [] : state.fleet;
-  const current = builtInDemo || (state.apiStatus === "live" && state.missionStatus === "live");
   const snapshot = builtInDemo ? frame?.vehicleSnapshot
     : state.apiStatus === "live" && state.dataStatus === "live" ? state.vehicleSnapshot : null;
-  const map = dashboard?.missionMap(mission, current ? snapshot : null);
+  const map = dashboard?.missionMap(mission, snapshot);
   const positionMap = map ? null : dashboard?.fleetMap(snapshot);
   const assignments = mission?.assignments || [];
   const ids = new Set([...fleet.map(v => v.id), ...assignments.map(a => a.node_id || a.vehicle_id).filter(Boolean)]);
@@ -938,7 +970,7 @@ function missionMapPanel() {
     return `<div class="mission-roster-row">
       <b>${esc(id)}</b><span>${esc(region)}</span>
       <span>${pct === null ? "—" : formatNumber(pct, Number.isInteger(pct) ? 0 : 1, "%")}${pct === null ? "" : `<progress aria-label="${esc(id)} 进度" max="100" value="${pct}"></progress>`}</span>
-      <small>${!current && assignment ? "最后上报" : esc(phase)}</small>
+      <small>${esc(phase)}</small>
     </div>`;
   }).join("");
   const grid = map?.coverageGrid;
@@ -958,24 +990,22 @@ function missionMapPanel() {
   <div class="mission-legend">${grid
     ? `<span class="grid-covered">有覆盖记录的格</span><span class="uncovered">无覆盖记录</span>${map.regions.some(region => region.area_id !== grid.areaId) ? '<span class="unknown">覆盖分布未知</span>' : ""}`
     : builtInDemo ? '<span class="covered">已覆盖</span><span class="uncovered">未覆盖</span><span class="unknown">覆盖未知</span>'
-      : '<span class="unknown">覆盖分布未知</span>'}
-    ${current ? "" : "<span>最后上报区域</span>"}</div>`
+      : '<span class="unknown">覆盖分布未知</span>'}</div>`
     : positionMap
       ? `<div class="mission-map mission-position-map" aria-label="载具位置俯视图">
           <span class="mission-compass" aria-hidden="true">↑ 北</span>${markerHtml}
           <span class="mission-map-caption">载具位置 · ${esc(positionMap.scene)} · 场景坐标</span></div>
         <p class="small mission-grid-note">任务区域与覆盖分布待 Runtime 上报</p>`
-      : `<div class="mission-wait"><b>${mission ? "暂无任务区域边界" : "尚未收到任务执行数据"}</b>
+      : `<div class="mission-wait"><b>${mission ? "暂无任务区域边界" : missionReadLabel()}</b>
           <span>${state.dataStatus === "live" ? "遥测在线，俯视图仍需可用的共享坐标或任务区边界。" : "等待 Runtime 上报任务区域或载具共享坐标。"}</span></div>`;
-  const phases = { running: "执行中", executing: "执行中", completed: "已完成", failed: "失败",
-    blocked: "受阻", partially_completed: "部分完成" };
-  const phaseLabel = current ? phases[mission?.status] : mission ? "最后上报" : "";
+  const phaseLabel = missionPhases.get(mission?.status);
   const titleDetail = mission ? `${mission.title}${phaseLabel ? " · " + phaseLabel : ""}` : "任务区域与载具位置";
   return `<section class="panel mission-map-panel"><div class="panel-title"><h2>任务地图</h2><span class="small">${esc(titleDetail)}</span></div>
-    ${missionMapMetrics(mission, current)}
+    ${mission?.runId && !builtInDemo ? `<p class="small">Runtime 运行 ID <b>${esc(mission.runId)}</b></p>` : ""}
+    ${missionMapMetrics(mission)}
     ${geometry}
     ${grid ? `<p class="small mission-grid-note">${grid.size} m 网格 · ${grid.cells.length
-      ? `${grid.cells.length} 个格有覆盖记录，格内可能仅部分覆盖` : "已有观测，当前没有覆盖记录"}${current ? "" : " · 最后上报"}</p>` : ""}
+      ? `${grid.cells.length} 个格有覆盖记录，格内可能仅部分覆盖` : "已有观测，当前没有覆盖记录"}</p>` : ""}
     <div class="mission-roster">
       <div class="mission-roster-row mission-roster-head"><span>载具</span><span>任务分工</span><span>进度</span><span>状态</span></div>
       ${roster || '<p class="small">尚未收到载具或任务分工</p>'}</div>
@@ -1467,20 +1497,27 @@ function twinPage() {
 
 function planningPage() {
   const { objective, inFlight } = state.templatePlan;
+  const inputsDisabled = inFlight || state.fixturePlan.executing ? " disabled" : "";
   return `<div class="page semantic-planning-page">
     ${pageTitle("任务规划", "", '<button class="button" onclick="setPage(\'twin\')">查看三维集群态势</button>')}
     <div class="planning-workspace">
       <div class="grid">
         ${panel("任务输入", `<div class="field"><label for="template-plan-objective">任务目标</label>
-          <textarea rows="4" id="template-plan-objective" data-template-plan-objective placeholder="输入或粘贴任务书"${inFlight ? " disabled" : ""}>${esc(objective)}</textarea></div>
+          <textarea rows="4" id="template-plan-objective" data-template-plan-objective placeholder="输入或粘贴任务书"${inputsDisabled}>${esc(objective)}</textarea></div>
           <div class="planning-actions">
-            <button class="button" id="template-plan-example" type="button" onclick="useTemplatePlanExample()"${inFlight ? " disabled" : ""}>填入巡检示例</button>
-            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inFlight ? " disabled" : ""}>${inFlight ? "等待 Runtime…" : "预览巡检模板"}</button>
+            <button class="button" id="template-plan-example" type="button" onclick="useTemplatePlanExample()"${inputsDisabled}>填入巡检示例</button>
+            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inputsDisabled}>${inFlight ? "等待 Runtime…" : "预览巡检模板"}</button>
           </div>
           <p class="small">原话随请求传入，步骤取自固定的巡检拍照模板。</p>`)}
         ${panel("载具状态", vehicleTable(), "scroll")}
       </div>
-      <div id="template-plan-preview" class="grid" aria-live="polite">${templatePlanPreview()}</div>
+      <div class="grid">
+        <div id="template-plan-preview" class="grid" aria-live="polite">${templatePlanPreview()}</div>
+        ${panel("可校验计划候选", missionFixture ? `
+          <div id="mission-fixture-candidate" aria-live="polite">${fixtureCandidateContent()}</div>
+          <div id="mission-fixture-progress" aria-live="polite">${fixtureProgressContent()}</div>`
+          : '<p class="small">等待算法提供校验过的载具分工、航点和场景版本。收到后才可进入人工确认与执行。</p>')}
+      </div>
     </div>
     <div class="planning-algorithm">${semanticLivePanel()}${semanticPreviewPanel()}</div>
   </div>`;
@@ -1507,12 +1544,12 @@ function templatePlanPreview() {
       <td>${risk}</td></tr>`;
   }).join("");
 
-  return `${panel("任务编排", `${error ? `<p class="inline-error">${esc(error)}</p>` : ""}
+  return `${panel("Runtime 模板预览", `${error ? `<p class="inline-error">${esc(error)}</p>` : ""}
       ${resultName ? `<p>${badge(resultName, reply.result === "ready" ? "cyan" : "amber")}
        ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>` : ""}
       ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : error ? "" : `<p class="small">${inFlight ? "正在生成模板计划…" : reply ? "Runtime 未返回计划步骤" : "待生成模板计划"}</p>`}
       ${reply ? `<details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>` : ""}`)}
-    ${panel("策略预检与风险", precheck ? `<div class="planning-table"><table class="table">
+    ${panel("模板策略预检与风险", precheck ? `<div class="planning-table"><table class="table">
       <thead><tr><th>步骤</th><th>模板预检</th><th>依据</th><th>动作风险级别</th></tr></thead><tbody>${precheck}</tbody></table></div>
       <p class="small">风险级别来自 Runtime 动作能力登记。现场条件由 Runtime 在执行时重新核验。</p>` : '<p class="small">等待 Runtime 返回逐步预检结果</p>')}
     ${panel("航线预览", '<p class="small">巡检模板尚不提供航线。三维集群态势可查看 Runtime 上报的载具位置。</p>')}`;
@@ -1525,15 +1562,17 @@ function renderTemplatePlan() {
   for (const id of ["template-plan-objective", "template-plan-example", "template-plan-submit"]) {
     const control = document.getElementById(id);
     if (!control) continue;
-    control.disabled = inFlight;
+    control.disabled = Boolean(inFlight || state.fixturePlan.executing);
     if (id === "template-plan-submit") control.textContent = inFlight ? "等待 Runtime…" : "预览巡检模板";
   }
 }
 
 function setTemplatePlanObjective(value) {
   const draft = state.templatePlan;
-  if (draft.inFlight || draft.objective === value) return;
+  if (draft.inFlight || state.fixturePlan.executing || draft.objective === value) return;
   draft.objective = value;
+  state.fixturePlan = {};
+  renderFixtureCandidate();
   const input = document.getElementById("template-plan-objective");
   if (input && input.value !== value) input.value = value;
   if (draft.reply || draft.error) {
@@ -1545,6 +1584,127 @@ function setTemplatePlanObjective(value) {
 
 function useTemplatePlanExample() {
   setTemplatePlanObjective("记录园区设备的状态和照片，完成后报告巡检结果。");
+}
+
+function fixtureCandidateContent() {
+  const { plan, validating, executing, submitted, operatorId, receipt, error } = state.fixturePlan;
+  const actions = plan?.steps.map(step => {
+    const { north_m, east_m, down_m } = step.params ?? {};
+    const waypoint = step.action_type === "goto" ? ` · N/E/D ${north_m} / ${east_m} / ${down_m} m` : "";
+    return `<li><b>${esc(step.node_id)}</b> · ${esc(step.action_type + waypoint)}</li>`;
+  }).join("");
+  return `<p class="small">测试桩 · 设备巡检导航</p>
+    <button class="button" type="button" onclick="validateFixtureCandidate()"${validating || submitted ? " disabled" : ""}>
+      ${validating ? "校验中…" : "校验任务候选"}
+    </button>
+    ${plan ? `<p class="small">${esc(plan.plan_id)} · ${esc(plan.scene_id)} / ${esc(plan.map_version)}</p>
+      <ol class="template-plan-steps">${actions}</ol>
+      <h3>人工确认与执行</h3>
+      <div class="field"><label for="mission-fixture-operator">操作员 ID</label>
+        <input id="mission-fixture-operator" value="${esc(operatorId || "")}"${submitted ? " disabled" : ""}></div>
+      <button class="button primary" type="button" onclick="confirmFixtureExecution(document.getElementById('mission-fixture-operator').value)"${submitted ? " disabled" : ""}>
+        ${executing ? "等待执行回执…" : "确认并执行（测试桩）"}
+      </button>` : ""}
+    ${receipt ? `<p>${esc(fixtureReceiptNames.get(receipt.result))}${receipt.failure_reason ? " · " + esc(receipt.failure_reason) : ""}
+      ${receipt.aborted_at_step ? " · 中止步骤 " + esc(receipt.aborted_at_step) : ""}</p>` : ""}
+    ${error ? `<p class="inline-error">${esc(error)}</p>` : ""}`;
+}
+
+function fixtureProgressContent() {
+  const { plan, receipt } = state.fixturePlan;
+  if (!receipt) return "";
+  if (typeof receipt.run_id !== "string" || !receipt.run_id.trim()) {
+    return '<p class="small">回执未提供运行 ID，无法关联本次任务进度。</p>';
+  }
+  const mission = currentMission();
+  if (mission?.id !== plan.plan_id || mission.runId !== receipt.run_id
+    || mission.sceneId !== plan.scene_id || mission.mapVersion !== plan.map_version) {
+    return '<p class="small">等待 Runtime 上报本次任务进度。</p>';
+  }
+  const waypoints = mission.waypointsTotal > 0
+    ? ` · 已验证航点 ${mission.waypointsReached} / ${mission.waypointsTotal}` : "";
+  return `<p class="small">Runtime 上报 · ${esc(mission.runId)} · ${esc(missionPhases.get(mission.status))}${waypoints}</p>`;
+}
+
+function renderFixtureProgress() {
+  const slot = document.getElementById("mission-fixture-progress");
+  if (!slot) return;
+  const html = fixtureProgressContent();
+  if (slot.innerHTML !== html) slot.innerHTML = html;
+}
+
+function renderFixtureCandidate() {
+  const slot = document.getElementById("mission-fixture-candidate");
+  if (slot) slot.innerHTML = fixtureCandidateContent();
+  renderFixtureProgress();
+}
+
+function validFixtureCandidate(plan) {
+  if (typeof plan?.plan_id !== "string" || !plan.plan_id.trim()
+    || plan.execution_authorized === true
+    || plan.scene_id !== "simple_recon_v0_1" || plan.map_version !== "simple_recon_v0_1-map-1"
+    || !Array.isArray(plan.steps) || !plan.steps.length) return false;
+  const ids = new Set();
+  for (const step of plan.steps) {
+    if (typeof step?.step_id !== "string" || !step.step_id.trim() || ids.has(step.step_id)
+      || typeof step.node_id !== "string" || !step.node_id.trim()
+      || !["takeoff", "goto", "land"].includes(step.action_type)
+      || (step.status != null && !["pending", "ready"].includes(step.status))) return false;
+    if (step.action_type === "goto" && !["north_m", "east_m", "down_m"].every(key => Number.isFinite(step.params?.[key]))) return false;
+    ids.add(step.step_id);
+  }
+  return plan.steps.some(step => step.action_type === "goto");
+}
+
+async function validateFixtureCandidate() {
+  if (!missionFixture || stageMode || state.page !== "planning" || state.fixturePlan.validating || state.fixturePlan.submitted) return;
+  const objective = state.templatePlan.objective.trim();
+  const draft = { validating: Boolean(objective) };
+  state.fixturePlan = draft;
+  if (!objective) draft.error = "请先填写任务目标";
+  renderFixtureCandidate();
+  if (!objective) return;
+  try {
+    const candidate = await missionFixture.validateCandidate({ objective });
+    if (candidate?.result === "validated" && validFixtureCandidate(candidate.plan)) {
+      draft.plan = JSON.parse(JSON.stringify(candidate.plan));
+    } else {
+      draft.error = candidate?.failure_reason || "缺少已校验的载具、航点或场景版本";
+    }
+  } catch (error) {
+    draft.error = `候选校验失败 · ${error.message}`;
+  } finally {
+    draft.validating = false;
+    if (state.fixturePlan === draft) renderFixtureCandidate();
+  }
+}
+
+async function confirmFixtureExecution(operatorId) {
+  const draft = state.fixturePlan;
+  if (!missionFixture || stageMode || state.page !== "planning" || !draft.plan || draft.submitted) return;
+  if (typeof operatorId !== "string" || !operatorId.trim()) {
+    draft.error = "请填写操作员 ID 后再确认";
+    renderFixtureCandidate();
+    return;
+  }
+  draft.submitted = true;
+  draft.executing = true;
+  draft.operatorId = operatorId.trim();
+  draft.error = null;
+  renderFixtureCandidate();
+  renderTemplatePlan();
+  try {
+    const receipt = await missionFixture.execute({ plan: draft.plan, operator_id: draft.operatorId, decision: "approve" });
+    if (receipt?.plan?.plan_id !== draft.plan.plan_id
+      || !fixtureReceiptNames.has(receipt.result)) throw new Error("执行回执无法识别");
+    draft.receipt = receipt;
+  } catch (error) {
+    draft.error = `执行状态未知，请先核对 Runtime · ${error.message}`;
+  } finally {
+    draft.executing = false;
+    renderFixtureCandidate();
+    renderTemplatePlan();
+  }
 }
 
 function vehiclePage() {
@@ -1782,7 +1942,7 @@ async function checkBackend(options = {}) {
 
 function saveApiBaseUrl(value) {
   if (stageMode) return;
-  if (state.actionRequestsInFlight.size || state.pendingActions.length || state.demoWriteInFlight || state.templatePlan.inFlight) {
+  if (state.actionRequestsInFlight.size || state.pendingActions.length || state.demoWriteInFlight || state.templatePlan.inFlight || state.fixturePlan.executing) {
     notify("地址未更改", "仍有请求在执行或等待核实，请先确认原 Runtime 的动作状态", "amber");
     render();
     return;
@@ -1793,6 +1953,7 @@ function saveApiBaseUrl(value) {
   state.lastBackendResult = null;
   state.templatePlan.reply = null;
   state.templatePlan.error = null;
+  state.fixturePlan = {};
   state.backendConnected = false;
   state.actionRecords = [];
   state.lifecycleRecords = [];
@@ -1920,7 +2081,7 @@ function simCard(name, detail, status, color) {
 
 async function generateRequest() {
   const draft = state.templatePlan;
-  if (stageMode || state.page !== "planning" || draft.inFlight) return;
+  if (stageMode || state.page !== "planning" || draft.inFlight || state.fixturePlan.executing) return;
   if (!draft.objective.trim()) {
     draft.error = "请先填写任务目标";
     renderTemplatePlan();
@@ -2694,6 +2855,7 @@ function updatePageInPlace() {
   if (state.page === "planning" && document.getElementById("semantic-preview-result")) {
     // 后台探活不能重建当前的下拉列表或文件选择框。
     updateVehicleTableInPlace();
+    renderFixtureProgress();
     return;
   }
   if (state.page !== "twin") {
