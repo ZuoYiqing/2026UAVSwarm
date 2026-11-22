@@ -5,4 +5,11 @@ __pycache__/
 .venv/
 dist/
 build/
+# 运行产物目录。两种形式都要忽略：
+#   `.runtime/` 带斜杠只匹配真实目录；
+#   当它以软链接形式存在时（例如为了把 PX4 的 cwd 放到 ext4 上而把
+#   `.runtime` 指向 WSL 内部路径），git 看到的是一个**文件**，带斜杠的规则
+#   匹配不到，于是会出现在 `git status` 里并被 `git add -A` 收录。
+#   那条软链接在别的机器上没有意义，所以必须连不带斜杠的形式一起忽略。
+.runtime
 .runtime/
