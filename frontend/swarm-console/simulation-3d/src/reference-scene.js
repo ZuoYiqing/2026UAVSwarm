@@ -1,9 +1,13 @@
-import { Color, LabelStyle, Cartesian2, PolygonHierarchy } from "cesium";
+import {
+  ArcType, Cartesian2, Color, ColorGeometryInstanceAttribute, GeometryInstance, LabelStyle,
+  PolygonHierarchy, PolylineColorAppearance, PolylineGeometry, Primitive,
+} from "cesium";
 import entityCatalog from "../../../../scenarios/simple_recon_v0_1/entity_catalog.json" with { type: "json" };
 
 export const REFERENCE_VIEW = Object.freeze({ headingDeg: -25, pitchDeg: -50, rangeM: 330 });
 
 function addDemoMarkers(add, toWorld) {
+  const outlines = [];
   for (const [id, row] of Object.entries(entityCatalog.geometry_by_entity_id)) {
     const { display, geometry } = row;
     if (!display) continue;
@@ -16,10 +20,14 @@ function addDemoMarkers(add, toWorld) {
         id: `recon-${id}-fill`,
         polygon: { hierarchy: new PolygonHierarchy(corners), perPositionHeight: true, material: color.withAlpha(0.18) },
       });
-      add({
+      outlines.push(new GeometryInstance({
         id: `recon-${id}`,
-        polyline: { positions: [...corners, corners[0]], width: 4, material: color },
-      });
+        geometry: new PolylineGeometry({
+          positions: [...corners, corners[0]], width: 4, arcType: ArcType.NONE,
+          vertexFormat: PolylineColorAppearance.VERTEX_FORMAT,
+        }),
+        attributes: { color: ColorGeometryInstanceAttribute.fromColor(color) },
+      }));
     } else if (display.kind === "numbered_post") {
       const { east_m: east, north_m: north, down_m: down } = geometry.position;
       add({
@@ -43,6 +51,7 @@ function addDemoMarkers(add, toWorld) {
       });
     }
   }
+  return outlines;
 }
 
 export function createReferenceScene(viewer, toWorld) {
@@ -58,6 +67,18 @@ export function createReferenceScene(viewer, toWorld) {
     add({ polyline: { positions: [[0,0,0.5],point].map(toWorld), width: 3, material: Color.fromCssColorString(color) } });
     add({ position: toWorld(point), label: { text, font: "14px sans-serif", fillColor: Color.WHITE, outlineColor: Color.BLACK, outlineWidth: 2, style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0,-12) } });
   }
-  addDemoMarkers(add, toWorld);
-  return { setVisible: show => entities.forEach(entity => { entity.show = show; }) };
+  // These outlines are reference overlays. Build them on the render thread
+  // so they draw on the default reference view even without terrain geometry.
+  const outlines = viewer.scene.primitives.add(new Primitive({
+    geometryInstances: addDemoMarkers(add, toWorld),
+    appearance: new PolylineColorAppearance({
+      translucent: false, renderState: { depthTest: { enabled: false } },
+    }),
+    asynchronous: false,
+    show: false,
+  }));
+  return { setVisible: show => {
+    entities.forEach(entity => { entity.show = show; });
+    outlines.show = show;
+  } };
 }
