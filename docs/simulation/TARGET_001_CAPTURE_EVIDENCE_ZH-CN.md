@@ -34,6 +34,10 @@
 - 正例使用当次 UAV-02 的到场记录，以及取景点处两行交替的合成 RGB 帧。复跑程序从夹具重建 3,686,400 bytes 并验证 SHA-256。结果为 `arrived / fixture_valid / undetermined`。该图用于验证关联与完整性，未产出真实图像或观察结论。
 - 反例保留到场记录、字节、哈希和时间戳，只把图像来源换成 UAV-01。结果为 `arrived / image_source_mismatch / undetermined`。旧运行、旧帧、过期收包、未对齐位姿和哈希不符也各有回归断言。
 
+离线回放还要求位姿和位姿仿真戳同时存在，ENU 位置为有限三维向量，姿态为有限的单位四元数，范数允许偏差 0.001。缺位姿或时间戳返回 `capture_pose_missing`，非法值返回 `capture_pose_invalid`。[独立合成位姿来源](fixtures/simple_recon_v0_1_target_001_pose_sources_v1.json) 记录两份已知夹具各自的 Gazebo run 与模型实体，用来与图像请求的绑定比对。缺来源返回 `capture_pose_source_missing`，错 run 或实体返回 `capture_pose_source_mismatch`。
+
+回放采用独立的 1 s 请求截止，校验时刻达到截止即返回 `capture_request_timeout`，即使该帧刚收到。原有的收包年龄、仿真时间水位和配对窗口仍分别检查。1 s 及四元数容差是 Fake 检查参数，实际来源鉴别、相机姿态和时限仍需现场取证。原色条 JSON、可见正例 JSON 及图像字节均不变。
+
 在本提交的工作区执行离线测试。
 
 ```powershell
