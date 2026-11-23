@@ -10,7 +10,7 @@
     "lon_deg": 8.5461639,
     "alt_m": 0
   },
-  "semantic_status": "algorithm_labels_ready",
+  "semantic_status": "awaiting_algorithm_labels",
   "catalog": [
     {
       "entity_id": "building-001",
