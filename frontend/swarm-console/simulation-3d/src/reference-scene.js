@@ -1,6 +1,8 @@
 import { Color, LabelStyle, Cartesian2, PolygonHierarchy } from "cesium";
 import entityCatalog from "../../../../scenarios/simple_recon_v0_1/entity_catalog.json" with { type: "json" };
 
+export const REFERENCE_VIEW = Object.freeze({ headingDeg: -25, pitchDeg: -50, rangeM: 330 });
+
 function addDemoMarkers(add, toWorld) {
   for (const [id, row] of Object.entries(entityCatalog.geometry_by_entity_id)) {
     const { display, geometry } = row;

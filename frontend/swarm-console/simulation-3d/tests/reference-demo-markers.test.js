@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Cartesian3, Color, EntityCollection } from "cesium";
-import { createReferenceScene } from "../src/reference-scene.js";
+import {
+  BoundingSphere, Camera, Cartesian3, Color, EntityCollection, GeographicProjection, HeadingPitchRange,
+  Intersect, Math as CesiumMath, Matrix4, SceneMode, Transforms,
+} from "cesium";
+import entityCatalog from "../../../../scenarios/simple_recon_v0_1/entity_catalog.json" with { type: "json" };
+import { createReferenceScene, REFERENCE_VIEW } from "../src/reference-scene.js";
 
 test("reference scene draws the five catalog markers at their ENU locations", () => {
   const entities = new EntityCollection();
@@ -29,4 +33,32 @@ test("reference scene draws the five catalog markers at their ENU locations", ()
 
   scene.setVisible(false);
   assert([west, east, area, sw, se].every(entity => !entity.show));
+});
+
+test("the default recon camera frames the new markers", () => {
+  const origin = entityCatalog.origin;
+  const center = Cartesian3.fromDegrees(origin.lon_deg, origin.lat_deg, origin.alt_m);
+  const enu = Transforms.eastNorthUpToFixedFrame(center);
+  const entities = new EntityCollection();
+  const toWorld = point => Matrix4.multiplyByPoint(enu, new Cartesian3(...point), new Cartesian3());
+  createReferenceScene({ entities }, toWorld).setVisible(true);
+  for (const [width, height] of [[1440, 1000], [1280, 720]]) {
+    const camera = new Camera({
+      drawingBufferWidth: width, drawingBufferHeight: height,
+      mapProjection: new GeographicProjection(), mode: SceneMode.SCENE3D,
+    });
+    camera.lookAt(center, new HeadingPitchRange(
+      CesiumMath.toRadians(REFERENCE_VIEW.headingDeg),
+      CesiumMath.toRadians(REFERENCE_VIEW.pitchDeg),
+      REFERENCE_VIEW.rangeM,
+    ));
+    const frustum = camera.frustum.computeCullingVolume(camera.positionWC, camera.directionWC, camera.upWC);
+    for (const id of ["demo-area-001", "demo-sector-001", "demo-sector-002", "demo-anchor-001", "demo-anchor-002"]) {
+      const marker = entities.getById(`recon-${id}`);
+      const points = marker.polyline ? marker.polyline.positions.getValue() : [marker.position.getValue()];
+      for (const point of points) {
+        assert.notEqual(frustum.computeVisibility(new BoundingSphere(point, 0)), Intersect.OUTSIDE, id);
+      }
+    }
+  }
 });
