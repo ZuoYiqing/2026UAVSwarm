@@ -25,6 +25,8 @@ const fixtureReceiptNames = new Map([
 ]);
 // The browser Runtime API provides no plan-write transport. Tests inject this adapter in memory.
 const missionFixture = window.SwarmRuntimeApi?.missionFixture;
+const FIXTURE_PLAN_PREVIEW_TTL_MS = 60_000;
+let fixturePreviewFrame = null;
 const pageParams = new URL(window.location?.href || "http://127.0.0.1:5178/").searchParams;
 const stageMode = pageParams.get("mode") === "stage";
 const builtInDemo = stageMode && pageParams.get("source") !== "live";
@@ -629,7 +631,12 @@ function fleetPreview() {
 
 function simulationFrame() {
   const alignment = simulationAlignmentStatus();
-  const source = builtInDemo ? new URL("?mode=demo", state.simulationUrl).href : state.simulationUrl;
+  let source = builtInDemo ? new URL("?mode=demo", state.simulationUrl).href : state.simulationUrl;
+  if (fixturePlanPreviewPage()) {
+    const url = new URL(source, window.location.href);
+    url.searchParams.set("planPreview", "fixture");
+    source = url.href;
+  }
   return `<div class="simulation-frame-wrap">
     <iframe id="simulation-frame" class="simulation-frame" src="${esc(source)}" title="Cesium 三维集群态势"${stageMode ? ' inert tabindex="-1"' : ""}></iframe>
     <div class="simulation-frame-note ${alignment.color}">${esc(
@@ -645,6 +652,41 @@ function simulationOrigin() {
   } catch (_error) {
     return null;
   }
+}
+
+function fixturePlanPreviewPage() {
+  return Boolean(missionFixture) && !stageMode && state.page === "twin";
+}
+
+function currentFixturePlanPreview() {
+  const preview = state.fixturePlan.preview;
+  return preview && Date.now() < preview.expires_at_ms ? preview : null;
+}
+
+function syncFixturePlanPreview() {
+  if (!fixturePlanPreviewPage()) return;
+  const payload = currentFixturePlanPreview();
+  const control = document.getElementById("fixture-plan-preview-clear");
+  if (control) control.disabled = payload === null;
+  const frame = document.getElementById("simulation-frame");
+  const origin = simulationOrigin();
+  if (frame !== fixturePreviewFrame || !frame?.contentWindow || !state.simulationReady || !origin) return;
+  frame.contentWindow.postMessage({ type: "uav-swarm/plan-preview", payload }, origin);
+}
+
+function clearFixturePlanPreview() {
+  const draft = state.fixturePlan;
+  if (!draft.preview) return;
+  window.clearTimeout(draft.previewTimer);
+  draft.previewTimer = null;
+  draft.preview = null;
+  syncFixturePlanPreview();
+}
+
+function setFixturePlanDraft(draft = {}) {
+  if (state.fixturePlan.previewTimer != null) window.clearTimeout(state.fixturePlan.previewTimer);
+  state.fixturePlan = draft;
+  syncFixturePlanPreview();
 }
 
 async function postVehicleSnapshot() {
@@ -1473,8 +1515,11 @@ function loadSemanticSample(file) {
 
 function twinPage() {
   const summary = fleetSummary();
+  const previewControl = fixturePlanPreviewPage()
+    ? `<button class="button" id="fixture-plan-preview-clear" type="button" onclick="clearFixturePlanPreview()"${currentFixturePlanPreview() ? "" : " disabled"}>撤销计划预览</button>`
+    : "";
   return `<div class="page twin-page">
-    ${pageTitle("三维集群态势", "Cesium · Runtime vehicle snapshot · 多机任务态势", `<a class="button" href="${esc(state.simulationUrl)}" target="_blank" rel="noreferrer">独立打开</a>`)}
+    ${pageTitle("三维集群态势", "Cesium · Runtime vehicle snapshot · 多机任务态势", `${previewControl}<a class="button" href="${esc(state.simulationUrl)}" target="_blank" rel="noreferrer">独立打开</a>`)}
     <div class="twin-main">
       ${panel(`三维 Mission Twin ${badge(state.simulationReady ? "CONNECTED" : "WAITING", state.simulationReady ? "green" : "amber")}`, simulationFrame(), "twin-panel")}
       <div class="grid twin-nodes">
@@ -1571,7 +1616,7 @@ function setTemplatePlanObjective(value) {
   const draft = state.templatePlan;
   if (draft.inFlight || state.fixturePlan.executing || draft.objective === value) return;
   draft.objective = value;
-  state.fixturePlan = {};
+  setFixturePlanDraft();
   renderFixtureCandidate();
   const input = document.getElementById("template-plan-objective");
   if (input && input.value !== value) input.value = value;
@@ -1660,14 +1705,27 @@ async function validateFixtureCandidate() {
   if (!missionFixture || stageMode || state.page !== "planning" || state.fixturePlan.validating || state.fixturePlan.submitted) return;
   const objective = state.templatePlan.objective.trim();
   const draft = { validating: Boolean(objective) };
-  state.fixturePlan = draft;
+  setFixturePlanDraft(draft);
   if (!objective) draft.error = "请先填写任务目标";
   renderFixtureCandidate();
   if (!objective) return;
   try {
     const candidate = await missionFixture.validateCandidate({ objective });
+    if (state.fixturePlan !== draft) return;
     if (candidate?.result === "validated" && validFixtureCandidate(candidate.plan)) {
-      draft.plan = JSON.parse(JSON.stringify(candidate.plan));
+      const plan = JSON.parse(JSON.stringify(candidate.plan));
+      draft.plan = plan;
+      draft.preview = {
+        version: "1.0", plan_id: plan.plan_id, scene_id: plan.scene_id, map_version: plan.map_version,
+        frame: "scene_ned", expires_at_ms: Date.now() + FIXTURE_PLAN_PREVIEW_TTL_MS,
+        waypoints: plan.steps.filter(step => step.action_type === "goto").map(({ step_id, node_id, params }) => ({
+          step_id, node_id, north_m: params.north_m, east_m: params.east_m, down_m: params.down_m,
+        })),
+      };
+      draft.previewTimer = window.setTimeout(() => {
+        if (state.fixturePlan === draft) clearFixturePlanPreview();
+      }, FIXTURE_PLAN_PREVIEW_TTL_MS);
+      syncFixturePlanPreview();
     } else {
       draft.error = candidate?.failure_reason || "缺少已校验的载具、航点或场景版本";
     }
@@ -1953,7 +2011,7 @@ function saveApiBaseUrl(value) {
   state.lastBackendResult = null;
   state.templatePlan.reply = null;
   state.templatePlan.error = null;
-  state.fixturePlan = {};
+  setFixturePlanDraft();
   state.backendConnected = false;
   state.actionRecords = [];
   state.lifecycleRecords = [];
@@ -2946,6 +3004,7 @@ function sidebar() {
 
 function setPage(page) {
   if (stageMode) return;
+  if (page !== state.page) fixturePreviewFrame = null;
   state.page = page;
   if (page === "twin" && state.renderedPage !== "twin") state.simulationReady = false;
   render();
@@ -3101,6 +3160,10 @@ window.addEventListener("message", (event) => {
   }
   state.simulationReady = true;
   state.simulationContractError = null;
+  if (fixturePlanPreviewPage()) {
+    fixturePreviewFrame = frame;
+    syncFixturePlanPreview();
+  }
   const note = document.querySelector(".simulation-frame-note");
   if (note) note.textContent = builtInDemo ? "DEMO · Cesium 内置场景"
     : `Runtime 快照由主控制台统一推送；${simulationAlignmentStatus().label}`;

@@ -48,13 +48,23 @@ function harness(href = "http://127.0.0.1:5178/", apiOverrides = {}) {
     console, URL, crypto:require("node:crypto").webcrypto,
     localStorage:{getItem:() => null,setItem() {}},
     window:{location:{href},performance:{now:()=>elapsed},SwarmConsoleModel:model,SwarmMissionDashboard:dashboard,
-      SwarmRuntimeApi:api,setTimeout:(callback,ms) => timers.push({callback,ms}),addEventListener() {}},
+      SwarmRuntimeApi:api,
+      setTimeout(callback, ms) {
+        const timer = { callback, ms };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout(timer) {
+        const index = timers.indexOf(timer);
+        if (index >= 0) timers.splice(index, 1);
+      },
+      addEventListener:(type, fn) => { listeners[type] = fn; }},
     document:{getElementById:id => slots.get(id) || null,querySelector:()=>null,activeElement:null},
     setInterval:(callback,ms) => intervals.push({callback,ms}),
   });
   const run = code => vm.runInContext(code, context);
   run(fs.readFileSync(path.join(__dirname,"../app.js"),"utf8"));
-  return { api, calls, run, timers, listeners, html:id => slots.get(id).innerHTML,
+  return { api, calls, run, timers, listeners, slots, html:id => slots.get(id).innerHTML,
     tick:s => { elapsed=s*1000; intervals.find(timer=>timer.ms===1000).callback(); } };
 }
 
@@ -338,6 +348,47 @@ function inspectionConsole() {
     },
   };
 }
+
+test("the preview sends only validated fixture waypoints to the current twin and clears without an execution", async () => {
+  const h = inspectionConsole();
+  const sent = [];
+  const frame = { contentWindow: { postMessage: (message, origin) => sent.push({ message, origin }) } };
+  const hello = { origin: "http://127.0.0.1:5179", source: frame.contentWindow, data: {
+    type: "uav-swarm/simulation-ready", payload: { contractVersion: "1.0", integration: "parent-snapshot" },
+  } };
+  const time = Date.parse(stamp(0));
+  h.run(`Date.now = () => ${time}`);
+  await h.run("validateFixtureCandidate()");
+  assert.equal(sent.length, 0);
+  h.run('setPage("twin")');
+  assert.match(h.run("simulationFrame()"), /planPreview=fixture/);
+  h.slots.set("simulation-frame", frame);
+  h.listeners.message({ ...hello, source: {} });
+  h.listeners.message({ ...hello, origin: "http://127.0.0.1:5188" });
+  assert.equal(sent.length, 0);
+  h.listeners.message(hello);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), {
+    origin: "http://127.0.0.1:5179",
+    message: { type: "uav-swarm/plan-preview", payload: {
+      version: "1.0", plan_id: inspection.plan.plan_id, scene_id: inspection.plan.scene_id,
+      map_version: inspection.plan.map_version, frame: "scene_ned", expires_at_ms: time + 60_000,
+      waypoints: inspection.plan.steps.filter(step => step.action_type === "goto").map(step => ({
+        step_id: step.step_id, node_id: step.node_id,
+        north_m: step.params.north_m, east_m: step.params.east_m, down_m: step.params.down_m,
+      })),
+    } },
+  });
+  h.run(`Date.now = () => ${time + 10_000}`);
+  h.listeners.message(hello);
+  assert.deepEqual(sent[0], sent[1]);
+
+  h.run(`Date.now = () => ${time + 60_000}`);
+  h.timers.find(timer => timer.ms === 60_000).callback();
+  assert.equal(sent.at(-1).message.payload, null);
+  assert.equal(h.run("state.fixturePlan.plan.plan_id"), inspection.plan.plan_id);
+  assert.equal(h.approvals.length, 0);
+  assert.doesNotMatch(harness().run('setPage("twin"); simulationFrame()'), /planPreview=fixture/);
+});
 
 test("the fixture binds an explicitly approved candidate to the Runtime run and reported progress fields", async () => {
   const h = inspectionConsole();

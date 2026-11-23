@@ -69,6 +69,12 @@ Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/st
 
 算法本地提交 `d752354` 已提供可复核的分工与航点候选，设备巡检中的 `OBSERVE` 在转换时明确受阻。导航测试桩的通过只证明导航、进度和失败显示。设备观测能力及其执行映射需由算法与 Runtime 共同确认，真实仿真验收还需同版本场景及当次有效标定。
 
+### 三维只读计划预览
+
+在注入测试桩的主控台里校验候选，再点「查看三维集群态势」。iframe 使用 `planPreview=fixture`，只接收该次校验通过的有序 `goto` 航点。子页以「计划预览 · 测试桩」标注。展示窗口为校验通过后的 60 秒，重载和遥测刷新沿用原截止时间。到期、撤销和候选替换清除计划层。
+
+复跑组合验证时，由 `UAVSWARM_TWIN_DIST` 指定三维接收器的本地构建目录。主控台目录运行 `node tests/plan-preview.browser.mjs`。如果 Playwright 安装在另一份检出的三维目录，可用 `UAVSWARM_PLAYWRIGHT_ROOT` 指向该目录。使用本机已安装的 Edge 时，设 `UAVSWARM_BROWSER_CHANNEL=msedge`。测试使用 [同一导航夹具](tests/fixtures/equipment-inspection-lifecycle.json)，在浏览器内拦截所有请求和模拟 Runtime 的只读返回，无需启动 HTTP 服务。
+
 ## 页面
 
 - 总览驾驶舱
