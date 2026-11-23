@@ -1150,12 +1150,16 @@ def runtime_snapshot() -> dict[str, Any]:
 def vehicle_snapshot() -> dict[str, Any]:
     """Return the Cesium vehicle feed projection from cached telemetry only."""
     snapshot = _merge_platform_view(RUNTIME_STATE_STORE.vehicle_snapshot(), "vehicle_snapshot")
+    active_run = RUNTIME_STATE_STORE.active_simulation_run_id() if PLATFORM_GATEWAY is not None else None
     overrides = ({row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
                  if DEMO_REHEARSAL is not None else {})
     # merge_projection copies local and remote vehicle rows. Never write an
     # override into the platform cache or into the measured value.
     for vehicle in snapshot["vehicles"]:
         if PLATFORM_GATEWAY is not None and vehicle["id"] == "UAV-02":
+            if active_run is not None:
+                from uav_runtime.platform.view import require_calibration_run
+                require_calibration_run(vehicle, active_run)
             score = _platform_link_quality(vehicle, fresh=snapshot["platform_view"].get("fresh") is True)
             vehicle.update(link_quality=score, link_quality_measured=score, link_quality_mode="LIVE")
         if override := overrides.get(vehicle["id"]):
@@ -1379,6 +1383,10 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, result
     if method == "POST" and normalized == "/api/coordinates/calibration":
         if PLATFORM_GATEWAY is not None and payload.get("node_id") == "UAV-02":
+            try:
+                RUNTIME_STATE_STORE.check_coordinate_calibration_run(payload)
+            except ValueError as exc:
+                raise RequestValidationError("invalid_coordinate_calibration", "body", str(exc)) from exc
             try:
                 return PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
             except Exception:

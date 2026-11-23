@@ -148,6 +148,25 @@ def aged_view(projections, *, elapsed_ms, fresh, stale_after_ms):
     return out
 
 
+def require_calibration_run(vehicle, run_id):
+    """Hide old public poses in a cached relay without degrading its live link."""
+    spatial = vehicle.setdefault("spatial", {})
+    if spatial.get("calibration_run_id") == run_id:
+        return
+    spatial["public_position_usable"] = False
+    spatial["calibration_status"] = "unavailable"
+    spatial.pop("scene_pose", None)
+    spatial.pop("translation_scene_ned_m", None)
+    if vehicle.get("pose_source") == "runtime_scene_calibration":
+        raw_pose = spatial.get("raw_vehicle_local_pose")
+        if isinstance(raw_pose, dict):
+            vehicle["pose"] = {**raw_pose, "frame": "NED"}
+            vehicle["pose_source"] = "last_known_telemetry" if vehicle.get("telemetry", {}).get("stale") else "px4_telemetry"
+        else:
+            vehicle.pop("pose", None)
+            vehicle.pop("pose_source", None)
+
+
 def merge_projection(local, view, key):
     """Keep the old public endpoint and its shape, append only the remote owned node."""
     out = copy.deepcopy(local)
