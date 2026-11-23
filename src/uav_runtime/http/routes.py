@@ -815,12 +815,12 @@ def return_home(payload: dict[str, Any]) -> dict[str, Any]:
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
     """Versioned plan preview; no model, execution, or adapter is called.
 
-    Explicit template keys keep the legacy path. Objective-only requests use
-    offline rules and the loaded scene catalog, never one from the caller.
+    Explicit template keys keep the legacy path. An omitted/blank key or
+    "auto" uses offline rules and the loaded scene catalog, not caller data.
     """
     req = PlanMissionRequest.from_json(payload)
     resolution = None
-    if not req.mission_type.strip():
+    if req.mission_type.strip() in {"", "auto"}:
         resolution = resolve_preview_intent(
             req.objective, scene_id=VEHICLE_REGISTRY.scene_id, scene=VEHICLE_REGISTRY.scene,
         )

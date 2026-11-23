@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+# Algorithm owns the original. Runtime imports a pinned, verbatim copy for
+# offline deployment; the source/corpus hash pins are enforced by unit tests.
 from uav_runtime.agent._vendor_intent_recognizer_v0 import (
     CatalogEntry,
     IntentParameters,

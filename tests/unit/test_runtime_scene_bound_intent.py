@@ -33,7 +33,8 @@ def test_vendor_matches_algorithm_source_pin(pin) -> None:
 
     contents = lf(ROOT / pin["vendored_path"])
     assert hashlib.sha256(contents).hexdigest() == pin["sha256_lf"]
-    # Once Algorithm merges, keep the two tracked sources in sync as well.
+    # Algorithm owns the original; the Runtime copy must match it byte-for-byte
+    # after checkout newline normalization, even when both paths are present.
     upstream = ROOT / pin["upstream_path"]
     if upstream.is_file():
         assert contents == lf(upstream)
@@ -86,8 +87,10 @@ def request(objective: str, **fields) -> dict:
 
 
 @pytest.mark.parametrize("case", GOLDEN["cases"], ids=[case["id"] for case in GOLDEN["cases"]])
-def test_golden_objectives_at_plan_mission(preview, case) -> None:
-    body = request(case["objective"])
+@pytest.mark.parametrize("selector", [None, "", "auto"], ids=["objective-only", "empty-key", "auto"])
+def test_golden_objectives_at_plan_mission(preview, case, selector) -> None:
+    fields = {} if selector is None else {"mission_type": selector}
+    body = request(case["objective"], **fields)
     resolution = body["intent_resolution"]
     assert body["intent_source"] == "rules"
     assert resolution["status"] == RESOLUTION_STATES[case["status"]]
@@ -192,8 +195,16 @@ def test_explicit_template_skips_rules_and_keeps_legacy_shape(preview, monkeypat
     explicit = request("北仓只作参照", mission_type="inspection_snapshot")
     assert explicit["plan_source"] == "template" and explicit["intent_source"] == "explicit"
     assert "intent_resolution" not in explicit and "preview_binding" not in explicit["plan"]
-    auto_word = request("巡检热泵机房。", mission_type="auto")
-    assert auto_word["intent_source"] == "explicit" and auto_word["plan"] is None
+    unknown_key = request("巡检热泵机房。", mission_type="unknown")
+    assert unknown_key["intent_source"] == "explicit" and unknown_key["plan"] is None
+
+
+def test_auto_still_requires_the_active_catalog(preview) -> None:
+    supplied = preview.scene.pop("intent_catalog")
+    body = request("巡检热泵机房。", mission_type="auto", intent_catalog=supplied)
+    assert body["intent_source"] == body["plan_source"] == "none"
+    assert body["plan"] is None
+    assert body["intent_resolution"]["reason_code"] == "INTENT_CATALOG_UNAVAILABLE"
 
 
 def test_bound_shape_that_cannot_be_represented_never_drops_constraints(preview, monkeypatch) -> None:

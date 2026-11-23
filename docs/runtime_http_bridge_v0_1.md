@@ -162,9 +162,9 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 | `fallback_reason` | 不发生降级时为 `null`。真正因模型不可用或低置信切换到离线路径时必带 `model_unavailable` 或 `model_low_confidence`，即使最终未生成计划。 |
 | `execution_authorized` | 恒为 `false`；`ready` 只是预览就绪。传 `dry_run: false` 或附带审批字段也不会提交执行。 |
 
-非空 `mission_type` 继续按显式模板处理，`objective` 只是备注，不做识别。
-显式模板（包括 `fallback_hold`）不是降级；`"auto"` 也不是一个模板键。
-要走规则，省略 `mission_type` 或传空字符串，仅提供 `objective`。这条路径
+显式模板键继续走旧路径，`objective` 只是备注，不做识别；`fallback_hold` 等显式模板不算降级。
+要走规则，提供 `objective`，并省略 `mission_type`、传空字符串或传 `"auto"`。
+`"auto"` 是选择规则路径的标记，不是可展开的模板键。这条路径
 直接用离线规则，`fallback_reason: null`；本地模型和算法计划生产者仍未接入。
 调用方不能通过请求字段指定目录、来源或授权。
 
@@ -174,7 +174,7 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 老版本没返回这些字段时，显示来源未知即可。可运行的请求/响应字段样例见
 [`runtime_planner_preview_v1.json`](fixtures/runtime_planner_preview_v1.json)。
 
-#### Objective-only 的目录和解析结果（v1.0 兼容扩展）
+#### 规则预览的目录和解析结果（v1.0 兼容扩展）
 
 只读 Runtime 已加载的活动 `scene.json`。目录由部署时随场景提供，不能从
 请求、示例或另一张地图推断。以下是形状示例，**不是**真实场景配置：
@@ -194,10 +194,10 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 ```
 
 - `scene_id` / `map_version` 必须与当前活动场景一致；`catalog_id` 标识语义目录版本。
-- 仿真提供可核验的 `scene.targets[].target_id`；算法提供可核对的名字、别名和确有依据的单选组。Runtime 仅绑定这份目录；目录内 `entity_id` 不得重复，且必须来自场景目标。不同实体可以共享别名，识别时就会追问。不得把永久仅参照的地标当作可巡检目标列入 v0。
-- 真实 `simple_recon_v0_1` 目前未发布该目录。缺少目录时保留 `blocked / unsupported_mission_type`，`intent_source: "none"`、`plan: null`；具体是 `INTENT_CATALOG_UNAVAILABLE`。版本不匹配、非法条目、场景外 ID 也不选择模板。合成题集不给真实场景使用。
+- 真实目录由场景负责人随场景发布，包含可核验的 `scene.targets[].target_id`、名字、别名和确有依据的单选组。Runtime 仅绑定这份目录；目录内 `entity_id` 不得重复，且必须来自场景目标。不同实体可以共享别名，识别时就会追问。不得把永久仅参照的地标当作可巡检目标列入 v0。
+- 真实 `simple_recon_v0_1` 目前未发布该目录。缺少目录时保留 `blocked / unsupported_mission_type`，`intent_source: "none"`、`plan: null`；具体是 `INTENT_CATALOG_UNAVAILABLE`。版本不匹配、非法条目、场景外 ID 也不选择模板。首轮用隔离的合成目录验收接线，不等待真实目录，也不把合成题集装入真实场景。
 
-只有 objective-only 回包增加 `intent_resolution`，内含 `status`、`mission_type`、
+只有请求选择规则路径时，回包增加 `intent_resolution`，内含 `status`、`mission_type`、
 `reason_code`、`question`、`catalog`（场景/地图/目录身份）和 `bindings`。
 绑定分开记录 `targets`、`reference_only`、`excluded_targets`（每条有
 `entity_id` 和作为识别证据的短语）、`only_listed_targets` 和 `status_scope`。
@@ -210,7 +210,7 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 | `unknown` | `unsupported` | 同样不产计划、不猜测目标；返回理由，识别器给出追问时一并保留。 |
 
 Runtime 中的规则副本固定在算法提交 `70a35af6eff2009f30e838ca0517ab2c65550754`。
-算法保持上游源码主责；发布新规则时同步复制源码和黄金语料，校验
+算法提供上游原件，Runtime 负责接线和验收；发布新规则时同步复制源码和黄金语料，校验
 [来源锁定文件](../tests/fixtures/runtime_intent_recognition_vendor_v0.json)
 及 [26 条合成 HTTP 用例](../tests/fixtures/runtime_intent_recognition_v0.json)。不需要算法目录出现在部署机、网络、模型或额外服务。
 
