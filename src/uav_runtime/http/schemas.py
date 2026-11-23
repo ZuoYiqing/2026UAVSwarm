@@ -380,9 +380,10 @@ class GotoRequest(BackendRequest):
 class PlanExecuteRequest:
     """Submit a Mission Plan IR for real execution on Runtime.
 
-    This is the contract the algorithm side produces against: it hands over a
-    structured plan, Runtime sequences it and applies the Policy Gate before
-    every action.
+    This is the approved-execution request, not the algorithm's Proposal or
+    planner preview. Runtime sequences a submitted plan and applies the Policy
+    Gate before every action. The operator_id field records a supplied identity;
+    it does not authenticate the caller by itself.
 
     **Scene identity is required.**  ``plan.scene_id`` and ``plan.map_version``
     must be present and non-empty.  Runtime refuses a plan it cannot check
