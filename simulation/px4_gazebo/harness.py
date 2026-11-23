@@ -32,6 +32,15 @@ STATE_PATH = RUNTIME_ROOT / "harness_state.json"
 MINIMUM_VEHICLE_COUNT = 3
 HARNESS_RUN_ID_ENV = "UAV_SWARM_HARNESS_RUN_ID"
 WORLD_SHA256_SCHEME = "sha256-lf-v1"
+RUNTIME_LISTENER_SUFFIX = " runtime listener"
+PX4_UDP_BIND_HOST = "0.0.0.0"
+PX4_UDP_LOCAL_PORTS = (
+    (14580, "offboard local"),
+    (18570, "GCS local"),
+    (14280, "payload local"),
+    (13030, "gimbal local"),
+)
+PX4_UDP_LOCAL_SUFFIXES = tuple(f" {role}" for _, role in PX4_UDP_LOCAL_PORTS)
 
 
 def canonical_world_bytes(contents: bytes) -> bytes:
@@ -437,20 +446,22 @@ def udp_port_available(host: str, port: int) -> bool:
 
 
 def required_udp_ports(manifest: dict[str, Any]) -> list[tuple[str, int, str]]:
-    ports: list[tuple[str, int, str]] = []
-    for vehicle in manifest["vehicles"]:
-        instance = int(vehicle["px4_instance"])
-        host, endpoint_port = parse_udpin_endpoint(str(vehicle["command_endpoint"]))
-        ports.extend(
-            (
-                (host, endpoint_port, f"{vehicle['node_id']} runtime listener"),
-                ("127.0.0.1", 14580 + instance, f"{vehicle['node_id']} offboard local"),
-                ("127.0.0.1", 18570 + instance, f"{vehicle['node_id']} GCS local"),
-                ("127.0.0.1", 14280 + instance, f"{vehicle['node_id']} payload local"),
-                ("127.0.0.1", 13030 + instance, f"{vehicle['node_id']} gimbal local"),
-            )
-        )
-    return ports
+    """Only ports bound by the PX4 processes of this harness run."""
+    # Match PX4's IPv4 INADDR_ANY bind, not the offboard destination address.
+    return [
+        (PX4_UDP_BIND_HOST, base + int(vehicle["px4_instance"]), f"{vehicle['node_id']} {role}")
+        for vehicle in manifest["vehicles"]
+        for base, role in PX4_UDP_LOCAL_PORTS
+    ]
+
+
+def runtime_listener_udp_ports(manifest: dict[str, Any]) -> list[tuple[str, int, str]]:
+    """PX4 send destinations owned by Runtime; never probed as free binds."""
+    return [
+        (*parse_udpin_endpoint(str(vehicle["command_endpoint"])),
+         f"{vehicle['node_id']}{RUNTIME_LISTENER_SUFFIX}")
+        for vehicle in manifest["vehicles"]
+    ]
 
 
 def process_alive(pid: int) -> bool:
@@ -1128,6 +1139,10 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
             {"host": host, "port": port, "owner": owner}
             for host, port, owner in required_udp_ports(manifest)
         ],
+        "runtime_listener_udp_ports": [
+            {"host": host, "port": port, "owner": owner}
+            for host, port, owner in runtime_listener_udp_ports(manifest)
+        ],
         "processes": [],
     }
     opened_logs: list[Any] = []
@@ -1272,9 +1287,22 @@ def _wait_for_cleanup(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Wait until the process groups and world exit and UDP ports are reusable."""
+    """Wait for the world, process groups and their own UDP bindings to exit."""
     expected_world = str(state.get("world_name", ""))
-    port_rows = list(state.get("required_udp_ports", []))
+    legacy_port_list = "runtime_listener_udp_ports" not in state
+    runtime_ports = list(state.get("runtime_listener_udp_ports", []))
+    port_rows = []
+    for row in state.get("required_udp_ports", []):
+        owner = row.get("owner")
+        # Legacy state mixed listeners into the required list with this label
+        # suffix. Leave any unlabeled or unrecognized row required.
+        if legacy_port_list and isinstance(owner, str) and owner.endswith(RUNTIME_LISTENER_SUFFIX):
+            runtime_ports.append(row)
+        elif (legacy_port_list and row.get("host") == "127.0.0.1"
+              and isinstance(owner, str) and owner.endswith(PX4_UDP_LOCAL_SUFFIXES)):
+            port_rows.append({**row, "host": PX4_UDP_BIND_HOST})
+        else:
+            port_rows.append(row)
     deadline = monotonic() + max(0.0, timeout_s)
     while True:
         live_members = (process_probe or _live_group_members)(list(state.get("processes", [])))
@@ -1302,6 +1330,7 @@ def _wait_for_cleanup(
             "ports_released": ports_released,
             "live_group_member_pids": live_members,
             "ports": ports,
+            "runtime_listener_udp_ports": runtime_ports,
         }
         if clean or monotonic() >= deadline:
             return evidence

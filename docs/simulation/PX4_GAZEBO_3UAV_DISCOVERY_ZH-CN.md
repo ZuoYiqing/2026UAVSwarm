@@ -82,6 +82,17 @@ udpin:127.0.0.1:14541
 udpin:127.0.0.1:14542
 ```
 
+这些是 PX4 的发送目的地，由外部 Runtime 持有，不是本次仿真的本地绑定。
+Harness 的启动预检与 stop/restart 清理只要求 PX4 自有 UDP 端口空闲，按 PX4
+实际绑定地址 `0.0.0.0` 检查，同时保留进程身份和 world 退出检查。
+正常 `stop` 可以在 Runtime 存活时清理本 run 的状态，
+不需要手工删除 `harness_state.json`。旧状态文件中标为 `… runtime listener` 的
+记录在清理时也按外部目的地处理。
+
+`harness_state.json` 的 `required_udp_ports` 和停止结果的 `cleanup.ports`
+只列待释放的 PX4 绑定；`runtime_listener_udp_ports` 单独列外部目的地，不表示
+Runtime 是否在线。在 Runtime 活着时使用 integrated health，避免额外监听这些端口。
+
 ### 3.4 工作目录和日志
 
 PX4 官方通用多实例脚本会为每个实例创建独立 working directory。本项目保持相同原则，

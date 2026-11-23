@@ -7,6 +7,7 @@ import math
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,53 @@ def test_manifest_has_stable_three_vehicle_mapping() -> None:
         18571,
         18572,
     ]
+
+
+def test_harness_udp_binds_are_distinct_from_runtime_destinations() -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    assert {(host, port) for host, port, _ in harness.required_udp_ports(manifest)} == {
+        ("0.0.0.0", base + index) for base in (14580, 18570, 14280, 13030) for index in range(3)
+    }
+    assert harness.runtime_listener_udp_ports(manifest) == [
+        ("127.0.0.1", 14540 + index, f"UAV-0{index + 1} runtime listener")
+        for index in range(3)
+    ]
+
+
+@pytest.mark.parametrize("blocked_px4_port", [None, 14580, 18571, 14282, 13031])
+def test_start_preflight_allows_runtime_listeners_but_rejects_every_px4_bind_class(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_px4_port: int | None,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    build = tmp_path / "build" / manifest["build_target"]
+    (build / "bin").mkdir(parents=True)
+    (build / "bin" / "px4").touch()
+    (build / "etc").mkdir()
+    model_path = tmp_path / "Tools" / "simulation" / "gz" / "models" / manifest["px4_sim_model"].removeprefix("gz_")
+    model_path.mkdir(parents=True)
+    (model_path / "model.sdf").touch()
+    monkeypatch.setattr(harness, "resolve_px4_dir", lambda _: tmp_path)
+    monkeypatch.setattr(harness, "os", SimpleNamespace(
+        name="posix", access=lambda *_: True, X_OK=harness.os.X_OK, path=harness.os.path,
+    ))
+    monkeypatch.setattr(harness, "_foreign_px4_pids", lambda: [])
+    monkeypatch.setattr(harness, "_running_gazebo_worlds", lambda: [])
+    monkeypatch.setattr(harness, "command_output", lambda _: "stub-version")
+    runtime_ports = {14540, 14541, 14542}
+    ports_probed: set[int] = set()
+
+    def port_available(host: str, port: int) -> bool:
+        assert host == "0.0.0.0"
+        ports_probed.add(port)
+        return port not in runtime_ports and port != blocked_px4_port
+
+    monkeypatch.setattr(harness, "udp_port_available", port_available)
+    if blocked_px4_port is None:
+        assert harness.preflight(manifest)["px4_commit"] == "stub-version"
+    else:
+        with pytest.raises(harness.HarnessError, match=rf"UDP ports are already occupied:.*0\.0\.0\.0:{blocked_px4_port}"):
+            harness.preflight(manifest)
+    assert ports_probed == {base + index for base in (14580, 18570, 14280, 13030) for index in range(3)}
 
 
 def test_retained_runtime_mapping_matches_manifest_truth() -> None:
@@ -485,6 +533,74 @@ def test_cleanup_evidence_requires_world_exit_and_released_ports() -> None:
     assert evidence["world_stopped"] is False
     assert evidence["ports_released"] is False
     assert evidence["ports"][1]["available"] is False
+
+
+def test_cleanup_still_blocks_occupied_px4_bind_in_legacy_state() -> None:
+    state = {"required_udp_ports": [
+        {"host": "127.0.0.1", "port": 14541, "owner": "UAV-02 runtime listener"},
+        {"host": "127.0.0.1", "port": 14581, "owner": "UAV-02 offboard local"},
+    ]}
+    evidence = harness._wait_for_cleanup(
+        state, timeout_s=0, world_probe=lambda: [], process_probe=lambda _: [],
+        port_probe=lambda host, port: (host, port) != ("0.0.0.0", 14581),
+    )
+    assert evidence["world_stopped"] is True
+    assert evidence["clean"] is False and evidence["ports_released"] is False
+    assert evidence["ports"] == [
+        {"host": "0.0.0.0", "port": 14581, "owner": "UAV-02 offboard local", "available": False},
+    ]
+
+
+@pytest.mark.parametrize("legacy", [True, False], ids=["legacy-state", "partitioned-state"])
+@pytest.mark.parametrize("recover_at_start", [True, False], ids=["start-recovery", "stop"])
+def test_managed_cleanup_keeps_runtime_listeners_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool, recover_at_start: bool,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    state_path, pid_path = _write_state(tmp_path, monkeypatch)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["world_name"] = manifest["world_name"]
+    runtime_rows = [
+        {"host": "127.0.0.1", "port": 14540 + index, "owner": f"UAV-0{index + 1} runtime listener"}
+        for index in range(3)
+    ]
+    local_rows = [
+        {"host": host, "port": port, "owner": owner}
+        for host, port, owner in harness.required_udp_ports(manifest)
+    ]
+    state["required_udp_ports"] = (
+        [{**row, "host": "127.0.0.1"} for row in local_rows] + runtime_rows if legacy else local_rows
+    )
+    if not legacy:
+        state["runtime_listener_udp_ports"] = runtime_rows
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(harness, "read_process_identity", lambda _: _exited())
+    monkeypatch.setattr(harness.os, "killpg", lambda *_: pytest.fail("exited group must not be signalled"), raising=False)
+    original_cleanup = harness._wait_for_cleanup
+    probes: list[tuple[str, int]] = []
+    evidence = []
+
+    def port_available(host: str, port: int) -> bool:
+        probes.append((host, port))
+        return port not in {14540, 14541, 14542}
+
+    def cleanup(snapshot, **kwargs):
+        result = original_cleanup(snapshot, **kwargs, world_probe=lambda: [],
+                                  port_probe=port_available, process_probe=lambda _: [])
+        evidence.append(result)
+        return result
+
+    monkeypatch.setattr(harness, "_wait_for_cleanup", cleanup)
+    if recover_at_start:
+        assert harness._validate_start_state(
+            harness.read_state(), manifest=manifest, manifest_path=MANIFEST_PATH, headless=True,
+        ) is False  # cleanup succeeded; proceed to start preflight
+    else:
+        assert harness.stop_harness()["status"] == "stopped"
+    assert probes == [("0.0.0.0", row["port"]) for row in local_rows]
+    assert evidence[0]["ports_released"] is True
+    assert evidence[0]["runtime_listener_udp_ports"] == runtime_rows
+    assert not state_path.exists() and not pid_path.exists()
 
 
 def test_cleanup_incomplete_preserves_state_after_safe_process_stop(
