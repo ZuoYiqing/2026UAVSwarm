@@ -1,0 +1,46 @@
+{
+  "format": "uavswarm-offline-visible-marker-fixture",
+  "version": "1.0",
+  "evidence_origin": "synthetic_test_fixture",
+  "execution_authorized": false,
+  "capture_base": {
+    "commit": "6952513e8ee8482d7cf48e364603b2893909dbfe",
+    "path": "docs/simulation/fixtures/simple_recon_v0_1_target_001_capture_v1.json"
+  },
+  "overrides": {
+    "arrival": {"runtime_run_id": "fixture-runtime-visible-v1"},
+    "capture_request": {
+      "request_id": "fixture-capture-visible-v1",
+      "gazebo_run_id": "fixture-gazebo-visible-v1"
+    },
+    "sample": {
+      "request_id": "fixture-capture-visible-v1",
+      "gazebo_run_id": "fixture-gazebo-visible-v1",
+      "payload_sha256": "ea73058e9be2b7a543f80543c1939e5b79043c3c9b9e4328afa5b2198fe9ef74",
+      "image_ref": "sha256:ea73058e9be2b7a543f80543c1939e5b79043c3c9b9e4328afa5b2198fe9ef74"
+    }
+  },
+  "image": {
+    "png_path": "docs/simulation/fixtures/target_001_visible_synthetic.png",
+    "png_sha256": "15afb106ab20168ef45ce73679e0b7adfe2966c4099fcce654989e1ba1268208",
+    "width": 1280,
+    "height": 960,
+    "encoding": "RGB8",
+    "raw_bytes": 3686400
+  },
+  "reference_pixels": {
+    "marker_rgb": [18, 173, 51],
+    "background_rgb": [95, 99, 105],
+    "ellipse_center_px": [640, 796],
+    "ellipse_radii_px": [140, 60],
+    "region": {"x": 500, "y": 736, "w": 281, "h": 121}
+  },
+  "expected": {
+    "arrival": "arrived",
+    "capture": "fixture_valid",
+    "observation_without_review": "undetermined",
+    "criterion_version": "target-001-green-disk-pixels-v0.1",
+    "expected_outcome_for_synthetic_pixel_review": "observed",
+    "linked_task_completion": "not_asserted"
+  }
+}

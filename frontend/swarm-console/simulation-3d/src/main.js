@@ -48,6 +48,7 @@ import { createFlightActionClient } from "./flight-action.js";
 import { QINGLAN_SCENE, RECON_SCENE } from "./scene-alignment.js";
 import { createReferenceScene } from "./reference-scene.js";
 import { createParentMessageHandler } from "./parent-bridge.js";
+import { PlanPreviewLayer } from "./plan-preview-layer.js";
 import {
   RuntimeVehicleSnapshotPoller,
   VehicleSnapshotState,
@@ -222,6 +223,16 @@ const vehicleLayer = new VehicleLayer(viewer, positionToWorld);
 const demoFeed = new DemoVehicleFeed();
 const embedded = window.parent !== window;
 const queryParameters = new URLSearchParams(window.location.search);
+const planPreviewEnabled = embedded && queryParameters.get("planPreview") === "fixture";
+const planPreviewStatus = document.querySelector("#plan-preview-status");
+const planPreviewLayer = planPreviewEnabled ? new PlanPreviewLayer(
+  viewer.entities,
+  (east, north, up) => Matrix4.multiplyByPoint(reconFrame, new Cartesian3(east, north, up), new Cartesian3()),
+  preview => { planPreviewStatus.hidden = !preview; },
+) : null;
+if (planPreviewEnabled) {
+  for (const control of document.querySelectorAll("[data-flight-control]")) control.hidden = true;
+}
 const runtimeApiBaseUrl =
   queryParameters.get("runtimeApiBaseUrl") ||
   import.meta.env.VITE_RUNTIME_API_BASE_URL ||
@@ -568,6 +579,7 @@ function useLive() {
 }
 
 function useDemo() {
+  planPreviewLayer?.clear();
   if (!["city", "campus"].includes(activeSceneId)) loadScene("city");
   runtimePoller.stop();
   snapshotState.activateDemo();
@@ -616,6 +628,7 @@ const runtimePoller = new RuntimeVehicleSnapshotPoller({
 async function loadScene(sceneId) {
   const definition = sceneDefinitions[sceneId];
   if (!definition) return;
+  planPreviewLayer?.setScene(definition.kind === "reference" ? RECON_SCENE : null);
   vehicleFrame = definition.kind === "reference" ? reconFrame : missionFrame;
   // 活动帧变了，逆矩阵必须跟着重算，否则取点换算仍基于旧场景的原点
   refreshSceneNedMatrix();
@@ -948,6 +961,7 @@ function setActionBusy(busy, label = "") {
 }
 
 async function runFlightAction(kind) {
+  if (planPreviewEnabled) return;
   const nodeId = selectedNodeId();
   if (!nodeId) {
     showActionResult("请先选择一个载具", "error");
@@ -1135,6 +1149,7 @@ function cancelGotoTarget() {
 }
 
 async function confirmGotoTarget() {
+  if (planPreviewEnabled) return;
   if (!pendingGotoTargetNed) return;
   const nodeId = selectedNodeId();
   if (!nodeId) {
@@ -1243,7 +1258,7 @@ pickHandler.setInputAction((movement) => {
     return;
   }
   // 没点到载具 —— 若"飞到这里"已武装，则把该点作为目标
-  if (elements.gotoArmed?.checked) {
+  if (!planPreviewEnabled && elements.gotoArmed?.checked) {
     const outcome = handleGroundClick(movement.position);
     if (outcome.ok) {
       showActionResult("已选目标点，点「确认前往」下发", "busy");
@@ -1270,6 +1285,7 @@ const bridge = Object.freeze({
   selectVehicle: setSelectedVehicle,
   focusScene,
   getState() {
+    planPreviewLayer?.expire();
     return {
       sceneId: activeSceneId,
       dataMode: snapshotState.mode,
@@ -1278,6 +1294,7 @@ const bridge = Object.freeze({
       source: latestSnapshot?.source || null,
       vehicleCount: vehicleLayer.getRecords().length,
       selectedVehicleId: vehicleLayer.selectedVehicleId,
+      planPreview: planPreviewLayer?.summary ?? null,
       alignment: vehicleLayer.getRecords().map(record => ({ id: record.vehicle.id, aligned: record.vehicle.alignment?.aligned ?? snapshotState.mode === "demo", reason: record.vehicle.alignment?.reason || "", position: record.worldPosition ? record.vehicle.position : null, trailLength: record.trailPositions.length })),
     };
   },
@@ -1298,6 +1315,13 @@ window.addEventListener("message", createParentMessageHandler({
   onMode: mode => mode === "demo" ? useDemo() : useLive(),
   // 父页面切换选中载具：只在本视图应用，**不回推**（否则两边互相触发成环）
   onSelectVehicle: nodeId => setSelectedVehicle(nodeId || "", { notifyParent: false }),
+  onPlanPreview: planPreviewEnabled ? payload => {
+    if (snapshotState.mode !== "live") {
+      planPreviewLayer.clear();
+      return false;
+    }
+    return planPreviewLayer.apply(payload);
+  } : undefined,
   onError: error => { elements.error.textContent = `载具快照无效：${error.message}`; elements.error.hidden = false; },
 }));
 
@@ -1318,7 +1342,10 @@ if (window.parent !== window) {
 }
 
 loadScene(activeSceneId);
-window.setInterval(() => refreshSourceStatus(), 250);
+window.setInterval(() => {
+  planPreviewLayer?.expire();
+  refreshSourceStatus();
+}, 250);
 window.addEventListener("beforeunload", () => runtimePoller.stop());
 
 if (queryParameters.get("mode") === "demo") {

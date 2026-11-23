@@ -48,13 +48,23 @@ function harness(href = "http://127.0.0.1:5178/", apiOverrides = {}) {
     console, URL, crypto:require("node:crypto").webcrypto,
     localStorage:{getItem:() => null,setItem() {}},
     window:{location:{href},performance:{now:()=>elapsed},SwarmConsoleModel:model,SwarmMissionDashboard:dashboard,
-      SwarmRuntimeApi:api,setTimeout:(callback,ms) => timers.push({callback,ms}),addEventListener() {}},
+      SwarmRuntimeApi:api,
+      setTimeout(callback, ms) {
+        const timer = { callback, ms };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout(timer) {
+        const index = timers.indexOf(timer);
+        if (index >= 0) timers.splice(index, 1);
+      },
+      addEventListener:(type, fn) => { listeners[type] = fn; }},
     document:{getElementById:id => slots.get(id) || null,querySelector:()=>null,activeElement:null},
     setInterval:(callback,ms) => intervals.push({callback,ms}),
   });
   const run = code => vm.runInContext(code, context);
   run(fs.readFileSync(path.join(__dirname,"../app.js"),"utf8"));
-  return { api, calls, run, timers, listeners, html:id => slots.get(id).innerHTML,
+  return { api, calls, run, timers, listeners, slots, html:id => slots.get(id).innerHTML,
     tick:s => { elapsed=s*1000; intervals.find(timer=>timer.ms===1000).callback(); } };
 }
 
@@ -339,6 +349,47 @@ function inspectionConsole() {
   };
 }
 
+test("the preview sends only validated fixture waypoints to the current twin and clears without an execution", async () => {
+  const h = inspectionConsole();
+  const sent = [];
+  const frame = { contentWindow: { postMessage: (message, origin) => sent.push({ message, origin }) } };
+  const hello = { origin: "http://127.0.0.1:5179", source: frame.contentWindow, data: {
+    type: "uav-swarm/simulation-ready", payload: { contractVersion: "1.0", integration: "parent-snapshot" },
+  } };
+  const time = Date.parse(stamp(0));
+  h.run(`Date.now = () => ${time}`);
+  await h.run("validateFixtureCandidate()");
+  assert.equal(sent.length, 0);
+  h.run('setPage("twin")');
+  assert.match(h.run("simulationFrame()"), /planPreview=fixture/);
+  h.slots.set("simulation-frame", frame);
+  h.listeners.message({ ...hello, source: {} });
+  h.listeners.message({ ...hello, origin: "http://127.0.0.1:5188" });
+  assert.equal(sent.length, 0);
+  h.listeners.message(hello);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), {
+    origin: "http://127.0.0.1:5179",
+    message: { type: "uav-swarm/plan-preview", payload: {
+      version: "1.0", plan_id: inspection.plan.plan_id, scene_id: inspection.plan.scene_id,
+      map_version: inspection.plan.map_version, frame: "scene_ned", expires_at_ms: time + 60_000,
+      waypoints: inspection.plan.steps.filter(step => step.action_type === "goto").map(step => ({
+        step_id: step.step_id, node_id: step.node_id,
+        north_m: step.params.north_m, east_m: step.params.east_m, down_m: step.params.down_m,
+      })),
+    } },
+  });
+  h.run(`Date.now = () => ${time + 10_000}`);
+  h.listeners.message(hello);
+  assert.deepEqual(sent[0], sent[1]);
+
+  h.run(`Date.now = () => ${time + 60_000}`);
+  h.timers.find(timer => timer.ms === 60_000).callback();
+  assert.equal(sent.at(-1).message.payload, null);
+  assert.equal(h.run("state.fixturePlan.plan.plan_id"), inspection.plan.plan_id);
+  assert.equal(h.approvals.length, 0);
+  assert.doesNotMatch(harness().run('setPage("twin"); simulationFrame()'), /planPreview=fixture/);
+});
+
 test("the fixture binds an explicitly approved candidate to the Runtime run and reported progress fields", async () => {
   const h = inspectionConsole();
   const { completed_run: completed, failed_run: failed, plan } = inspection;
@@ -378,6 +429,57 @@ test("the fixture binds an explicitly approved candidate to the Runtime run and 
   await h.read(failed.progress);
   assert.match(h.run("fixtureProgressContent()"), /等待 Runtime 上报本次任务进度/);
   assert.match(h.run("missionMapPanel()"), /· 失败.*1 \/ 5 个航点/s);
+});
+
+test("LIVE overview and stage reject contradictory area evidence and retain verified waypoints", () => {
+  const report = inspection.completed_run.first_arrival;
+  const { coverage } = report;
+  const coveredRate = report.coverage_pct.toFixed(2) + "%";
+  const conflicts = {
+    foreignReport: { ...report, map_version: "foreign-map" },
+    foreignArea: { ...report, area_id: "another-area" },
+    topLevelArea: { ...report, area_covered_km2: report.area_covered_km2 * 2 },
+    topLevelRate: { ...report, coverage_pct: 99 },
+    reportRate: { ...report, coverage: { ...coverage, completion_pct: 99 } },
+    foreignGrid: { ...report, coverage: { ...coverage, grid: { ...coverage.grid, map_version: "foreign-map" } } },
+    inconsistentCells: { ...report, coverage: { ...coverage, grid: { ...coverage.grid, covered_cells: [] } } },
+  };
+  const summaryOnly = {
+    ...report, coverage_pct: null, coverage: { ...coverage, completion_pct: null, grid: null },
+  };
+  const observedZero = {
+    ...report, area_covered_km2: 0, coverage_pct: 0,
+    coverage: { ...coverage, area_covered_km2: 0, completion_pct: 0, grid: { ...coverage.grid, covered_cells: [] } },
+  };
+
+  for (const href of ["http://127.0.0.1:5178/", "http://127.0.0.1:5178/?mode=stage&source=live"]) {
+    const h = harness(href);
+    const render = value => {
+      h.run(`state.apiStatus="live"; updateMissionDashboard({ missionProgress: { status: "fulfilled", value: ${JSON.stringify(value)} } });`);
+      if (!href.includes("mode=stage")) return h.run("overviewPage()");
+      h.run("renderStage()");
+      return h.html("stage-content");
+    };
+
+    const matching = render(report);
+    assert.ok(matching.includes(`面积覆盖率</span><b>${coveredRate}</b>`));
+    assert.match(matching, /mission-coverage-grid/);
+    const noGrid = render(summaryOnly);
+    assert.ok(noGrid.includes(`面积覆盖率</span><b>${coveredRate}</b>`));
+    assert.doesNotMatch(noGrid, /mission-coverage-grid/);
+    const validZero = render(observedZero);
+    assert.ok(validZero.includes("面积覆盖率</span><b>0%</b>"));
+    assert.match(validZero, /已有观测，当前没有覆盖记录/);
+
+    for (const [issue, conflicting] of Object.entries(conflicts)) {
+      const html = render(conflicting);
+      assert.ok(html.includes("面积覆盖率</span><b>—</b>"), `${issue} on ${href}`);
+      assert.match(html, /1 \/ 5 个航点/);
+      assert.doesNotMatch(html, /mission-coverage-grid/);
+      assert.equal(h.run("state.mission.areaCovered"), null);
+      assert.equal(h.run("state.mission.areaTotal"), null);
+    }
+  }
 });
 
 test("the planning fixture refuses ambiguous, unsupported and cross-map candidates before approval", async () => {

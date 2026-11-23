@@ -1,0 +1,45 @@
+{
+  "kind": "uavswarm-offline-pixel-annotation-example",
+  "scope": "fake_adapter_only",
+  "evidence_origin": "synthetic_test_fixture",
+  "execution_authorized": false,
+  "source_baseline": "2d01ffc889d70e64f74391a5dce6f8eadd77ce38",
+  "visual_source": {
+    "commit": "940a9d93a74e1fa98d312a39969f8e220212d107",
+    "fixture": "docs/simulation/fixtures/simple_recon_v0_1_target_001_visible_v1.json",
+    "fixture_content_sha256": "fab98d5a13b60c2035a47b6370d1f30e4acb4f40c0180a785777de3aa61228a9"
+  },
+  "binding": {
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "plan_id": "fake-target-001-patrol-v1",
+    "runtime_run_id": "fixture-runtime-visible-v1",
+    "gazebo_run_id": "fixture-gazebo-visible-v1",
+    "capture_request_id": "fixture-capture-visible-v1",
+    "capture_id": "cap-491b33ef70950f08",
+    "node_id": "UAV-02",
+    "target_id": "target-001"
+  },
+  "image": {
+    "png_path": "docs/simulation/fixtures/target_001_visible_synthetic.png",
+    "png_sha256": "15afb106ab20168ef45ce73679e0b7adfe2966c4099fcce654989e1ba1268208",
+    "rgb8_sha256": "ea73058e9be2b7a543f80543c1939e5b79043c3c9b9e4328afa5b2198fe9ef74",
+    "width": 1280,
+    "height": 960,
+    "encoding": "RGB8"
+  },
+  "annotation": {
+    "criterion_version": "target-001-green-disk-pixels-v0.1",
+    "region": {"x": 500, "y": 736, "w": 281, "h": 121},
+    "note": "原图下部中央，灰底仅有一个实心绿色椭圆，闭合曲边完整、无裁切或叠加标记，短边为 121 个原图像素。该标注只对合成帧成立。",
+    "expected_outcome_for_synthetic_pixel_review": "observed",
+    "confidence": null
+  },
+  "review_record": null,
+  "operation_expectation": {
+    "observation_without_review": "undetermined",
+    "linked_task_completion": "not_asserted",
+    "advance_observe_step": false,
+    "changes_closeout": false
+  }
+}
