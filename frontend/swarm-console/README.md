@@ -46,7 +46,7 @@ python -m http.server 5179 --bind 127.0.0.1 --directory frontend/swarm-console/s
 
 首屏的链路质量是 Runtime 上报的遥测接收新鲜度评分。任务地图分别显示已验证的航点完成度（已到达 / 总航点）和面积覆盖率（已覆盖面积 / 总面积）。缺少区域时，有同场景、同地图版本的新鲜共享坐标即可显示载具位置；区域、分工及覆盖率仍待上报。只有区域边界和面积汇总时，空间分布显示「覆盖未知」。目标发现和安全裕度缺少证据时显示等待或未知。
 
-Runtime 提供 S7 的 `coverage.grid` 时，任务地图按 `scene_ned` 米绘制有覆盖记录的网格，并用 `coverage.polygon` 裁剪边缘。粗格内可能只有部分面积覆盖。面积覆盖率仍使用源网格累计面积。缺失、空值或身份／坐标不匹配的网格显示“覆盖分布未知”，合法的空覆盖列表显示“已有观测，当前没有覆盖记录”。[仿真契约与示例](https://github.com/ZuoYiqing/2026UAVSwarm/pull/102)
+Runtime 提供 S7 的 `coverage.grid` 时，任务地图按 `scene_ned` 米绘制有覆盖记录的网格，并用 `coverage.polygon` 裁剪边缘。粗格内可能只有部分面积覆盖。面积覆盖率使用源网格累计面积。网格缺席时，可单独显示经校验的同图面积汇总。附带的网格无法校验，或上报的覆盖百分比与面积矛盾时，面积和网格同为未知。合法的空覆盖列表显示「已有观测，当前没有覆盖记录」。[仿真契约与示例](https://github.com/ZuoYiqing/2026UAVSwarm/pull/102)
 
 时间轴读取 `/api/events?n=50`、`/api/policy/decisions?n=20`、`/api/actions/lifecycle?n=20` 和 `/api/replay?n=20`。点击记录查看原始 JSON。Policy Gate 可按载具和判定过滤，顶部裁决提示 2 秒后缩成徽章并支持关闭。
 
@@ -68,6 +68,12 @@ Runtime 支持时，主控台会读取 `/api/mission/progress` 和 `/api/demo/st
 在主控台目录运行 `node --test tests/mission-dashboard.test.js`。用例使用 [target-001 导航测试桩证据](tests/fixtures/equipment-inspection-lifecycle.json)。证据来自 `9398b10` 的 `test_plan_execution_progress_fake.py` 内存调度与假动作传输，使用仿真场景参考 `f6e5a1a`，并为覆盖试验显式配置区域 `three-uav-patrol-coverage-v1` 和 10 m 的夹具采样半径。证据包含完整运行、到达超时、未执行以及落地前航点全部到达的进度返回。普通浏览器入口提供模板预览和只读进度，执行控件仅由测试桩注入。
 
 算法本地提交 `d752354` 已提供可复核的分工与航点候选，设备巡检中的 `OBSERVE` 在转换时明确受阻。导航测试桩的通过只证明导航、进度和失败显示。设备观测能力及其执行映射需由算法与 Runtime 共同确认，真实仿真验收还需同版本场景及当次有效标定。
+
+### 三维只读计划预览
+
+在注入测试桩的主控台里校验候选，再点「查看三维集群态势」。iframe 使用 `planPreview=fixture`，只接收该次校验通过的有序 `goto` 航点。子页以「计划预览 · 测试桩」标注。展示窗口为校验通过后的 60 秒，重载和遥测刷新沿用原截止时间。到期、撤销和候选替换清除计划层。
+
+复跑组合验证时，由 `UAVSWARM_TWIN_DIST` 指定三维接收器的本地构建目录。主控台目录运行 `node tests/plan-preview.browser.mjs`。如果 Playwright 安装在另一份检出的三维目录，可用 `UAVSWARM_PLAYWRIGHT_ROOT` 指向该目录。使用本机已安装的 Edge 时，设 `UAVSWARM_BROWSER_CHANNEL=msedge`。测试使用 [同一导航夹具](tests/fixtures/equipment-inspection-lifecycle.json)，在浏览器内拦截所有请求和模拟 Runtime 的只读返回，无需启动 HTTP 服务。
 
 ## 页面
 

@@ -153,13 +153,15 @@
       && waypointCountsValid(payload) && payload.waypoints_total > 0
       && pct(payload.completion_pct) !== null
       && Math.abs(payload.completion_pct - 100 * payload.waypoints_reached / payload.waypoints_total) <= 0.005001;
-    const coverage = payload.coverage?.scene_id === payload.scene_id && payload.coverage.map_version === payload.map_version
-      && payload.coverage.frame === "scene_ned" ? payload.coverage : null;
+    const report = payload.coverage;
+    const coverage = report?.scene_id === payload.scene_id && report.map_version === payload.map_version
+      && report.frame === "scene_ned" && hasId(report.area_id)
+      && (payload.area_id == null || payload.area_id === report.area_id) ? report : null;
     const hasAreaEvidence = coverage && Number.isSafeInteger(coverage.sample_count) && coverage.sample_count > 0
       && coverage.area_total_km2 === payload.area_total_km2 && coverage.area_covered_km2 === payload.area_covered_km2
       && nonnegative(payload.area_covered_km2) !== null && nonnegative(payload.area_total_km2) > 0
       && payload.area_covered_km2 <= payload.area_total_km2;
-    return {
+    const progress = {
       ...missionProgress({
         mission_id: payload.mission_id, run_id: payload.run_id, status: payload.status, mode: payload.mode,
         scene_id: payload.scene_id, map_version: payload.map_version, source_timestamp: payload.source_timestamp,
@@ -182,6 +184,20 @@
       sceneId: payload.scene_id,
       mapVersion: payload.map_version,
     };
+    if (progress.coveragePercent !== null) {
+      // The Runtime reports unrounded rates. Allow floating-point noise in the area ratio.
+      const rates = [payload.coverage_pct, coverage.completion_pct];
+      const conflictingRate = rates.some(rate => rate != null
+        && (pct(rate) === null || Math.abs(rate - progress.coveragePercent) > 1e-9));
+      const invalidGrid = coverage.grid != null && progress.coverageGrid === null;
+      if (conflictingRate || invalidGrid) {
+        progress.areaTotal = null;
+        progress.areaCovered = null;
+        progress.coveragePercent = null;
+        progress.coverageGrid = null;
+      }
+    }
+    return progress;
   }
 
   function assignmentProgress(assignment) {

@@ -1,4 +1,4 @@
-export function createParentMessageHandler({ parentWindow, selfWindow, allowedOrigins, expectedOrigin, onSnapshot, onMode, onError, onSelectVehicle }) {
+export function createParentMessageHandler({ parentWindow, selfWindow, allowedOrigins, expectedOrigin, onSnapshot, onMode, onError, onSelectVehicle, onPlanPreview }) {
   return event => {
     if (parentWindow === selfWindow || event.source !== parentWindow || !allowedOrigins.has(event.origin)) return false;
     if (expectedOrigin && event.origin !== expectedOrigin) return false;
@@ -11,6 +11,8 @@ export function createParentMessageHandler({ parentWindow, selfWindow, allowedOr
         // 调用方必须以 notifyParent=false 的方式应用，否则两侧会互相触发形成环路。
         if (typeof onSelectVehicle === "function") onSelectVehicle(event.data.payload?.nodeId ?? null);
         else return false;
+      } else if (event.data?.type === "uav-swarm/plan-preview" && typeof onPlanPreview === "function") {
+        return onPlanPreview(event.data.payload);
       } else return false;
       return true;
     } catch (error) { onError(error); return false; }

@@ -689,6 +689,21 @@ select {
   font-family: Consolas, monospace;
   font-size: 10px;
 }
+.plan-preview-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  color: #ffdf9a;
+  background: #24312b;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.plan-preview-status::before {
+  content: "";
+  width: 15px;
+  border-top: 2px dashed currentColor;
+}
 .mobile-panels {
   display: none;
 }

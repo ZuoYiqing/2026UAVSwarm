@@ -1,0 +1,15 @@
+{
+  "format": "uavswarm-offline-pose-source-fixture",
+  "version": "1.0",
+  "evidence_origin": "synthetic_test_fixture",
+  "sources_by_capture_request_id": {
+    "fixture-capture-request-1": {
+      "gazebo_run_id": "fixture-gazebo-run-1",
+      "gazebo_model_entity_id": 202
+    },
+    "fixture-capture-visible-v1": {
+      "gazebo_run_id": "fixture-gazebo-visible-v1",
+      "gazebo_model_entity_id": 202
+    }
+  }
+}

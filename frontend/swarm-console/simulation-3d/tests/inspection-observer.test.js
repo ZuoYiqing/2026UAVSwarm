@@ -72,7 +72,7 @@ test("proposed geometry is not a full vehicle snapshot or a Runtime execution", 
   assert.equal(view.state.lastSnapshot, null);
   assert.equal(view.entities.values.length, 0);
   assert.equal(noRun.reason, "no_runtime_plan_execution");
-  assert.equal(dashboard.missionProgress(noRun), null);
+  assert.equal(dashboard.runtimeMissionProgress(noRun), null);
   assert.equal(dashboard.missionMap(null, null), null);
 });
 
@@ -130,13 +130,33 @@ test("fresh envelope and calibration do not refresh an expired position sample",
   assert.deepEqual(view.position(), [8, 0, 0]);
 });
 
-test.todo("cold stale waypoint may seed a last-known marker, but not a flown segment on recovery", t => {
-  const view = observer(t);
-  view.frame(0, routeNed[0], (_, v) => { v.telemetry.stale = true; });
-  assert.match(view.marker().label.text.getValue(), /STALE/);
-  view.frame(1000, [3, 9, -2]);
-  assert.deepEqual(view.trail(), [[9, 3, 2]]);
-});
+for (const [scenario, withUnpositionedRecord, mutate] of [
+  ["stale first pose", false, (_, v) => { v.telemetry.stale = true; }],
+  ["disconnected first pose", false, (_, v) => { v.connected = false; }],
+  ["stale sample after an unpositioned snapshot", true, (_, v) => { v.telemetry.stale = true; }],
+]) {
+  test(scenario + " does not seed the telemetry trail before a fresh pose", t => {
+    const view = observer(t);
+    if (withUnpositionedRecord) {
+      view.frame(0, [0, 8, 0], (_, v) => { v.spatial.public_position_usable = false; });
+      assert.equal(view.marker().show, false);
+    }
+    view.frame(500, routeNed[0], mutate);
+    const lastKnownPosition = withUnpositionedRecord ? undefined : [18, 12, 5];
+    assert.equal(view.marker().show, !withUnpositionedRecord);
+    assert.match(view.marker().label.text.getValue(), /STALE/);
+    assert.deepEqual(view.position(), lastKnownPosition);
+    assert.deepEqual(view.trail(), []);
+    view.frame(1000, routeNed[1], mutate);
+    assert.deepEqual(view.position(), lastKnownPosition);
+    assert.deepEqual(view.trail(), []);
+    view.frame(1500, [3, 9, -2]);
+    assert.deepEqual(view.position(), [9, 3, 2]);
+    assert.deepEqual(view.trail(), [[9, 3, 2]]);
+    view.frame(2000, [4, 10, -2]);
+    assert.deepEqual(view.trail(), [[9, 3, 2], [10, 4, 2]]);
+  });
+}
 
 test("three visible nodes, even at both proposed waypoints, cannot fill missing progress or coverage", t => {
   const view = observer(t);
@@ -145,7 +165,7 @@ test("three visible nodes, even at both proposed waypoints, cannot fill missing 
   assert.equal(dashboard.fleetMap(raw).markers.length, 3);
   assert.deepEqual(view.trail(), [[18, 12, 5], [18, 20, 5]]);
   for (const missing of [null, noRun]) {
-    const progress = dashboard.missionProgress(missing);
+    const progress = dashboard.runtimeMissionProgress(missing);
     assert.equal(progress, null);
     assert.equal(dashboard.missionMap(progress, raw), null);
   }
@@ -159,26 +179,26 @@ function progressStub() {
   };
 }
 
-test("stub progress counts and coverage have independent evidence; foreign grid is not painted", () => {
+test("LIVE waypoint progress and same-map coverage have independent evidence", () => {
   const progress = progressStub();
-  const withoutCoverage = dashboard.missionProgress(progress);
+  const withoutCoverage = dashboard.runtimeMissionProgress(progress);
   assert.equal(withoutCoverage.completion, 50);
   assert.equal(withoutCoverage.coveragePercent, null);
   assert.equal(withoutCoverage.coverageGrid, null);
-  assert.equal(dashboard.missionProgress({ ...progress, status: "stale" }), null);
+  assert.equal(dashboard.runtimeMissionProgress({ ...progress, status: "stale" }), null);
   const withCoverage = { ...progress, coverage, area_covered_km2: coverage.area_covered_km2, area_total_km2: coverage.area_total_km2 };
-  const model = dashboard.missionProgress(withCoverage);
+  const model = dashboard.runtimeMissionProgress(withCoverage);
   assert.equal(model.coveragePercent, coverage.area_covered_km2 / coverage.area_total_km2 * 100);
   assert.deepEqual(dashboard.missionMap(model, null).coverageGrid.cells, coverage.grid.covered_cells);
-  const mismatched = dashboard.missionProgress({ ...withCoverage, map_version: "another-fixture-map" });
-  assert.equal(dashboard.missionMap(mismatched, null).coverageGrid, null);
 });
 
-test.todo("a coverage report contradicting the mission map cannot certify the current area's KPI", () => {
-  const mission = dashboard.missionProgress({
-    ...progressStub(), map_version: "another-fixture-map",
-    coverage, area_total_km2: coverage.area_total_km2, area_covered_km2: coverage.area_covered_km2,
+test("LIVE ignores coverage for a different map but retains verified waypoints", () => {
+  const mission = dashboard.runtimeMissionProgress({
+    ...progressStub(), coverage: { ...coverage, map_version: "another-fixture-map" },
+    area_total_km2: coverage.area_total_km2, area_covered_km2: coverage.area_covered_km2,
   });
+  assert.equal(mission.completion, 50);
   assert.equal(mission.coverageGrid, null);
   assert.equal(mission.coveragePercent, null);
+  assert.equal(dashboard.missionMap(mission, null), null);
 });
