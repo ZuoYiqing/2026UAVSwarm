@@ -13,6 +13,7 @@ import math
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -27,8 +28,19 @@ from typing import Any, Callable
 HARNESS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = HARNESS_DIR.parent.parent
 DEFAULT_MANIFEST_PATH = HARNESS_DIR / "config" / "three_uav_sitl.json"
-RUNTIME_ROOT = REPO_ROOT / ".runtime" / "px4_gazebo"
-STATE_PATH = RUNTIME_ROOT / "harness_state.json"
+DEFAULT_RUNTIME_DIR = Path(".runtime") / "px4_gazebo"
+STATE_FILENAME = "harness_state.json"
+
+
+def resolve_runtime_root(repo_root: Path) -> Path:
+    """Resolve the same simulation state root for start, stop and preflight."""
+    configured = os.environ.get("UAV_SIM_RUNTIME_ROOT")
+    root = Path(os.path.expandvars(configured)).expanduser() if configured else DEFAULT_RUNTIME_DIR
+    return root if root.is_absolute() else repo_root / root
+
+
+RUNTIME_ROOT = resolve_runtime_root(REPO_ROOT)
+STATE_PATH = RUNTIME_ROOT / STATE_FILENAME
 MINIMUM_VEHICLE_COUNT = 3
 HARNESS_RUN_ID_ENV = "UAV_SWARM_HARNESS_RUN_ID"
 WORLD_SHA256_SCHEME = "sha256-lf-v1"
@@ -41,6 +53,8 @@ PX4_UDP_LOCAL_PORTS = (
     (13030, "gimbal local"),
 )
 PX4_UDP_LOCAL_SUFFIXES = tuple(f" {role}" for _, role in PX4_UDP_LOCAL_PORTS)
+PROC_EMPTY_CMDLINE_RECHECKS = 4
+PROC_EMPTY_CMDLINE_RECHECK_S = 0.025
 
 
 def canonical_world_bytes(contents: bytes) -> bytes:
@@ -174,6 +188,17 @@ def load_json(path: Path) -> dict[str, Any]:
 def resolve_repo_path(value: str) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def resolve_vehicle_runtime_dir(value: str) -> Path:
+    path = resolve_repo_path(value)
+    if path.is_relative_to(REPO_ROOT / DEFAULT_RUNTIME_DIR):
+        path = RUNTIME_ROOT / path.relative_to(REPO_ROOT / DEFAULT_RUNTIME_DIR)
+    root = RUNTIME_ROOT.resolve()
+    resolved = path.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise HarnessError(f"vehicle runtime directory outside the simulation runtime root: {path}")
+    return resolved
 
 
 def resolve_px4_dir(manifest: dict[str, Any]) -> Path:
@@ -472,12 +497,17 @@ def process_alive(pid: int) -> bool:
     return True
 
 
-def read_state() -> dict[str, Any] | None:
-    if not STATE_PATH.exists():
-        return None
+def _read_optional_state(path: Path) -> dict[str, Any] | None:
     try:
-        return load_json(STATE_PATH)
-    except (OSError, json.JSONDecodeError, HarnessError) as exc:
+        return load_json(path)
+    except FileNotFoundError:
+        return None
+
+
+def read_state() -> dict[str, Any] | None:
+    try:
+        return _read_optional_state(STATE_PATH)
+    except (OSError, UnicodeError, json.JSONDecodeError, HarnessError) as exc:
         raise HarnessError(
             f"{STALE_STATE}: invalid harness state at {STATE_PATH}: {exc}"
         ) from exc
@@ -771,26 +801,33 @@ def _proc_run_id(environ: bytes) -> str:
 
 
 def read_process_identity(
-    pid: int, *, proc_root: Path = Path("/proc")
+    pid: int, *, proc_root: Path = Path("/proc"), sleep: Callable[[float], None] = time.sleep,
 ) -> ProcessIdentityReadResult:
     """Read one coherent identity snapshot from Linux procfs."""
     process_root = proc_root / str(pid)
+    first_start_time = None
     try:
         first_stat = (process_root / "stat").read_text(encoding="utf-8")
         first_start_time = _parse_proc_start_time(first_stat)
         if first_stat[first_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
             return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_is_zombie_or_dead")
-        cmdline = tuple(
-            part.decode("utf-8", errors="surrogateescape")
-            for part in (process_root / "cmdline").read_bytes().split(b"\0")
-            if part
-        )
-        if not cmdline:
-            second_stat = (process_root / "stat").read_text(encoding="utf-8")
-            if (_parse_proc_start_time(second_stat) == first_start_time
-                    and second_stat[second_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}):
-                return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
-            raise ValueError("process cmdline is empty")
+        for attempt in range(PROC_EMPTY_CMDLINE_RECHECKS + 1):
+            if attempt:
+                sleep(PROC_EMPTY_CMDLINE_RECHECK_S)
+                stat = (process_root / "stat").read_text(encoding="utf-8")
+                if _parse_proc_start_time(stat) != first_start_time:
+                    return ProcessIdentityReadResult(code=STALE_STATE, detail="process_changed_while_reading_procfs")
+                if stat[stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
+                    return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
+            cmdline = tuple(
+                part.decode("utf-8", errors="surrogateescape")
+                for part in (process_root / "cmdline").read_bytes().split(b"\0")
+                if part
+            )
+            if cmdline:
+                break
+        else:
+            raise ValueError("process cmdline is empty after bounded recheck")
         executable = os.readlink(process_root / "exe")
         cwd = os.readlink(process_root / "cwd")
         run_id = _proc_run_id((process_root / "environ").read_bytes())
@@ -798,8 +835,20 @@ def read_process_identity(
         second_start_time = _parse_proc_start_time(
             (process_root / "stat").read_text(encoding="utf-8")
         )
-    except (FileNotFoundError, ProcessLookupError):
-        return ProcessIdentityReadResult(code=PROCESS_EXITED)
+    except (FileNotFoundError, ProcessLookupError) as exc:
+        # A missing individual procfs entry need not mean the PID has exited.
+        try:
+            current_stat = (process_root / "stat").read_text(encoding="utf-8")
+            current_start_time = _parse_proc_start_time(current_stat)
+        except (FileNotFoundError, ProcessLookupError):
+            return ProcessIdentityReadResult(code=PROCESS_EXITED)
+        except (OSError, UnicodeError, ValueError) as stat_error:
+            return ProcessIdentityReadResult(code=STALE_STATE, detail=f"proc_stat_unavailable:{stat_error}")
+        if first_start_time is not None and first_start_time != current_start_time:
+            return ProcessIdentityReadResult(code=STALE_STATE, detail="process_changed_while_reading_procfs")
+        if current_stat[current_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
+            return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
+        return ProcessIdentityReadResult(code=STALE_STATE, detail=f"proc_identity_entry_missing:{exc}")
     except (OSError, UnicodeError, ValueError) as exc:
         return ProcessIdentityReadResult(
             code=STALE_STATE,
@@ -1148,7 +1197,7 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
     opened_logs: list[Any] = []
     try:
         for index, vehicle in enumerate(manifest["vehicles"]):
-            runtime_dir = resolve_repo_path(str(vehicle["runtime_dir"]))
+            runtime_dir = resolve_vehicle_runtime_dir(str(vehicle["runtime_dir"]))
             runtime_dir.mkdir(parents=True, exist_ok=True)
             stdout_handle = (runtime_dir / "stdout.log").open("ab", buffering=0)
             stderr_handle = (runtime_dir / "stderr.log").open("ab", buffering=0)
@@ -1505,11 +1554,9 @@ def preflight_manifest(
     ① **这份 manifest 有没有相机。** 无相机是**警告**不是错误 —— 无相机仿真本身
        是合法用途，报成错误会破坏现有工作流。但它必须被**说出来**：否则"只有相机
        动作会失败"这件事在别处完全看不出来。
-    ② **harness state 是否在别的仓库。** `REPO_ROOT` 是本文件所在目录的上两级，
-       因此状态与标定证据写在**跑仿真的那个仓库**下。而 Runtime 只认
-       `repo_root/.runtime/`。若状态只存在于别的 worktree，标定必然读到过期证据
-       （表现为"前端能连上飞机，但标定 stale、三维视图不显示、`goto` 被拒`）。
-       这一条是**错误**，因为光看运行状态发现不了。
+    ② **harness state 是否可读，或存在于别的仓库。** 本地路径与启停使用同一个
+       运行目录解析规则。默认检查当前仓库的 `.runtime/px4_gazebo`，也可用
+       `UAV_SIM_RUNTIME_ROOT` 指定目录。不同工作区的证据不能混作一次运行。
     ③ **当前实际在跑的是不是被检查的这一份。** 这一条是 2026-10-09 补的，
        起因是一次实测：调用方拿**相机** manifest 跑本检查，而实际在跑的是
        **默认** manifest，结果报了 `camera.present=True`、`ok: True` ——
@@ -1537,16 +1584,68 @@ def preflight_manifest(
             ),
         })
 
-    local_state = repo_root / ".runtime" / "px4_gazebo" / "harness_state.json"
-    other_states: list[Path] = []
-    if worktrees_root is not None and worktrees_root.is_dir():
-        for candidate in sorted(worktrees_root.glob("*/.runtime/px4_gazebo/harness_state.json")):
-            try:
-                if candidate.resolve() == local_state.resolve():
+    local_state = resolve_runtime_root(repo_root) / STATE_FILENAME
+    state: dict[str, Any] | None = None
+    state_status = "missing"
+    try:
+        state = _read_optional_state(local_state)
+        if state is not None:
+            state_status = "readable"
+    except OSError as exc:
+        state_status = "unreadable"
+        findings.append({
+            "code": "harness_state_unreadable",
+            "severity": "error",
+            "path": str(local_state),
+            "detail": f"当前系统无法读取仿真状态 {local_state}：{exc}。请在运行仿真的系统中预检，或指定可读取的运行目录。",
+        })
+    except (UnicodeError, json.JSONDecodeError, HarnessError) as exc:
+        state_status = "invalid"
+        findings.append({
+            "code": "harness_state_invalid",
+            "severity": "error",
+            "path": str(local_state),
+            "detail": f"仿真状态格式无效 {local_state}：{exc}。",
+        })
+
+    other_states: set[Path] = set()
+    unreadable_worktrees: dict[str, str] = {}
+    if worktrees_root is not None:
+        try:
+            checkouts = sorted(worktrees_root.iterdir())
+        except (FileNotFoundError, NotADirectoryError):
+            checkouts = []
+        except OSError as exc:
+            checkouts = []
+            unreadable_worktrees[str(worktrees_root)] = str(exc)
+        relative_paths = {DEFAULT_RUNTIME_DIR / STATE_FILENAME}
+        if local_state.is_relative_to(repo_root):
+            relative_paths.add(local_state.relative_to(repo_root))
+        try:
+            resolved_local_state = local_state.resolve()
+        except (OSError, RuntimeError):
+            resolved_local_state = local_state.absolute()
+        for checkout in checkouts:
+            for relative_path in relative_paths:
+                candidate = checkout / relative_path
+                if candidate.absolute() == local_state.absolute():
                     continue
-            except OSError:
-                pass
-            other_states.append(candidate)
+                try:
+                    if stat.S_ISREG(candidate.stat().st_mode) and candidate.resolve() != resolved_local_state:
+                        other_states.add(candidate)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except (OSError, RuntimeError) as exc:
+                    unreadable_worktrees[str(candidate)] = str(exc)
+
+    if unreadable_worktrees:
+        findings.append({
+            "code": "worktree_state_scan_incomplete",
+            "severity": "warning",
+            "detail": "当前系统无法检查部分其他工作区的仿真状态，可在 WSL 内复查。",
+            "paths": sorted(unreadable_worktrees),
+            "errors": unreadable_worktrees,
+        })
 
     if other_states:
         # 本仓库有没有状态都要报 —— 两者都有更危险：本仓库那份可能是**旧的**，
@@ -1554,31 +1653,28 @@ def preflight_manifest(
         #
         # detail 里**直接带上路径**：`paths` 字段是给机器读的，而这句话是给人读的。
         # 让人再去翻 JSON 才能知道是哪个 worktree，等于没说。
-        listed = "、".join(str(p) for p in other_states)
+        paths = [str(path) for path in sorted(other_states)]
+        listed = "、".join(paths)
+        local_detail = {
+            "missing": "本仓库没有这份状态。",
+            "readable": "本仓库也有一份，但它可能来自更早的运行。",
+            "unreadable": "当前系统无法读取本仓库的状态。",
+            "invalid": "本仓库的状态格式无效。",
+        }[state_status]
         findings.append({
             "code": "state_in_other_worktree",
             "severity": "error",
-            "local_state_present": local_state.is_file(),
+            "local_state_present": None if state_status == "unreadable" else state_status != "missing",
             "detail": (
                 f"仿真状态存在于别的仓库：{listed}。"
-                f"而 Runtime 只认 {local_state}。"
-                + ("本仓库也有一份，但它可能来自**更早的运行**。"
-                   if local_state.is_file() else "本仓库没有这份状态。")
-                + " 结果会是「前端能连上飞机，但标定读到过期证据」。"
-                " 要么从本仓库启动仿真，要么让调用方把仓库根指向那个 worktree。"
+                f"本次检查读取 {local_state}。{local_detail}"
+                " 请确认启动和标定使用同一工作区和运行目录。"
             ),
-            "paths": [str(p) for p in other_states],
+            "paths": paths,
         })
 
     # --- ③ 实际在跑的是不是被检查的这一份 ---------------------------------
-    running_path: str | None = None
-    if local_state.is_file():
-        try:
-            state = load_json(local_state)
-            if isinstance(state, dict):
-                running_path = str(state.get("manifest_path") or "") or None
-        except (OSError, json.JSONDecodeError, HarnessError):
-            running_path = None
+    running_path = (str(state.get("manifest_path") or "") or None) if state is not None else None
 
     matches = _same_manifest(running_path, manifest_path)
     if matches is False:
@@ -1608,6 +1704,7 @@ def preflight_manifest(
             "path": running_path,
             "matches_checked": matches,
         },
+        "harness_state": {"path": str(local_state), "status": state_status},
         "repo_root": str(repo_root),
         "findings": findings,
     }
