@@ -3,7 +3,8 @@
 [实体目录](entity_catalog.json) 对应 `simple_recon_v0_1 / simple_recon_v0_1-map-1`。
 `catalog` 沿用识别器合成夹具的条目形状 `entity_id / label / aliases / exclusive_group`。
 仿真侧提供稳定 ID 和 `geometry_by_entity_id`，由算法侧填入可供识别的名称、别名与互斥组。
-语义未审核的条目保留空字段，暂不供识别器绑定。车辆 ID 不作为场景实体 ID。
+本版已审核七个演示条目的语义。其余条目保留空字段，暂不供识别器绑定。
+车辆 ID 不作为场景实体 ID。
 
 坐标为公共 `scene_ned`，单位米，分量为北、东、下。实际模型来自
 [SDF 世界](worlds/simple_recon_v0_1.sdf)，声明的任务、覆盖和禁飞区域来自
@@ -14,7 +15,7 @@
 | --- | --- | --- |
 | 同任务类型换目标 | `demo-area-001`、`target-001` | 西侧青色地面边框、已有绿色目标标记 |
 | 同名追问 | `demo-anchor-001`、`demo-anchor-002` | 蓝色 001、橙色 002，公共位置分别为 `(4,-15,0)`、`(4,16,0)` |
-| 冲突追问 | `demo-sector-001`、`demo-sector-002` | 南侧同色系的两块紫色边框，互斥组由算法侧确认 |
+| 冲突追问 | `demo-sector-001`、`demo-sector-002` | 南侧同色系的两块紫色边框，共用 `demo-sector-single-choice` 互斥组 |
 | 只用于定位 | `building-001` | 已有实体建筑，中心为 `(15,0,-5)` |
 
 五个演示槽位均有对应的 Gazebo 视觉模型，`source` 为 `gazebo_visual`。
