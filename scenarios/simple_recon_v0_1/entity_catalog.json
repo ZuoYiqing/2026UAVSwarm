@@ -10,12 +10,12 @@
     "lon_deg": 8.5461639,
     "alt_m": 0
   },
-  "semantic_status": "awaiting_algorithm_labels",
+  "semantic_status": "algorithm_labels_ready",
   "catalog": [
     {
       "entity_id": "building-001",
-      "label": null,
-      "aliases": [],
+      "label": "中央建筑",
+      "aliases": ["中间那栋楼"],
       "exclusive_group": null
     },
     {
@@ -104,8 +104,8 @@
     },
     {
       "entity_id": "target-001",
-      "label": null,
-      "aliases": [],
+      "label": "东北视觉标记",
+      "aliases": ["东北标记", "东北绿色圆盘"],
       "exclusive_group": null
     },
     {
@@ -146,33 +146,33 @@
     },
     {
       "entity_id": "demo-anchor-001",
-      "label": null,
-      "aliases": [],
+      "label": "西侧参考点",
+      "aliases": ["参考点", "西边参考点"],
       "exclusive_group": null
     },
     {
       "entity_id": "demo-anchor-002",
-      "label": null,
-      "aliases": [],
+      "label": "东侧参考点",
+      "aliases": ["参考点", "东边参考点"],
       "exclusive_group": null
     },
     {
       "entity_id": "demo-area-001",
-      "label": null,
-      "aliases": [],
+      "label": "西北区域",
+      "aliases": ["西北区", "西北那块区域"],
       "exclusive_group": null
     },
     {
       "entity_id": "demo-sector-001",
-      "label": null,
-      "aliases": [],
-      "exclusive_group": null
+      "label": "西南区块",
+      "aliases": ["西南", "西南区"],
+      "exclusive_group": "demo-sector-single-choice"
     },
     {
       "entity_id": "demo-sector-002",
-      "label": null,
-      "aliases": [],
-      "exclusive_group": null
+      "label": "东南区块",
+      "aliases": ["东南", "东南区"],
+      "exclusive_group": "demo-sector-single-choice"
     }
   ],
   "geometry_by_entity_id": {
