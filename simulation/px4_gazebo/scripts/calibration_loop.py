@@ -30,7 +30,18 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Iterator
+
+try:  # Linux / WSL: this is where the loop actually runs.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows, where the script is not run
+    fcntl = None  # type: ignore[assignment]
+try:  # Windows: keeps the unit tests exercisable on a dev box.
+    import msvcrt
+except ImportError:  # pragma: no cover - Linux
+    msvcrt = None  # type: ignore[assignment]
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -43,7 +54,16 @@ STATE_PATH = RUNTIME_ROOT / "harness_state.json"
 
 #: Written by a detached loop so a second ``start_three_uav.sh`` cannot leave
 #: two refreshers publishing for the same run.  Content: ``{"pid": N, "run_id": S}``.
+#:
+#: **Diagnostic only.**  Correctness comes from ``WORKER_LOCK_PATH``: a pid file
+#: cannot make claim-and-cleanup atomic (two workers can both read "absent" and
+#: both start), and a check-then-unlink cleanup lets an older worker delete a
+#: newer worker's file.  The OS lock has neither problem.
 PID_PATH = RUNTIME_ROOT / "calibration_loop.pid"
+
+#: Held for the whole life of a worker.  The kernel releases it when the
+#: process exits, so there is no "who deletes it" question at all.
+WORKER_LOCK_PATH = RUNTIME_ROOT / "calibration_loop.lock"
 
 #: How many consecutive "the PX4 processes are gone" rounds to tolerate before
 #: giving up.  A *stale* ``harness_state.json`` (left behind by a crash or a
@@ -141,6 +161,50 @@ def clear_pid_file(path: Path, pid: int) -> None:
         pass
 
 
+def _try_lock(fd: int) -> bool:
+    """Take a non-blocking exclusive lock on ``fd``. True when we own it."""
+    if fcntl is not None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+    if msvcrt is not None:  # pragma: no cover - Windows only
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    return True  # pragma: no cover - neither API exists; cannot enforce
+
+
+@contextmanager
+def exclusive_worker(lock_path: Path) -> Iterator[bool]:
+    """Hold the worker lock for as long as the ``with`` block runs.
+
+    Yields ``True`` when this process owns the lock and ``False`` when another
+    worker already does.  The lock is an OS file lock, not a pid file, so:
+      * two workers racing at the same instant cannot both win (the claim is
+        atomic in the kernel);
+      * cleanup needs no ownership check — closing the descriptor releases it,
+        and the kernel also releases it if the process dies.
+    """
+    Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if not _try_lock(fd):
+            yield False
+            return
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode())
+        except OSError:
+            pass
+        yield True
+    finally:
+        os.close(fd)
+
+
 def refresh_once(
     config: Path,
     runtime_base: str,
@@ -172,16 +236,45 @@ def refresh_once(
     if expected_run is not None and state_path is not None:
         if not should_continue(state_path, expected_run):
             return False, "run changed during capture; discarded before publish"
-    try:
-        publications = [
-            publish(runtime_base, row, kind="calibration") for row in calibrations
-        ]
-    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
-        return False, f"publish failed: {type(exc).__name__}:{exc}"
-    accepted = sum(1 for row in publications if row.get("http_status") == 200)
-    if accepted != len(publications):
-        return False, f"published {accepted}/{len(publications)}"
-    return True, f"published {accepted}/{len(publications)}"
+
+    # --- 发布必须逐条核对，不能只看一次 --------------------------------
+    #
+    # 三架飞机是分三次 POST 的，而仿真可能在第一条与第二条之间重启。只在循环
+    # 开始前查一次 run，就会出现"第一条发的是旧世界的、后两条也是"这种整批过期
+    # 仍然全部发出、并且返回成功的局面。所以：
+    #
+    #   · 每条证据先看它自己的 context.run_id（采集时由 calibration.py 写入，
+    #     是那一刻真实所属的 run，不能由发布方声明）；
+    #   · 每条发布前再看当前 harness state 的 run 是否仍然是它。
+    #
+    # 任一不符立即停止，并**把这一轮判为失败** —— 部分发布不是成功。
+    published: list[dict[str, Any]] = []
+    for index, row in enumerate(calibrations, start=1):
+        if expected_run is not None:
+            row_run = (row.get("context") or {}).get("run_id")
+            if row_run is not None and str(row_run) != str(expected_run):
+                return False, (
+                    f"evidence run mismatch at {index}/{len(calibrations)} "
+                    f"({row_run} != {expected_run}); stopped after "
+                    f"{len(published)} published"
+                )
+            if state_path is not None and not should_continue(state_path, expected_run):
+                return False, (
+                    f"run changed while publishing at {index}/{len(calibrations)}; "
+                    f"stopped after {len(published)} published"
+                )
+        try:
+            published.append(publish(runtime_base, row, kind="calibration"))
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            return False, (
+                f"publish failed at {index}/{len(calibrations)}: "
+                f"{type(exc).__name__}:{exc}"
+            )
+
+    accepted = sum(1 for row in published if row.get("http_status") == 200)
+    if accepted != len(published):
+        return False, f"published {accepted}/{len(published)}"
+    return True, f"published {accepted}/{len(published)}"
 
 
 def _sleep_watching(seconds: float, state_path: Path, run_id: str) -> bool:
@@ -212,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--state", type=Path, default=STATE_PATH)
     parser.add_argument("--pid-file", type=Path, default=PID_PATH)
+    parser.add_argument("--lock-file", type=Path, default=WORKER_LOCK_PATH)
+    parser.add_argument(
+        "--lock-wait",
+        type=float,
+        default=20.0,
+        help="抢不到 worker 锁时最多等多久（秒）；旧 worker 收尾最多约 10 秒",
+    )
     args = parser.parse_args(argv)
 
     if not 2 <= args.duration <= 10:
@@ -230,40 +330,48 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolve_manifest_path(args.config, state_path=args.state)
 
-    # One refresher per run.  start_three_uav.sh backgrounds this process and
+    # One worker at a time.  start_three_uav.sh backgrounds this process and
     # returns, so an operator (or a verification script) can call start twice;
-    # without this guard the second call would leave two loops publishing for
-    # the same world.  A refresher belonging to a *different* run is not a
-    # conflict — that world is gone and the old loop exits within half a second
-    # because its run-id check fails — so we take over instead of refusing.
-    if not args.once:
-        existing = read_pid_file(args.pid_file)
-        if existing is not None and pid_alive(existing[0]):
-            if existing[1] == (run_id or ""):
-                print(
-                    f"calibration_loop: already refreshing run {run_id} "
-                    f"(pid {existing[0]}); not starting a second one",
-                    file=sys.stderr,
-                )
-                return 0
-            print(
-                f"calibration_loop: taking over from pid {existing[0]} "
-                f"(old run {existing[1] or '?'})",
-                flush=True,
-            )
-    print(
-        f"calibration_loop: manifest={config} runtime={args.runtime} "
-        f"duration={args.duration}s interval={args.interval}s run_id={run_id}",
-        flush=True,
-    )
-
-    if not args.once:
-        write_pid_file(args.pid_file, os.getpid(), run_id or "")
-    try:
+    # the OS lock — not the pid file — is what makes the claim atomic.
+    if args.once:
         return _run(args, config, run_id)
-    finally:
-        if not args.once:
-            clear_pid_file(args.pid_file, os.getpid())
+
+    # A worker for a *previous* run may still hold the lock while it finishes a
+    # 10-second capture.  Refusing immediately would leave the new simulation
+    # with no refresher at all once the old one exits, so wait for the handover
+    # — this process is detached, so waiting costs the operator nothing.
+    deadline = time.monotonic() + max(0.0, args.lock_wait)
+    while True:
+        with exclusive_worker(args.lock_file) as owned:
+            if owned:
+                write_pid_file(args.pid_file, os.getpid(), run_id or "")
+                print(
+                    f"calibration_loop: manifest={config} runtime={args.runtime} "
+                    f"duration={args.duration}s interval={args.interval}s "
+                    f"run_id={run_id}",
+                    flush=True,
+                )
+                try:
+                    return _run(args, config, run_id)
+                finally:
+                    clear_pid_file(args.pid_file, os.getpid())
+        # Lock is held by somebody else.
+        existing = read_pid_file(args.pid_file)
+        if existing is not None and existing[1] == (run_id or ""):
+            print(
+                f"calibration_loop: run {run_id} is already being refreshed "
+                f"by pid {existing[0]}; exiting",
+                file=sys.stderr,
+            )
+            return 0
+        if time.monotonic() >= deadline:
+            print(
+                "calibration_loop: another worker still holds the lock after "
+                f"{args.lock_wait}s; giving up so the operator sees it",
+                file=sys.stderr,
+            )
+            return 1
+        time.sleep(0.5)
 
 
 def _run(args: argparse.Namespace, config: Path, run_id: str | None) -> int:
