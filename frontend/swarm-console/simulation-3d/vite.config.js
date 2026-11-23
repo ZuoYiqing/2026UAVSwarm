@@ -1,8 +1,10 @@
-import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 
 const cesiumSource = "node_modules/cesium/Build/Cesium";
 const cesiumBaseUrl = "cesium-static";
+const demoCatalog = fileURLToPath(new URL("../../../scenarios/simple_recon_v0_1/entity_catalog.json", import.meta.url));
 
 /**
  * 不参与应用构建、也不需要热更新的目录。
@@ -38,6 +40,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5179,
     strictPort: true,
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), demoCatalog] },
     // 见上方 IGNORED 的说明：不监听测试产物，避免 EBUSY 打挂 Vite。
     watch: { ignored: IGNORED },
     proxy: {

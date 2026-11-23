@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from simulation.px4_gazebo.harness import WORLD_SHA256_SCHEME, canonical_world_bytes
+from simulation.px4_gazebo.harness import WORLD_SHA256_SCHEME
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,14 +25,16 @@ def capture_case():
     return read_json("docs/simulation/fixtures/simple_recon_v0_1_target_001_capture_v1.json")
 
 
-def test_capture_context_matches_navigation_fixture_and_world(capture_case):
+def test_capture_context_matches_navigation_fixture_and_historical_world(capture_case):
     navigation = read_json("docs/simulation/fixtures/simple_recon_v0_1_target_001_navigation_v1.json")
     identity = navigation["scene_identity"]
     assert (capture_case["scene_id"], capture_case["map_version"]) == (identity["scene_id"], identity["map_version"])
     assert capture_case["target_id"] == navigation["target"]["object_id"]
-    world = ROOT / navigation["sources"]["world"]
+    # Golden image evidence pins the pre-marker SDF at source_baseline.
+    # The active world has additional visuals and must publish its own digest.
+    assert capture_case["source_baseline"] == "2d01ffc889d70e64f74391a5dce6f8eadd77ce38"
     assert capture_case["world_sha256_scheme"] == WORLD_SHA256_SCHEME
-    assert capture_case["world_sha256"] == hashlib.sha256(canonical_world_bytes(world.read_bytes())).hexdigest()
+    assert capture_case["world_sha256"] == "9086de5bea22ae0470fe76f6b06cf9e73b6ac9bdf96477c2171ae304a7b575fa"
 
     plan = read_json("docs/fixtures/runtime_plan_progress_fake_target_001_v1.json")["plan_request_used_in_test"]["plan"]
     arrival = capture_case["arrival"]

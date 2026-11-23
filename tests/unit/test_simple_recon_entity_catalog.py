@@ -59,8 +59,56 @@ def test_catalog_geometry_covers_the_versioned_scene():
     candidate_ids = {*slots["distinct_inspection_candidates"], *slots["same_name_candidates"],
                      *slots["exclusive_candidates"], slots["reference_only_candidate"]}
     assert len(candidate_ids) == 7 and candidate_ids <= geometry.keys()
-    assert all(geometry[key]["source"] == "catalog_only" for key in candidate_ids - {"building-001", "target-001"})
+    assert all(geometry[key]["source"] == "gazebo_visual" for key in candidate_ids - {"building-001", "target-001"})
     a, b = (geometry[key]["geometry"]["position"] for key in slots["same_name_candidates"])
     assert a != b
     west, east = (geometry[key]["geometry"]["horizontal_bounds"] for key in slots["exclusive_candidates"])
     assert west["east_max_m"] < east["east_min_m"]
+    task = geometry["recon-area-001"]["geometry"]
+    marker = geometry["target-001"]["geometry"]
+    assert task["center"] == marker["base_center"]
+    assert task["radius_m"] == 8 and marker["radius_m"] == 3
+
+
+def test_display_slots_are_sdf_visuals_at_the_declared_poses_and_sizes():
+    catalog = json.loads((SCENARIO / "entity_catalog.json").read_text(encoding="utf-8"))
+    world = ElementTree.parse(SCENARIO / "worlds/simple_recon_v0_1.sdf").find("world")
+    display_rows = {key: row for key, row in catalog["geometry_by_entity_id"].items() if "display" in row}
+    assert set(display_rows) == {
+        "demo-area-001", "demo-sector-001", "demo-sector-002", "demo-anchor-001", "demo-anchor-002",
+    }
+    for key, row in display_rows.items():
+        geom, display = row["geometry"], row["display"]
+        model = world.find(f"model[@name='{row['gazebo_model']}']")
+        assert model is not None and model.findtext("static") == "true"
+        assert model.find(".//collision") is None
+        e, n, up, roll, pitch, yaw = map(float, model.findtext("pose").split())
+        point = geom.get("center") or geom["position"]
+        assert (e, n, up, roll, pitch, yaw) == (point["east_m"], point["north_m"], -point["down_m"], 0, 0, 0)
+        visuals = {visual.attrib["name"]: visual for visual in model.findall("link/visual")}
+        if display["kind"] == "ground_outline":
+            assert visuals.keys() == {"north", "south", "east", "west"}
+            bounds = geom["horizontal_bounds"]
+            edges = []
+            for visual in visuals.values():
+                east, north, height, *_ = map(float, visual.findtext("pose").split())
+                width, depth, thickness = map(float, visual.findtext("geometry/box/size").split())
+                assert height + thickness / 2 == pytest.approx(display["height_m"])
+                edges.append((e + east - width / 2, e + east + width / 2, n + north - depth / 2, n + north + depth / 2))
+            assert min(edge[0] for edge in edges) == pytest.approx(bounds["east_min_m"])
+            assert max(edge[1] for edge in edges) == pytest.approx(bounds["east_max_m"])
+            assert min(edge[2] for edge in edges) == pytest.approx(bounds["north_min_m"])
+            assert max(edge[3] for edge in edges) == pytest.approx(bounds["north_max_m"])
+        else:
+            assert display["kind"] == "numbered_post" and display["number"] == key[-3:]
+            column = visuals["post"].find("geometry/cylinder")
+            assert float(column.findtext("length")) == display["height_m"]
+            assert float(column.findtext("radius")) == display["radius_m"]
+            digits = {"0": "abcdef", "1": "bc", "2": "abdeg"}
+            assert {name for name in visuals if name.startswith("number-")} == {
+                f"number-{i}-{segment}" for i, digit in enumerate(display["number"]) for segment in digits[digit]
+            }
+
+    display = {key: row["display"] for key, row in display_rows.items()}
+    assert display["demo-sector-001"]["color"] == display["demo-sector-002"]["color"]
+    assert display["demo-anchor-001"]["color"] != display["demo-anchor-002"]["color"]

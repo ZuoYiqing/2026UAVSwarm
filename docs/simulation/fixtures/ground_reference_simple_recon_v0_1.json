@@ -2,7 +2,7 @@
   "contract_version": "1.0",
   "scene_id": "simple_recon_v0_1",
   "map_version": "simple_recon_v0_1-map-1",
-  "world_sha256": "9086de5bea22ae0470fe76f6b06cf9e73b6ac9bdf96477c2171ae304a7b575fa",
+  "world_sha256": "3e6530038c11722d580b9a14a119c93bbedf210139a416b2d6e0efbd1bedf583",
   "world_sha256_scheme": "sha256-lf-v1",
   "frame": "scene_ned",
   "kind": "horizontal_plane",

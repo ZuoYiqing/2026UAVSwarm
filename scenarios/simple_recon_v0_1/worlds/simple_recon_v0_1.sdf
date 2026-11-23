@@ -129,6 +129,338 @@
       </link>
     </model>
   
+    <!-- BEGIN demo catalog visuals (zero collision shapes) -->
+    <model name="demo-area-001-marker">
+      <static>true</static>
+      <pose>-16 33 0 0 0 0</pose>
+      <link name="marker">
+        <visual name="north">
+          <pose>0 8.775 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.08627 0.84706 0.90588 1</ambient><diffuse>0.08627 0.84706 0.90588 1</diffuse><emissive>0.02847 0.27953 0.29894 1</emissive></material>
+        </visual>
+        <visual name="south">
+          <pose>0 -8.775 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.08627 0.84706 0.90588 1</ambient><diffuse>0.08627 0.84706 0.90588 1</diffuse><emissive>0.02847 0.27953 0.29894 1</emissive></material>
+        </visual>
+        <visual name="east">
+          <pose>5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 17.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.08627 0.84706 0.90588 1</ambient><diffuse>0.08627 0.84706 0.90588 1</diffuse><emissive>0.02847 0.27953 0.29894 1</emissive></material>
+        </visual>
+        <visual name="west">
+          <pose>-5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 17.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.08627 0.84706 0.90588 1</ambient><diffuse>0.08627 0.84706 0.90588 1</diffuse><emissive>0.02847 0.27953 0.29894 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="demo-sector-001-marker">
+      <static>true</static>
+      <pose>-16 -12.5 0 0 0 0</pose>
+      <link name="marker">
+        <visual name="north">
+          <pose>0 7.275 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="south">
+          <pose>0 -7.275 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="east">
+          <pose>5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 14.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="west">
+          <pose>-5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 14.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="demo-sector-002-marker">
+      <static>true</static>
+      <pose>16 -12.5 0 0 0 0</pose>
+      <link name="marker">
+        <visual name="north">
+          <pose>0 7.275 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="south">
+          <pose>0 -7.275 0.0225 0 0 0</pose>
+          <geometry><box><size>12 0.45 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="east">
+          <pose>5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 14.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+        <visual name="west">
+          <pose>-5.775 0 0.0225 0 0 0</pose>
+          <geometry><box><size>0.45 14.1 0.045</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.73725 0.46667 0.96078 1</ambient><diffuse>0.73725 0.46667 0.96078 1</diffuse><emissive>0.24329 0.15400 0.31706 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="demo-anchor-001-marker">
+      <static>true</static>
+      <pose>-15 4 0 0 0 0</pose>
+      <link name="marker">
+        <visual name="post">
+          <pose>0 0 0.9 0 0 0</pose>
+          <geometry><cylinder><radius>0.16</radius><length>1.8</length></cylinder></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.16078 0.67059 0.88627 1</ambient><diffuse>0.16078 0.67059 0.88627 1</diffuse><emissive>0.05306 0.22129 0.29247 1</emissive></material>
+        </visual>
+        <visual name="badge">
+          <pose>0 0 1.8 0 0 0</pose>
+          <geometry><box><size>2.55 1.16 0.08</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.16078 0.67059 0.88627 1</ambient><diffuse>0.16078 0.67059 0.88627 1</diffuse><emissive>0.05306 0.22129 0.29247 1</emissive></material>
+        </visual>
+        <visual name="badge-face">
+          <pose>0 0 1.846 0 0 0</pose>
+          <geometry><box><size>2.34 1 0.012</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.01500 0.02100 0.03400 1</ambient><diffuse>0.01500 0.02100 0.03400 1</diffuse><emissive>0.00495 0.00693 0.01122 1</emissive></material>
+        </visual>
+        <visual name="number-0-a">
+          <pose>-0.65 0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-b">
+          <pose>-0.46 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-c">
+          <pose>-0.46 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-d">
+          <pose>-0.65 -0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-e">
+          <pose>-0.84 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-f">
+          <pose>-0.84 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-a">
+          <pose>0 0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-b">
+          <pose>0.19 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-c">
+          <pose>0.19 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-d">
+          <pose>0 -0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-e">
+          <pose>-0.19 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-f">
+          <pose>-0.19 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-b">
+          <pose>0.84 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-c">
+          <pose>0.84 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="demo-anchor-002-marker">
+      <static>true</static>
+      <pose>16 4 0 0 0 0</pose>
+      <link name="marker">
+        <visual name="post">
+          <pose>0 0 0.9 0 0 0</pose>
+          <geometry><cylinder><radius>0.16</radius><length>1.8</length></cylinder></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 0.64314 0.18431 1</ambient><diffuse>1.00000 0.64314 0.18431 1</diffuse><emissive>0.33000 0.21224 0.06082 1</emissive></material>
+        </visual>
+        <visual name="badge">
+          <pose>0 0 1.8 0 0 0</pose>
+          <geometry><box><size>2.55 1.16 0.08</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 0.64314 0.18431 1</ambient><diffuse>1.00000 0.64314 0.18431 1</diffuse><emissive>0.33000 0.21224 0.06082 1</emissive></material>
+        </visual>
+        <visual name="badge-face">
+          <pose>0 0 1.846 0 0 0</pose>
+          <geometry><box><size>2.34 1 0.012</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>0.01500 0.02100 0.03400 1</ambient><diffuse>0.01500 0.02100 0.03400 1</diffuse><emissive>0.00495 0.00693 0.01122 1</emissive></material>
+        </visual>
+        <visual name="number-0-a">
+          <pose>-0.65 0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-b">
+          <pose>-0.46 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-c">
+          <pose>-0.46 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-d">
+          <pose>-0.65 -0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-e">
+          <pose>-0.84 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-0-f">
+          <pose>-0.84 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-a">
+          <pose>0 0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-b">
+          <pose>0.19 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-c">
+          <pose>0.19 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-d">
+          <pose>0 -0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-e">
+          <pose>-0.19 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-1-f">
+          <pose>-0.19 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-a">
+          <pose>0.65 0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-b">
+          <pose>0.84 0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-d">
+          <pose>0.65 -0.39 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-e">
+          <pose>0.46 -0.196 1.857 0 0 0</pose>
+          <geometry><box><size>0.075 0.33 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+        <visual name="number-2-g">
+          <pose>0.65 0 1.857 0 0 0</pose>
+          <geometry><box><size>0.37 0.075 0.01</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material><ambient>1.00000 1.00000 1.00000 1</ambient><diffuse>1.00000 1.00000 1.00000 1</diffuse><emissive>0.33000 0.33000 0.33000 1</emissive></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- END demo catalog visuals -->
+
     <!-- BEGIN GENERATED city-world: city-block-4-3 (改 city-layout.js 后重跑生成器) -->
     <!--
       由 frontend/swarm-console/simulation-3d/src/city-layout.js 生成，请勿手改。

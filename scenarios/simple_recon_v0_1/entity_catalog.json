@@ -1,6 +1,6 @@
 {
   "catalog_id": "simple_recon_v0_1-entities-v1",
-  "catalog_version": "1.0",
+  "catalog_version": "1.1",
   "scene_id": "simple_recon_v0_1",
   "map_version": "simple_recon_v0_1-map-1",
   "frame": "scene_ned",
@@ -592,7 +592,7 @@
     },
     "demo-anchor-001": {
       "kind": "demo_point_slot",
-      "source": "catalog_only",
+      "source": "gazebo_visual",
       "geometry": {
         "shape": "point",
         "position": {
@@ -600,11 +600,19 @@
           "east_m": -15,
           "down_m": 0
         }
+      },
+      "gazebo_model": "demo-anchor-001-marker",
+      "display": {
+        "kind": "numbered_post",
+        "number": "001",
+        "color": "#29ABE2",
+        "height_m": 1.8,
+        "radius_m": 0.16
       }
     },
     "demo-anchor-002": {
       "kind": "demo_point_slot",
-      "source": "catalog_only",
+      "source": "gazebo_visual",
       "geometry": {
         "shape": "point",
         "position": {
@@ -612,11 +620,19 @@
           "east_m": 16,
           "down_m": 0
         }
+      },
+      "gazebo_model": "demo-anchor-002-marker",
+      "display": {
+        "kind": "numbered_post",
+        "number": "002",
+        "color": "#FFA42F",
+        "height_m": 1.8,
+        "radius_m": 0.16
       }
     },
     "demo-area-001": {
       "kind": "demo_area_slot",
-      "source": "catalog_only",
+      "source": "gazebo_visual",
       "geometry": {
         "shape": "rectangle",
         "horizontal_bounds": {
@@ -635,11 +651,18 @@
           "north": 18,
           "east": 12
         }
+      },
+      "gazebo_model": "demo-area-001-marker",
+      "display": {
+        "kind": "ground_outline",
+        "color": "#16D8E7",
+        "line_width_m": 0.45,
+        "height_m": 0.045
       }
     },
     "demo-sector-001": {
       "kind": "demo_area_slot",
-      "source": "catalog_only",
+      "source": "gazebo_visual",
       "geometry": {
         "shape": "rectangle",
         "horizontal_bounds": {
@@ -658,11 +681,18 @@
           "north": 15,
           "east": 12
         }
+      },
+      "gazebo_model": "demo-sector-001-marker",
+      "display": {
+        "kind": "ground_outline",
+        "color": "#BC77F5",
+        "line_width_m": 0.45,
+        "height_m": 0.045
       }
     },
     "demo-sector-002": {
       "kind": "demo_area_slot",
-      "source": "catalog_only",
+      "source": "gazebo_visual",
       "geometry": {
         "shape": "rectangle",
         "horizontal_bounds": {
@@ -681,6 +711,13 @@
           "north": 15,
           "east": 12
         }
+      },
+      "gazebo_model": "demo-sector-002-marker",
+      "display": {
+        "kind": "ground_outline",
+        "color": "#BC77F5",
+        "line_width_m": 0.45,
+        "height_m": 0.045
       }
     }
   },
