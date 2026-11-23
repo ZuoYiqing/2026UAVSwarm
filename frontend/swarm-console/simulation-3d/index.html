@@ -140,8 +140,8 @@
           </button>
         </div>
 
-        <label for="takeoff-altitude">起飞高度 / m</label>
-        <div class="button-row">
+        <label for="takeoff-altitude" data-flight-control>起飞高度 / m</label>
+        <div class="button-row" data-flight-control>
           <input
             id="takeoff-altitude"
             type="number"
@@ -168,12 +168,12 @@
         </div>
         <div id="action-result" class="alignment-status" role="status" hidden></div>
 
-        <label class="switch-row">
+        <label class="switch-row" data-flight-control>
           <span>飞到这里 · 点地图取点</span>
           <input id="goto-armed" type="checkbox" />
         </label>
         <div id="goto-target" class="alignment-status" role="status" hidden></div>
-        <div class="action-row" id="goto-actions">
+        <div class="action-row" id="goto-actions" data-flight-control>
           <button id="goto-confirm" type="button" title="把当前载具派往标注的目标点（经 Runtime 与 Policy Gate）">
             <i data-lucide="navigation"></i> 确认前往
           </button>
@@ -265,6 +265,7 @@
         <span class="map-caption-dot"></span
         ><span id="map-location">城市总览</span
         ><span class="map-caption-coordinate">116.3913° E / 39.9075° N</span>
+        <span id="plan-preview-status" class="plan-preview-status" role="status" hidden>计划预览 · 测试桩</span>
       </div>
       <nav class="mobile-panels" aria-label="地图面板">
         <button type="button" data-panel="scene" aria-expanded="false">
