@@ -315,7 +315,48 @@ def test_empty_cmdline_is_only_exited_with_kernel_zombie_evidence(tmp_path, stat
     tail = [state, *[str(field) for field in range(4, 22)], "123456"]
     (proc / "stat").write_text("4242 (px4) " + " ".join(tail))
     (proc / "cmdline").write_bytes(b"")
-    assert harness.read_process_identity(4242, proc_root=tmp_path).code == expected
+    waits = []
+    result = harness.read_process_identity(4242, proc_root=tmp_path, sleep=waits.append)
+    assert result.code == expected
+    assert len(waits) == (0 if state == "Z" else harness.PROC_EMPTY_CMDLINE_RECHECKS)
+
+
+@pytest.mark.parametrize("transition", ["zombie", "gone", "reused"])
+def test_empty_cmdline_rechecks_the_same_process(tmp_path, transition):
+    proc = tmp_path / "4242"
+    proc.mkdir()
+    stat_path = proc / "stat"
+
+    def write_stat(state, ticks):
+        tail = [state, *[str(field) for field in range(4, 22)], str(ticks)]
+        stat_path.write_text("4242 (gz sim) " + " ".join(tail), encoding="utf-8")
+
+    write_stat("R", 123456)
+    (proc / "cmdline").write_bytes(b"")
+    waits = []
+
+    def advance(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            if transition == "gone":
+                stat_path.unlink()
+            else:
+                write_stat("Z", 123457 if transition == "reused" else 123456)
+
+    result = harness.read_process_identity(4242, proc_root=tmp_path, sleep=advance)
+    assert len(waits) == 2
+    assert result.code == (harness.STALE_STATE if transition == "reused" else harness.PROCESS_EXITED)
+    assert result.identity is None
+
+
+def test_missing_proc_entry_with_live_stat_is_not_an_exit(tmp_path):
+    proc = tmp_path / "4242"
+    proc.mkdir()
+    tail = ["S", *[str(field) for field in range(4, 22)], "123456"]
+    (proc / "stat").write_text("4242 (gz sim) " + " ".join(tail), encoding="utf-8")
+    result = harness.read_process_identity(4242, proc_root=tmp_path)
+    assert result.code == harness.STALE_STATE
+    assert result.detail.startswith("proc_identity_entry_missing:")
 
 
 def test_process_identity_match_allows_signalling() -> None:
@@ -651,9 +692,9 @@ def test_cleanup_waits_for_children_even_when_world_and_ports_are_clear() -> Non
     assert not evidence["clean"]
 
 
-@pytest.mark.parametrize("reused_pid", [False, True])
+@pytest.mark.parametrize("server_case", ["live", "reused", "exiting"])
 def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reused_pid: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_case: str
 ) -> None:
     state_path, _ = _write_state(tmp_path, monkeypatch)
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -664,12 +705,27 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     state["gazebo_processes"] = [server]
     state_path.write_text(json.dumps(state), encoding="utf-8")
     signals: list[tuple[int, int]] = []
+    finished_exiting = False
+    read_identity = harness.read_process_identity
+    proc = tmp_path / "4243"
+    proc.mkdir()
+    stat = proc / "stat"
+    stat_tail = " ".join([*[str(field) for field in range(4, 22)], "123456"])
+    stat.write_text(f"4243 (gz sim) R {stat_tail}", encoding="utf-8")
+    (proc / "cmdline").write_bytes(b"")
+
+    def exit_during_retry(_seconds):
+        nonlocal finished_exiting
+        stat.write_text(f"4243 (gz sim) Z {stat_tail}", encoding="utf-8")
+        finished_exiting = True
 
     def identity_reader(pid: int):
         if pid == 4242 or signals:
             return _exited()
-        if reused_pid:
+        if server_case == "reused":
             return _observed(pid=4243, proc_start_time_ticks=999999)
+        if server_case == "exiting":
+            return read_identity(pid, proc_root=tmp_path, sleep=exit_during_retry)
         return harness.ProcessIdentityReadResult(
             code=harness.IDENTITY_OBSERVED, identity=_identity(pid=4243, pgid=4242)
         )
@@ -678,13 +734,14 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     monkeypatch.setattr(harness.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     monkeypatch.setattr(harness.os, "killpg", lambda *args: pytest.fail("dead group leader"), raising=False)
     monkeypatch.setattr(harness, "_wait_for_cleanup", lambda *args, **kwargs: {
-        "clean": bool(signals), "live_group_member_pids": [] if signals else [4243]
+        "clean": bool(signals) or finished_exiting,
+        "live_group_member_pids": [] if signals or finished_exiting else [4243],
     })
-    if reused_pid:
+    if server_case == "reused":
         with pytest.raises(harness.HarnessError, match="gazebo_cleanup_identity_invalid"):
             harness.stop_harness()
         assert not signals and state_path.exists()
     else:
         assert harness.stop_harness()["cleanup"]["clean"]
-        assert signals == [(4243, harness.SIGTERM)]
+        assert signals == ([(4243, harness.SIGTERM)] if server_case == "live" else [])
         assert not state_path.exists()

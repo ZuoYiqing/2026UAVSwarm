@@ -197,10 +197,13 @@ python3 simulation/px4_gazebo/harness.py preflight \
   --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 ```
 
-它会报告：① 这份配置有没有相机；② harness state 是否写在**别的仓库**
-（`harness.py` 的 `REPO_ROOT` 是它所在目录的上两级，因此状态与标定证据跟着
-跑仿真的那个仓库走，而 Runtime 只认本仓库的 `.runtime/`）；
-③ **当前实际在跑的是不是被检查的这一份**。错位时退出码非 0。
+它检查相机配置、状态所在的工作区，以及运行中的 manifest 是否匹配。预检和启停
+共用仿真运行目录，默认是仓库下的 `.runtime/px4_gazebo`。设置
+`UAV_SIM_RUNTIME_ROOT` 可指定其他目录，相对路径以仓库为基准。启停和采样时
+应使用同一目录。如果 Windows 不能访问 WSL 软链接，预检返回
+`harness_state_unreadable` 和非零退出码。此时可在 WSL 同一工作区运行预检。
+`harness_state.status=missing` 表示未找到状态文件，运行 manifest 状态仍是未知。
+其他工作区不可读时单独报告 `worktree_state_scan_incomplete`，并列出未检查的路径。
 
 启动前 Harness 会拒绝：
 
@@ -208,7 +211,7 @@ python3 simulation/px4_gazebo/harness.py preflight \
 - 缺少 PX4 binary、etc、world 或 manifest 对应的 Gazebo `model.sdf`；
 - 旧状态文件与当前进程身份不一致；
 - 外部 PX4 进程或其他 Gazebo world；
-- 需要的 UDP 端口已被占用。
+- PX4 本地绑定的 UDP 端口已被占用。Runtime 在 `14540–14542` 的接收 socket 可以保持打开。
 
 启动成功不是完整健康证明，必须继续运行 health。
 
@@ -578,11 +581,12 @@ bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh cleanup
 
 ### stop 返回 cleanup_incomplete
 
-进程可能已退出，但 world 或 UDP 端口仍残留。先停止 Runtime/receiver，再检查：
+按停止结果中的 `live_group_member_pids`、world 和 PX4 本地端口核对残留。
+在对接 Runtime 的重启验收中保留 Runtime 和它的接收端口：
 
 ```bash
 gz topic -l | grep simple_recon_v0_1
-ss -lunp | grep -E '14540|14541|14542|14580|14581|14582'
+ss -lunp | grep -E ':(1458[0-2]|1857[0-2]|1428[0-2]|1303[0-2])\b'
 ```
 
 ### `running_manifest_mismatch`（起的是默认版却以为在跑相机版）

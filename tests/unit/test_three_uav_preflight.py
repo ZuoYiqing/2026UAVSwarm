@@ -176,6 +176,76 @@ def test_preflight_does_not_flag_when_state_is_local(tmp_path: Path) -> None:
     assert report["ok"] is True
 
 
+@pytest.mark.parametrize("absolute", [False, True])
+def test_preflight_start_and_stop_share_runtime_directory(tmp_path, monkeypatch, absolute):
+    manifest = harness.load_manifest(CAMERA_MANIFEST)
+    repo = tmp_path / "repo"
+    runtime_root = (tmp_path if absolute else repo) / "simulation-state"
+    monkeypatch.setenv("UAV_SIM_RUNTIME_ROOT", str(runtime_root) if absolute else "simulation-state")
+    monkeypatch.setattr(harness, "REPO_ROOT", repo)
+    monkeypatch.setattr(harness, "RUNTIME_ROOT", harness.resolve_runtime_root(repo))
+    monkeypatch.setattr(harness, "STATE_PATH", harness.RUNTIME_ROOT / harness.STATE_FILENAME)
+    state = {"manifest_path": str(CAMERA_MANIFEST)}
+    harness._write_state(state)
+    assert harness.read_state() == state
+    assert harness.resolve_vehicle_runtime_dir(".runtime/px4_gazebo/UAV-02") == (runtime_root / "UAV-02").resolve()
+
+    report = harness.preflight_manifest(
+        manifest, repo_root=repo, manifest_path=CAMERA_MANIFEST,
+    )
+    assert report["ok"] and report["running_manifest"]["matches_checked"] is True
+    assert report["harness_state"] == {"path": str(runtime_root / "harness_state.json"), "status": "readable"}
+
+
+def test_unreadable_wsl_state_is_not_reported_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("UAV_SIM_RUNTIME_ROOT", raising=False)
+    manifest = harness.load_manifest(CAMERA_MANIFEST)
+    local_state = harness.resolve_runtime_root(tmp_path) / harness.STATE_FILENAME
+    original_open = Path.open
+
+    def open_path(path, *args, **kwargs):
+        if path == local_state:
+            error = OSError("Windows cannot access the WSL link")
+            error.winerror = 1920
+            raise error
+        return original_open(path, *args, **kwargs)
+
+    missing = harness.preflight_manifest(manifest, repo_root=tmp_path)
+    assert missing["ok"] and missing["harness_state"]["status"] == "missing"
+
+    monkeypatch.setattr(Path, "open", open_path)
+    report = harness.preflight_manifest(manifest, repo_root=tmp_path)
+    assert not report["ok"]
+    assert report["harness_state"] == {"path": str(local_state), "status": "unreadable"}
+    assert report["running_manifest"]["matches_checked"] is None
+    assert "harness_state_unreadable" in _codes(report)
+
+
+def test_unreadable_other_worktree_does_not_mask_local_report(tmp_path, monkeypatch):
+    monkeypatch.delenv("UAV_SIM_RUNTIME_ROOT", raising=False)
+    worktrees = tmp_path / "worktrees"
+    checkout = worktrees / "unreadable"
+    checkout.mkdir(parents=True)
+    state_path = harness.resolve_runtime_root(checkout) / harness.STATE_FILENAME
+    original_stat = Path.stat
+
+    def stat_path(path, *args, **kwargs):
+        if path == state_path:
+            error = OSError("Windows cannot access this worktree's WSL link")
+            error.winerror = 1920
+            raise error
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_path)
+    report = harness.preflight_manifest(
+        harness.load_manifest(CAMERA_MANIFEST), repo_root=tmp_path / "local", worktrees_root=worktrees,
+    )
+    assert report["ok"] and report["harness_state"]["status"] == "missing"
+    warning = next(row for row in report["findings"] if row["code"] == "worktree_state_scan_incomplete")
+    assert warning["severity"] == "warning" and warning["paths"] == [str(state_path)]
+    assert "state_in_other_worktree" not in _codes(report)
+
+
 def test_preflight_still_reports_other_worktree_when_local_state_exists(
     tmp_path: Path,
 ) -> None:
