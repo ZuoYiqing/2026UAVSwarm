@@ -100,6 +100,7 @@ def test_golden_objectives_at_plan_mission(preview, case, selector) -> None:
         "scene_id": preview.scene_id, "map_version": preview.scene["map_version"], "catalog_id": GOLDEN["catalog_id"],
     }
     bindings = resolution["bindings"]
+    assert not bindings.get("preview_only_targets", [])
     for role in ("targets", "reference_only", "excluded_targets"):
         assert [item["entity_id"] for item in bindings[role]] == case.get(role, [])
     assert bindings["only_listed_targets"] is case.get("only_listed_targets", False)
@@ -215,3 +216,125 @@ def test_bound_shape_that_cannot_be_represented_never_drops_constraints(preview,
     assert body["failure_reason"] == "intent_not_representable_by_template"
     assert body["plan_source"] == "none" and body["plan"] is None
     assert body["intent_resolution"]["bindings"]["targets"][0]["entity_id"] == "S-THERM"
+
+
+@pytest.fixture
+def role_preview(preview: VehicleRegistry) -> VehicleRegistry:
+    scene = preview.scene
+    scene["obstacles"] = [{"obstacle_id": "building-001"}]
+    catalog = scene["intent_catalog"]
+    catalog["entries"].extend([
+        {"entity_id": "demo-area-001", "label": "西北区域", "aliases": ["西北区"]},
+        {"entity_id": "demo-sector-001", "label": "西南区块", "aliases": ["西南"], "exclusive_group": "sector"},
+        {"entity_id": "demo-sector-002", "label": "东南区块", "aliases": ["东南"], "exclusive_group": "sector"},
+        {"entity_id": "building-001", "label": "中央建筑", "aliases": ["中间那栋楼"]},
+    ])
+    catalog["preview_only_entity_ids"] = ["demo-area-001", "demo-sector-001", "demo-sector-002"]
+    catalog["reference_only_entity_ids"] = ["building-001"]
+    return preview
+
+
+@pytest.mark.parametrize(
+    ("objective", "physical_ids"),
+    [("巡检西北区域。", []), ("巡检西北区和热泵机房。", ["S-THERM"])],
+)
+def test_preview_only_selection_never_appears_in_physical_targets(role_preview, objective, physical_ids) -> None:
+    body = request(objective, mission_type="auto")
+    resolution = body["intent_resolution"]
+    assert (resolution["status"], resolution["mission_type"], resolution["reason_code"]) == (
+        "resolved", "inspection_snapshot", "INTENT_BOUND",
+    )
+    bindings = resolution["bindings"]
+    assert [item["entity_id"] for item in bindings["targets"]] == physical_ids
+    assert [item["entity_id"] for item in bindings["preview_only_targets"]] == ["demo-area-001"]
+    assert body["intent_source"] == "rules" and body["plan_source"] == "template"
+    assert body["plan"]["preview_binding"]["steps_are_outline"] is True
+    assert body["plan"]["preview_binding"]["bindings"] == bindings
+    assert routes.RUNTIME_STATE_STORE.agent_status()["latest_plan"]["preview_binding"]["bindings"] == bindings
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "巡检中央建筑。",
+        "巡检热泵机房和西北区域和中间那栋楼。",
+        "北仓只用来定位，不用核对；巡检西北区域和中央建筑。",
+    ],
+)
+def test_permanent_reference_rejects_whole_positive_selection(role_preview, monkeypatch, objective) -> None:
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("a permanent reference selected as a target reached template expansion")
+
+    monkeypatch.setattr(routes, "TemplateAgentPlanner", forbidden)
+    body = request(objective)
+    resolution = body["intent_resolution"]
+    assert (resolution["status"], resolution["reason_code"]) == ("needs_clarification", "TARGET_REFERENCE_ONLY")
+    assert resolution["mission_type"] is None and resolution["question"]
+    assert body["intent_source"] == "rules" and body["result"] == "blocked"
+    assert body["plan_source"] == "none" and body["plan"] is None
+    bindings = resolution["bindings"]
+    assert not bindings["targets"] and not bindings.get("preview_only_targets", [])
+    if objective.startswith("北仓"):
+        assert [item["entity_id"] for item in bindings["reference_only"]] == ["S-STORE-N"]
+        assert [item["entity_id"] for item in bindings["excluded_targets"]] == ["S-STORE-N"]
+
+
+def test_permanent_reference_is_allowed_as_landmark_or_exclusion(role_preview) -> None:
+    body = request("中央建筑只用来定位，不用核对；本轮只核对西北区域。")
+    resolution = body["intent_resolution"]
+    assert resolution["status"] == "resolved" and resolution["reason_code"] == "INTENT_BOUND"
+    assert body["plan_source"] == "template"
+    bindings = resolution["bindings"]
+    assert not bindings["targets"]
+    assert [item["entity_id"] for item in bindings["preview_only_targets"]] == ["demo-area-001"]
+    assert [item["entity_id"] for item in bindings["reference_only"]] == ["building-001"]
+    assert [item["entity_id"] for item in bindings["excluded_targets"]] == ["building-001"]
+    assert bindings["only_listed_targets"] is True
+
+
+def test_preview_only_exclusive_group_still_requires_clarification(role_preview) -> None:
+    body = request("巡检西南和东南。")
+    resolution = body["intent_resolution"]
+    assert (resolution["status"], resolution["reason_code"]) == ("needs_clarification", "CONFLICTING_TARGETS")
+    assert body["plan_source"] == "none" and body["plan"] is None
+    assert not resolution["bindings"]["targets"] and not resolution["bindings"].get("preview_only_targets", [])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("preview_only_entity_ids", "demo-area-001"),
+        ("reference_only_entity_ids", None),
+        ("preview_only_entity_ids", ["demo-area-001", "demo-area-001"]),
+        ("reference_only_entity_ids", ["building-001", False]),
+        ("preview_only_entity_ids", ["demo-area-001", "building-001"]),
+        ("preview_only_entity_ids", ["demo-area-001", "S-THERM"]),
+        ("reference_only_entity_ids", ["building-001", "S-THERM"]),
+        ("preview_only_entity_ids", ["demo-area-001", "demo-sector-001", "demo-sector-002", "dangling-id"]),
+        ("reference_only_entity_ids", ["building-001", "dangling-id"]),
+    ],
+)
+def test_bad_role_declarations_fail_closed(role_preview, field, value) -> None:
+    role_preview.scene["intent_catalog"][field] = value
+    body = request("巡检热泵机房。")
+    assert body["intent_source"] == body["plan_source"] == "none"
+    assert body["plan"] is None
+    assert body["intent_resolution"]["reason_code"] == "INTENT_CATALOG_INVALID"
+
+
+def test_scene_obstacle_cannot_become_a_preview_only_target(role_preview) -> None:
+    catalog = role_preview.scene["intent_catalog"]
+    catalog["reference_only_entity_ids"] = []
+    catalog["preview_only_entity_ids"].append("building-001")
+    body = request("巡检中央建筑。")
+    assert body["intent_source"] == body["plan_source"] == "none"
+    assert body["plan"] is None
+    assert body["intent_resolution"]["reason_code"] == "INTENT_CATALOG_INVALID"
+
+
+def test_unclassified_non_target_entry_still_fails_closed(role_preview) -> None:
+    role_preview.scene["intent_catalog"]["preview_only_entity_ids"].remove("demo-area-001")
+    body = request("巡检西北区域。")
+    assert body["intent_source"] == body["plan_source"] == "none"
+    assert body["plan"] is None
+    assert body["intent_resolution"]["reason_code"] == "INTENT_CATALOG_ENTITY_NOT_IN_SCENE"

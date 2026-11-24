@@ -194,14 +194,21 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 ```
 
 - `scene_id` / `map_version` 必须与当前活动场景一致；`catalog_id` 标识语义目录版本。
-- 真实目录由场景负责人随场景发布，包含可核验的 `scene.targets[].target_id`、名字、别名和确有依据的单选组。Runtime 仅绑定这份目录；目录内 `entity_id` 不得重复，且必须来自场景目标。不同实体可以共享别名，识别时就会追问。不得把永久仅参照的地标当作可巡检目标列入 v0。
-- 真实 `simple_recon_v0_1` 目前未发布该目录。缺少目录时保留 `blocked / unsupported_mission_type`，`intent_source: "none"`、`plan: null`；具体是 `INTENT_CATALOG_UNAVAILABLE`。版本不匹配、非法条目、场景外 ID 也不选择模板。首轮用隔离的合成目录验收接线，不等待真实目录，也不把合成题集装入真实场景。
+- 场景负责人从独立 `entity_catalog.json` 投影已发布的语义条目到 `entries`；Runtime 不读取独立目录。每条 ID 不得重复，名字和别名来自同一场景版本。不同实体可以共享别名，识别时会追问。物理巡检目标保持在 `scene.targets`，不因演示标签新增物理目标。
+- 目录可以声明可选数组 `preview_only_entity_ids`（只可选入只读预览的实体）和 `reference_only_entity_ids`（永久只能作参照/排除的实体）。两组不能重复、相交或与物理目标重叠，所有声明 ID 都要出现在 `entries`；场景障碍物不得列在仅预览组。未声明的非物理目标仍被拒绝。省略两组时，只允许物理目标。
+- 缺少目录时保留 `blocked / unsupported_mission_type`、`intent_source: "none"`、`plan: null`；具体原因是 `INTENT_CATALOG_UNAVAILABLE`。版本不匹配、非法条目、未声明 ID 也不选择模板。合成题集只用于隔离验收。
 
 只有请求选择规则路径时，回包增加 `intent_resolution`，内含 `status`、`mission_type`、
 `reason_code`、`question`、`catalog`（场景/地图/目录身份）和 `bindings`。
-绑定分开记录 `targets`、`reference_only`、`excluded_targets`（每条有
+绑定分开记录物理 `targets`、`preview_only_targets`、`reference_only`、`excluded_targets`（每条有
 `entity_id` 和作为识别证据的短语）、`only_listed_targets` 和 `status_scope`。
 追问和绑定证据只作文本显示，不当作新请求或授权。
+正向选择永久仅参照实体（即使还混有合法目标）返回
+`needs_clarification / TARGET_REFERENCE_ONLY`，不产计划，不保留任何正向子集，
+但保留已明确的参照和排除项。
+
+当前规则不支持后置动词「西南和东南都巡检」。验证单选组时使用
+「巡检西南和东南」，应返回 `CONFLICTING_TARGETS`，而不是选其中一个。
 
 | 识别结果 | `intent_resolution.status` | 回包 |
 | --- | --- | --- |
