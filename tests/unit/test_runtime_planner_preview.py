@@ -11,6 +11,7 @@ from uav_runtime.agent.planner import MissionIntent, TemplateAgentPlanner
 from uav_runtime.http import routes
 from uav_runtime.http.planner_preview import PlanPreviewProvenance, serialize_plan_preview
 from uav_runtime.http.state_store import RuntimeStateStore
+from uav_runtime.runtime.vehicle_registry import VehicleRegistry
 
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "docs/fixtures/runtime_planner_preview_v1.json"
@@ -20,12 +21,23 @@ CASES = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 @pytest.fixture
 def preview_planner(monkeypatch: pytest.MonkeyPatch) -> TemplateAgentPlanner:
     planner = TemplateAgentPlanner(audit=SimpleNamespace(append=lambda _: None))
+    registry = VehicleRegistry(scene_id="planner-preview-fixture")
+    identity = {"scene_id": registry.scene_id, "map_version": "fixture-map-v1"}
+    # Exercise rules on both a standalone Runtime branch and an integrated tree.
+    # The published unresolved case retains its ID; a mounted empty catalog
+    # lets the recognizer run without inventing a binding for its objective.
+    registry.scene = {
+        **identity,
+        "targets": [],
+        "intent_catalog": {**identity, "contract_version": "1.0", "catalog_id": "fixture-catalog-v1", "entries": []},
+    }
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("plan preview reached the flight execution path")
 
     monkeypatch.setattr(routes, "TemplateAgentPlanner", lambda: planner)
-    monkeypatch.setattr(routes, "RUNTIME_STATE_STORE", RuntimeStateStore())
+    monkeypatch.setattr(routes, "VEHICLE_REGISTRY", registry)
+    monkeypatch.setattr(routes, "RUNTIME_STATE_STORE", RuntimeStateStore(vehicle_registry=registry))
     monkeypatch.setattr(routes, "plans_execute", forbidden)
     monkeypatch.setattr(routes, "_execute_flight_action", forbidden)
     return planner
