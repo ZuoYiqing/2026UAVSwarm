@@ -30,3 +30,24 @@ Gazebo 的边框和编号柱均为无碰撞视觉物体，高度仅用于渲染�
 
 这次只新增视觉物体，公共坐标、碰撞几何和 `map_version` 保持原值。
 SDF 内容摘要必须使用当次启动的版本，旧的观察证据仍绑定其历史世界。
+
+## Runtime 意图预览
+
+`entity_catalog.json` 是仿真与算法共用的维护源。场景中的 `intent_catalog` 使用
+契约版本 `1.0`，包含 `scene_id`、`map_version`、`catalog_id`、`entries` 和两份角色清单。
+七条已审核的 `entries` 各保留 `entity_id`、`label`、`aliases`、`exclusive_group`。
+Runtime 从所加载的 `scene.json` 读取这些字段。完整几何、来源和显示信息保存在独立目录。
+
+- `scene.targets` 中的 `target-001` 保留物理目标资格。
+- `preview_only_entity_ids` 中的五个演示实体可出现在只读计划的 `preview_only_targets` 绑定里。
+- `reference_only_entity_ids` 中的 `building-001` 可用于定位或排除。把它列为正向目标时，
+  Runtime 应返回 `TARGET_REFERENCE_ONLY` 并等待澄清。
+
+更新维护源后，执行以下命令刷新场景中的语义目录。校验可作为提交前检查。
+
+```powershell
+python -B scenarios/simple_recon_v0_1/sync_intent_catalog.py --write
+python -B scenarios/simple_recon_v0_1/sync_intent_catalog.py
+```
+
+互斥台词使用「巡检西南和东南」。后置动词「西南和东南都巡检」待识别器支持。

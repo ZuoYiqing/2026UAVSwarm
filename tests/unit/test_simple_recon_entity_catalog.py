@@ -4,8 +4,39 @@ from xml.etree import ElementTree
 
 import pytest
 
+from scenarios.simple_recon_v0_1.sync_intent_catalog import build_intent_catalog
+from uav_runtime.scenario.scene_schema import validate_scene
+
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios/simple_recon_v0_1"
+
+
+def test_runtime_catalog_projects_reviewed_labels_and_preserves_scene_target_roles():
+    scene = json.loads((SCENARIO / "scene.json").read_text(encoding="utf-8"))
+    catalog = json.loads((SCENARIO / "entity_catalog.json").read_text(encoding="utf-8"))
+    projection = scene["intent_catalog"]
+    assert projection == build_intent_catalog(scene, catalog)
+    assert projection["contract_version"] == "1.0"
+    expected_entries = [row for row in catalog["catalog"] if row["label"] is not None]
+    assert projection["entries"] == expected_entries
+    assert len(expected_entries) == 7
+
+    targets = {target["target_id"] for target in scene["targets"]}
+    assert targets == {"target-001"}
+    assert validate_scene(scene).target_count == 1
+    assert projection["reference_only_entity_ids"] == ["building-001"]
+    assert any(obstacle["obstacle_id"] == "building-001" for obstacle in scene["obstacles"])
+    assert projection["preview_only_entity_ids"] == [
+        "demo-anchor-001", "demo-anchor-002", "demo-area-001", "demo-sector-001", "demo-sector-002",
+    ]
+
+
+def test_catalog_sync_rejects_promoting_a_demo_visual_into_physical_targets():
+    scene = json.loads((SCENARIO / "scene.json").read_text(encoding="utf-8"))
+    catalog = json.loads((SCENARIO / "entity_catalog.json").read_text(encoding="utf-8"))
+    scene["targets"].append({**scene["targets"][0], "target_id": "demo-area-001"})
+    with pytest.raises(ValueError, match="overlap physical target or obstacle roles"):
+        build_intent_catalog(scene, catalog)
 
 
 def test_catalog_geometry_covers_the_versioned_scene():
