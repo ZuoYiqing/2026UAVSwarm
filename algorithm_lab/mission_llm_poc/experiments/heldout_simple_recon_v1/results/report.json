@@ -1,0 +1,838 @@
+{
+  "freeze_commit": "4596632544005ae7a7c2de993bd6b99e9af9c7cf",
+  "corpus_sha256_lf": "d9196e2df7e4726ef68771e7047de2e21283b299df93e857e050e6c4fc350f54",
+  "benchmark_id": "simple-recon-heldout-v1",
+  "catalog_sha256": "d674338ec95cc224d5a04461447dd2948a73da817beaaf04b44041cd67f89fdc",
+  "rules_sha256_lf": "a5d34212b36b7c145bf1e13668c19dda8929c14674ff2ba0aaea8fcb8e183abb",
+  "model": {
+    "id": "qwen3.5-0.8b-q4-lab",
+    "profile": "qwen3.5-0.8b",
+    "weights_sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "engine_build": "llama.cpp b10964",
+    "context_tokens": 2048,
+    "temperature": 0.2,
+    "seeds": [
+      11,
+      29,
+      53
+    ],
+    "max_tokens": 384
+  },
+  "model_samples_per_case": 3,
+  "model_requests": 60,
+  "rules_samples_per_case": 1,
+  "runtime_preview_requests": 80,
+  "execution_authorized": false,
+  "model_adapter_experiment_only": true,
+  "rules": {
+    "counts": {
+      "complete": [
+        7,
+        14
+      ],
+      "order": [
+        2,
+        4
+      ],
+      "false_bind": [
+        0,
+        5
+      ],
+      "abstain": [
+        7,
+        14
+      ]
+    },
+    "latency_ms_min_median_max": [
+      1.713199948426336,
+      13.930149987572804,
+      25.874399987515062
+    ],
+    "invalid": 0,
+    "answerable_other_failure": 0,
+    "admitted_false_binding": 0,
+    "status_distribution": {
+      "bound": 7,
+      "clarify": 7,
+      "unknown": 6
+    }
+  },
+  "model_pooled": {
+    "counts": {
+      "complete": [
+        0,
+        42
+      ],
+      "order": [
+        0,
+        12
+      ],
+      "false_bind": [
+        14,
+        15
+      ],
+      "abstain": [
+        0,
+        42
+      ]
+    },
+    "latency_ms_min_median_max": [
+      885.8464999939315,
+      1233.2151999871712,
+      2501.6879999893717
+    ],
+    "invalid": 60,
+    "answerable_other_failure": 42,
+    "admitted_false_binding": 0,
+    "status_distribution": {
+      "invalid": 60
+    }
+  },
+  "model_by_seed": {
+    "11": {
+      "counts": {
+        "complete": [
+          0,
+          14
+        ],
+        "order": [
+          0,
+          4
+        ],
+        "false_bind": [
+          5,
+          5
+        ],
+        "abstain": [
+          0,
+          14
+        ]
+      },
+      "latency_ms_min_median_max": [
+        934.409899986349,
+        1189.4909999682568,
+        2399.8651999863796
+      ],
+      "invalid": 20,
+      "answerable_other_failure": 14,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 20
+      }
+    },
+    "29": {
+      "counts": {
+        "complete": [
+          0,
+          14
+        ],
+        "order": [
+          0,
+          4
+        ],
+        "false_bind": [
+          5,
+          5
+        ],
+        "abstain": [
+          0,
+          14
+        ]
+      },
+      "latency_ms_min_median_max": [
+        939.5656000124291,
+        1233.2151999871712,
+        2451.516500033904
+      ],
+      "invalid": 20,
+      "answerable_other_failure": 14,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 20
+      }
+    },
+    "53": {
+      "counts": {
+        "complete": [
+          0,
+          14
+        ],
+        "order": [
+          0,
+          4
+        ],
+        "false_bind": [
+          4,
+          5
+        ],
+        "abstain": [
+          0,
+          14
+        ]
+      },
+      "latency_ms_min_median_max": [
+        885.8464999939315,
+        1778.0155000218656,
+        2501.6879999893717
+      ],
+      "invalid": 20,
+      "answerable_other_failure": 14,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 20
+      }
+    }
+  },
+  "model_per_seed_count_min_median_max": {
+    "complete": [
+      0,
+      0,
+      0
+    ],
+    "order": [
+      0,
+      0,
+      0
+    ],
+    "false_bind": [
+      4,
+      5,
+      5
+    ],
+    "abstain": [
+      0,
+      0,
+      0
+    ]
+  },
+  "model_inference_ms_min_median_max": [
+    871.1793999536894,
+    1231.4803999906871,
+    2484.880100004375
+  ],
+  "model_per_case": {
+    "L01": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1074.0622999728657,
+        1132.4859000160359,
+        1779.9332999857143
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "L02": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1222.3906999570318,
+        1397.5494999904186,
+        2403.1383999972604
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "L03": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        949.7268999693915,
+        950.5228999769315,
+        1044.988400011789
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "L04": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          3
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1238.5732000111602,
+        1876.5061000012793,
+        2368.148200039286
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "L05": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          3
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        934.409899986349,
+        1010.6465999851935,
+        1016.3458000170067
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "P01": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1121.045599982608,
+        1124.9371000449173,
+        1156.5912999794818
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "P02": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1129.943500040099,
+        1416.2064000265673,
+        1700.4677000222728
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "P03": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        982.5628999969922,
+        1022.3482000292279,
+        1245.3973999945447
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "P04": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        885.8464999939315,
+        1191.1241000052541,
+        1326.742800010834
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "P05": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          3
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1051.3108000159264,
+        1088.9548999839462,
+        1622.4745999788865
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "A01": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          3,
+          3
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1093.0199999711476,
+        1121.1828000377864,
+        2464.992900029756
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "A02": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          3,
+          3
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1227.8571999631822,
+        1299.8633999959566,
+        1855.0410000025295
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "A03": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          2,
+          3
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1688.3640000014566,
+        1707.600999972783,
+        2501.6879999893717
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "A04": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          3,
+          3
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1244.4317000336014,
+        1710.005300003104,
+        1917.2292999573983
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "A05": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          3,
+          3
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        939.5656000124291,
+        1057.14839999564,
+        1700.9900000412017
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "N01": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1103.3836000133306,
+        1646.0605000029318,
+        2399.8651999863796
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "N02": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1225.4426999716088,
+        2255.4922999697737,
+        2274.225100001786
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "N03": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1016.001200012397,
+        1062.6454000012018,
+        2330.222300020978
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "N04": {
+      "counts": {
+        "complete": [
+          0,
+          3
+        ],
+        "order": [
+          0,
+          3
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          3
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1038.282599998638,
+        2235.3930000099353,
+        2347.508699982427
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 3,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    },
+    "N05": {
+      "counts": {
+        "complete": [
+          0,
+          0
+        ],
+        "order": [
+          0,
+          0
+        ],
+        "false_bind": [
+          0,
+          0
+        ],
+        "abstain": [
+          0,
+          0
+        ]
+      },
+      "latency_ms_min_median_max": [
+        1131.7773000337183,
+        2340.082300012,
+        2451.516500033904
+      ],
+      "invalid": 3,
+      "answerable_other_failure": 0,
+      "admitted_false_binding": 0,
+      "status_distribution": {
+        "invalid": 3
+      }
+    }
+  },
+  "improvements_before_safety_gate": [],
+  "no_increase_in_false_bind_for_any_seed": false,
+  "net_gain": false
+}
