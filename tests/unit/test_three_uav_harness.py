@@ -692,7 +692,7 @@ def test_cleanup_waits_for_children_even_when_world_and_ports_are_clear() -> Non
     assert not evidence["clean"]
 
 
-@pytest.mark.parametrize("server_case", ["live", "reused", "exiting"])
+@pytest.mark.parametrize("server_case", ["live", "reused", "exiting", "slow_exit", "unreadable"])
 def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_case: str
 ) -> None:
@@ -726,6 +726,8 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
             return _observed(pid=4243, proc_start_time_ticks=999999)
         if server_case == "exiting":
             return read_identity(pid, proc_root=tmp_path, sleep=exit_during_retry)
+        if server_case in {"slow_exit", "unreadable"}:
+            return read_identity(pid, proc_root=tmp_path, sleep=lambda _: None)
         return harness.ProcessIdentityReadResult(
             code=harness.IDENTITY_OBSERVED, identity=_identity(pid=4243, pgid=4242)
         )
@@ -733,11 +735,17 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     monkeypatch.setattr(harness, "read_process_identity", identity_reader)
     monkeypatch.setattr(harness.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     monkeypatch.setattr(harness.os, "killpg", lambda *args: pytest.fail("dead group leader"), raising=False)
-    monkeypatch.setattr(harness, "_wait_for_cleanup", lambda *args, **kwargs: {
-        "clean": bool(signals) or finished_exiting,
-        "live_group_member_pids": [] if signals or finished_exiting else [4243],
-    })
-    if server_case == "reused":
+    def cleanup(*_args, **kwargs):
+        final_wait = "timeout_s" not in kwargs
+        if final_wait and server_case == "slow_exit":
+            exit_during_retry(0)
+        # Absence of a world, bindings and group members still cannot prove
+        # exit when the recorded process remains unreadable.
+        clean = bool(signals) or finished_exiting or (final_wait and server_case == "unreadable")
+        return {"clean": clean, "live_group_member_pids": [] if clean else [4243]}
+
+    monkeypatch.setattr(harness, "_wait_for_cleanup", cleanup)
+    if server_case in {"reused", "unreadable"}:
         with pytest.raises(harness.HarnessError, match="gazebo_cleanup_identity_invalid"):
             harness.stop_harness()
         assert not signals and state_path.exists()

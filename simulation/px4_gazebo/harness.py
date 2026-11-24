@@ -55,6 +55,7 @@ PX4_UDP_LOCAL_PORTS = (
 PX4_UDP_LOCAL_SUFFIXES = tuple(f" {role}" for _, role in PX4_UDP_LOCAL_PORTS)
 PROC_EMPTY_CMDLINE_RECHECKS = 4
 PROC_EMPTY_CMDLINE_RECHECK_S = 0.025
+PROC_EMPTY_CMDLINE_DETAIL = "proc_identity_read_failed:ValueError:process cmdline is empty after bounded recheck"
 
 
 def canonical_world_bytes(contents: bytes) -> bytes:
@@ -827,7 +828,7 @@ def read_process_identity(
             if cmdline:
                 break
         else:
-            raise ValueError("process cmdline is empty after bounded recheck")
+            return ProcessIdentityReadResult(code=STALE_STATE, detail=PROC_EMPTY_CMDLINE_DETAIL)
         executable = os.readlink(process_root / "exe")
         cwd = os.readlink(process_root / "cwd")
         run_id = _proc_run_id((process_root / "environ").read_bytes())
@@ -1397,9 +1398,10 @@ def stop_harness() -> dict[str, Any]:
             "cleanup": {"clean": True},
         }
     processes = list(state.get("processes", []))
+    run_id = str(state.get("run_id", ""))
     decisions = _terminate_process_groups(
         processes,
-        run_id=str(state.get("run_id", "")),
+        run_id=run_id,
     )
     unsafe = [
         row
@@ -1421,13 +1423,25 @@ def stop_harness() -> dict[str, Any]:
     # A server can outlive its PX4 group leader. The group is no longer
     # eligible for another signal. Use the recorded server identity instead.
     gazebo_decisions = []
+    pending_exit_checks = []
     gazebo_groups = {row["pgid"] for row in processes if row.get("owns_gazebo")}
     for server in state.get("gazebo_processes", []):
         if (server.get("kind") == "gazebo" and server.get("pgid") in gazebo_groups
                 and server.get("pid") in cleanup["live_group_member_pids"]):
-            gazebo_decisions.extend(
-                _terminate_process_groups([server], run_id=str(state["run_id"]), individual=True)
-            )
+            [decision] = _terminate_process_groups([server], run_id=run_id, individual=True)
+            if decision.code == STALE_STATE and decision.detail == PROC_EMPTY_CMDLINE_DETAIL:
+                pending_exit_checks.append((len(gazebo_decisions), server))
+            gazebo_decisions.append(decision)
+    if pending_exit_checks:
+        # A server may be exiting after its group was signalled. Observe
+        # cleanup within the usual budget, then confirm the recorded PID has
+        # exited. An empty cmdline never authorizes a signal or state removal.
+        cleanup = _wait_for_cleanup(state)
+        if cleanup["clean"]:
+            for index, server in pending_exit_checks:
+                confirmed = validate_process_identity(server, run_id=run_id)
+                if confirmed.code in {PROCESS_EXITED, PROCESS_IDENTITY_MISMATCH}:
+                    gazebo_decisions[index] = confirmed
     if any(row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH} for row in gazebo_decisions):
         raise HarnessError("gazebo_cleanup_identity_invalid:"
                            + json.dumps([row.to_dict() for row in gazebo_decisions], sort_keys=True))
