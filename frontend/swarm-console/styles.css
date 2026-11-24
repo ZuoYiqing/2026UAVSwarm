@@ -1253,6 +1253,17 @@ a.button {
 .planning-algorithm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .planning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .planning-table { overflow: auto; }
+.plan-preview-fields {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.plan-preview-fields dt { color: var(--muted); }
+.plan-preview-fields dd, .plan-preview-fields ul { margin: 0; }
+.plan-preview-fields ul { padding: 0; list-style: none; }
 .template-plan-steps {
   display: flex;
   flex-wrap: wrap;
