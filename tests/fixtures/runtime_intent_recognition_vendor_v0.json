@@ -1,11 +1,11 @@
 {
-  "upstream_commit": "70a35af6eff2009f30e838ca0517ab2c65550754",
+  "upstream_commit": "4520b2d4ae9f6ff111e8e1982a90e9eb6849b50b",
   "canonicalization": "utf8-lf-preserve-final-newline",
   "files": [
     {
       "vendored_path": "src/uav_runtime/agent/_vendor_intent_recognizer_v0.py",
       "upstream_path": "algorithm_lab/mission_llm_poc/src/uavswarm_llm_lab/intent_recognizer.py",
-      "sha256_lf": "2838f251440b60bb64638dd5dac52cbb9074115fed194c2e7091fd1a9f47f165"
+      "sha256_lf": "a5d34212b36b7c145bf1e13668c19dda8929c14674ff2ba0aaea8fcb8e183abb"
     },
     {
       "vendored_path": "tests/fixtures/runtime_intent_recognition_v0.json",
