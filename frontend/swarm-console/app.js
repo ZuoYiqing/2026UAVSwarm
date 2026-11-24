@@ -1677,9 +1677,9 @@ function planningPage() {
           <textarea rows="4" id="template-plan-objective" data-template-plan-objective placeholder="输入或粘贴任务书"${inputsDisabled}>${esc(objective)}</textarea></div>
           <div class="planning-actions">
             <button class="button" id="template-plan-example" type="button" onclick="useTemplatePlanExample()"${inputsDisabled}>填入巡检示例</button>
-            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inputsDisabled}>${inFlight ? "等待 Runtime…" : "预览巡检模板"}</button>
+            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inputsDisabled}>${inFlight ? "等待 Runtime…" : "预览任务"}</button>
           </div>
-          <p class="small">原话随请求传入，步骤取自固定的巡检拍照模板。</p>`)}
+          <p class="small">Runtime 根据当前场景目录识别目标，返回只读预览或追问。</p>`)}
         ${panel("载具状态", vehicleTable(), "scroll")}
       </div>
       <div class="grid">
@@ -1695,16 +1695,85 @@ function planningPage() {
 }
 
 const templateActionNames = new Map([["takeoff", "起飞"], ["report_status", "报告状态"], ["camera_capture", "采集照片"], ["land", "降落"]]);
-const templateResultNames = new Map([["ready", "模板已生成"], ["awaiting_confirmation", "需确认"], ["blocked", "计划受阻"]]);
+const templateResultNames = new Map([["ready", "预览就绪"], ["awaiting_confirmation", "需确认"], ["blocked", "预览受阻"]]);
 const templateDecisionNames = new Map([["allow", "预检允许"], ["deny", "预检拒绝"], ["require_confirm", "需确认"]]);
+const previewIntentSources = new Map([
+  ["explicit", "显式指定模板"], ["rules", "离线规则识别"], ["local_model", "本地模型识别"], ["none", "未识别"],
+]);
+const previewPlanSources = new Map([["template", "模板生成"], ["algorithm", "算法生成"], ["none", "无计划"]]);
+
+function previewFields(rows) {
+  return `<dl class="plan-preview-fields">${rows.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${value}</dd>`).join("")}</dl>`;
+}
+
+function templatePlanProvenance(reply) {
+  const source = (names, value) => value == null ? "未知" : `${names.get(value) || "未知"} <code>${esc(value)}</code>`;
+  const authorization = reply.execution_authorized === false
+    ? "未授权执行 <code>false</code>"
+    : reply.execution_authorized === true ? "契约异常 <code>true</code>" : "未上报";
+  return previewFields([
+    ["契约版本", esc(reply.contract_version ?? "未上报")],
+    ["意图识别", source(previewIntentSources, reply.intent_source)],
+    ["计划来源", source(previewPlanSources, reply.plan_source)],
+    ["降级原因", esc(reply.fallback_reason === null ? "无" : reply.fallback_reason ?? "未上报")],
+    ["执行授权", authorization],
+  ]);
+}
+
+function templatePlanBinding({ catalog, bindings }, missionType) {
+  const list = (items, note = "") => {
+    if (!Array.isArray(items)) return "未上报";
+    if (!items.length) return "无";
+    if (items.some(item => typeof item?.entity_id !== "string" || !item.entity_id)) return "绑定信息异常";
+    return `<ul>${items.map(({ entity_id, evidence }) => `<li>${esc(evidence || entity_id)} <code>${esc(entity_id)}</code>${note}</li>`).join("")}</ul>`;
+  };
+  return previewFields([
+    ["任务类型", `<code>${esc(missionType ?? "未上报")}</code>`],
+    ["场景 / 地图 / 目录", [catalog?.scene_id, catalog?.map_version, catalog?.catalog_id].map(id => esc(id ?? "未上报")).join(" / ")],
+    ["场景巡检目标", list(bindings?.targets)],
+    ["演习目标", list(bindings?.preview_only_targets, ' <span class="amber">仅预览，不可执行</span>')],
+    ["定位参照", list(bindings?.reference_only)],
+    ["排除目标", list(bindings?.excluded_targets)],
+    ["仅列明目标", bindings?.only_listed_targets === true ? "是" : bindings?.only_listed_targets === false ? "否" : "未上报"],
+    ["状态范围", esc(bindings?.status_scope === null ? "无" : bindings?.status_scope ?? "未上报")],
+  ]);
+}
 
 function templatePlanPreview() {
   const { inFlight, reply, error } = state.templatePlan;
-  const plan = reply?.plan;
-  const steps = Array.isArray(plan?.steps) ? plan.steps.filter(step => step && typeof step.action_type === "string") : [];
-  const resultName = reply ? templateResultNames.get(reply.result) || "结果未识别" : null;
-  const stepList = steps.map(step => `<li><b>${esc(templateActionNames.get(step.action_type) || step.action_type)}</b>
-      <small>${esc(step.node_id || "未指定载具")}${step.status === "dry_run_only" ? " · 仅预览" : ""}</small></li>`).join("");
+  if (!reply) {
+    const content = error
+      ? `<p class="inline-error">${esc(error)}</p>`
+      : `<p class="small">${inFlight ? "等待 Runtime 识别任务…" : "填写任务目标后可生成只读预览。"}</p>`;
+    return panel("Runtime 任务预览", content);
+  }
+  const provenance = templatePlanProvenance(reply);
+  const intent = reply.intent_resolution;
+  if (intent && (intent.status !== "resolved" || intent.reason_code === "TARGET_REFERENCE_ONLY")) {
+    const title = intent.status === "needs_clarification" ? "需要澄清"
+      : intent.status === "unsupported" ? "当前输入不受支持" : "识别状态未知";
+    const question = intent.question ?? (intent.status === "needs_clarification" ? "Runtime 未返回追问" : "");
+    const referenceNote = intent.reason_code === "TARGET_REFERENCE_ONLY"
+      ? '<p class="small">所选参照对象可用于定位，也可从本轮目标中排除。</p>' : "";
+    return panel(title, `${question ? `<p>${esc(question)}</p>` : ""}
+      ${referenceNote}
+      ${intent.reason_code ? `<p class="small"><code>${esc(intent.reason_code)}</code></p>` : ""}
+      ${provenance}`);
+  }
+
+  const plan = reply.plan_source === "none" || reply.execution_authorized === true ? null : reply.plan;
+  const outcome = `<p>${badge(templateResultNames.get(reply.result) || "结果未识别", plan ? "cyan" : "amber")}
+    ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>`;
+  if (!plan) return panel("Runtime 任务预览", `${provenance}${outcome}<p class="small">本次没有可显示的计划。</p>`);
+
+  const binding = plan.preview_binding;
+  const outline = binding?.steps_are_outline === true;
+  const steps = Array.isArray(plan.steps) ? plan.steps.filter(step => step && typeof step.action_type === "string") : [];
+  const stepList = steps.map(step => {
+    const node = step.node_id ? (outline ? `模板节点 ${step.node_id}` : step.node_id) : "未指定载具";
+    return `<li><b>${esc(templateActionNames.get(step.action_type) || step.action_type)}</b>
+      <small>${esc(node)}${step.status === "dry_run_only" ? " · 仅预览" : ""}</small></li>`;
+  }).join("");
   const precheck = steps.map(step => {
     const decision = step.policy_precheck?.decision_code;
     const decisionLabel = templateDecisionNames.get(decision);
@@ -1715,15 +1784,14 @@ function templatePlanPreview() {
       <td>${risk}</td></tr>`;
   }).join("");
 
-  return `${panel("Runtime 模板预览", `${error ? `<p class="inline-error">${esc(error)}</p>` : ""}
-      ${resultName ? `<p>${badge(resultName, reply.result === "ready" ? "cyan" : "amber")}
-       ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>` : ""}
-      ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : error ? "" : `<p class="small">${inFlight ? "正在生成模板计划…" : reply ? "Runtime 未返回计划步骤" : "待生成模板计划"}</p>`}
-      ${reply ? `<details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>` : ""}`)}
-    ${panel("模板策略预检与风险", precheck ? `<div class="planning-table"><table class="table">
-      <thead><tr><th>步骤</th><th>模板预检</th><th>依据</th><th>动作风险级别</th></tr></thead><tbody>${precheck}</tbody></table></div>
-      <p class="small">风险级别来自 Runtime 动作能力登记。现场条件由 Runtime 在执行时重新核验。</p>` : '<p class="small">等待 Runtime 返回逐步预检结果</p>')}
-    ${panel("航线预览", '<p class="small">巡检模板尚不提供航线。三维集群态势可查看 Runtime 上报的载具位置。</p>')}`;
+  return `${panel(outline ? "Runtime 模板大纲" : "Runtime 任务预览", `${provenance}${outcome}
+      ${binding ? templatePlanBinding(binding, intent?.mission_type ?? plan.mission_type) : ""}
+      ${outline ? '<p class="small">以下为模板通用步骤。目标和约束见上方绑定。</p>' : ""}
+      ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : '<p class="small">Runtime 未返回计划步骤</p>'}
+      <details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>`)}
+    ${precheck ? panel("逐步策略预检与风险", `<div class="planning-table"><table class="table">
+      <thead><tr><th>步骤</th><th>预检结论</th><th>依据</th><th>动作风险级别</th></tr><tbody>${precheck}</tbody></table></div>
+      <p class="small">风险级别来自 Runtime 动作能力登记。现场条件由 Runtime 在执行时重新核验。</p>`) : ""}`;
 }
 
 function renderTemplatePlan() {
@@ -1734,7 +1802,7 @@ function renderTemplatePlan() {
     const control = document.getElementById(id);
     if (!control) continue;
     control.disabled = Boolean(inFlight || state.fixturePlan.executing);
-    if (id === "template-plan-submit") control.textContent = inFlight ? "等待 Runtime…" : "预览巡检模板";
+    if (id === "template-plan-submit") control.textContent = inFlight ? "等待 Runtime…" : "预览任务";
   }
 }
 
@@ -1754,7 +1822,7 @@ function setTemplatePlanObjective(value) {
 }
 
 function useTemplatePlanExample() {
-  setTemplatePlanObjective("记录园区设备的状态和照片，完成后报告巡检结果。");
+  setTemplatePlanObjective("巡检东北视觉标记");
 }
 
 function fixtureCandidateContent() {
@@ -2284,23 +2352,23 @@ function simCard(name, detail, status, color) {
   return `<div class="cap-card"><h3>${esc(name)}</h3><div class="small">${esc(detail)}</div><div style="height:76px;margin:10px 0;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(135deg,rgba(54,199,244,.16),rgba(66,216,131,.08)),rgba(5,14,18,.8)"></div>${badge(status, color)}</div>`;
 }
 
-async function generateRequest() {
+async function generateRequest(missionType) {
   const draft = state.templatePlan;
   if (stageMode || state.page !== "planning" || draft.inFlight || state.fixturePlan.executing) return;
+  draft.reply = null;
   if (!draft.objective.trim()) {
     draft.error = "请先填写任务目标";
     renderTemplatePlan();
     return;
   }
+  // Runtime 对省略的模板键走规则识别，任务预览路由始终只读。
+  const request = { objective: draft.objective };
+  if (typeof missionType === "string" && missionType) request.mission_type = missionType;
   draft.inFlight = true;
-  draft.reply = null;
   draft.error = null;
   renderTemplatePlan();
   try {
-    draft.reply = await callRuntime("plan", () => window.SwarmRuntimeApi.planMission({
-      mission_type: "inspection_snapshot", source: "ground_station", profile: "standard",
-      objective: draft.objective, dry_run: true,
-    }), error => {
+    draft.reply = await callRuntime("plan", () => window.SwarmRuntimeApi.planMission(request), error => {
       draft.error = error.message;
       return null;
     }, { notifyFailure: false });

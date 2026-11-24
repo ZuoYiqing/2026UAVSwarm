@@ -277,10 +277,17 @@ test("template preview submits the operator's text and renders only returned pol
   const objective = "检查园区设备并保存照片。";
   h.api.planMission = async body => {
     requests.push(JSON.parse(JSON.stringify(body)));
-    return { result: "awaiting_confirmation", plan: {plan_id: "test-plan", steps: [
-      {action_type:"takeoff", risk_level:2, policy_precheck:{decision_code:"require_confirm",primary_reason_code:"operator_required"}},
-      {action_type:"camera_capture", status:"dry_run_only", policy_precheck:null},
-    ]}};
+    return {
+      result: "awaiting_confirmation",
+      ...(body.mission_type ? {
+        contract_version: "1.0", intent_source: "explicit", plan_source: "template",
+        fallback_reason: null, execution_authorized: false,
+      } : {}),
+      plan: {plan_id: "test-plan", steps: [
+        {action_type:"takeoff", risk_level:2, policy_precheck:{decision_code:"require_confirm",primary_reason_code:"operator_required"}},
+        {action_type:"camera_capture", status:"dry_run_only", policy_precheck:null},
+      ]},
+    };
   };
   h.run('setPage("planning")');
   await h.run("generateRequest()");
@@ -288,13 +295,18 @@ test("template preview submits the operator's text and renders only returned pol
   assert.doesNotMatch(h.run("templatePlanPreview()"), /Runtime 返回 JSON/);
   h.run(`setTemplatePlanObjective(${JSON.stringify(objective)})`);
   await h.run("Promise.all([generateRequest(), generateRequest()])");
-  assert.deepEqual(requests, [{mission_type:"inspection_snapshot", source:"ground_station",
-    profile:"standard", objective, dry_run:true}]);
+  assert.deepEqual(requests, [{objective}]);
   const plan = h.run("planningPage()");
   assert.match(plan, /起飞<\/td>\s*<td>需确认<\/td>\s*<td>operator_required<\/td>\s*<td>2<\/td>/);
   assert.match(plan, /采集照片<\/td>\s*<td>未预检<\/td>\s*<td>未上报原因<\/td>\s*<td>未上报<\/td>/);
   assert.match(plan, /Runtime 返回 JSON/);
   assert.doesNotMatch(plan, /42 \/ 100|18 条策略|<iframe/);
+
+  assert.match(plan, /意图识别<\/dt><dd>未知/);
+  assert.match(plan, /执行授权<\/dt><dd>未上报/);
+  await h.run('generateRequest("inspection_snapshot")');
+  assert.deepEqual(requests[1], {objective, mission_type:"inspection_snapshot"});
+  assert.match(h.run("templatePlanPreview()"), /显式指定模板 <code>explicit<\/code>/);
 
   h.api.planMission = async () => { throw Object.assign(new Error("模板接口故障"), {kind:"http"}); };
   await h.run("generateRequest()");
@@ -302,6 +314,96 @@ test("template preview submits the operator's text and renders only returned pol
   assert.doesNotMatch(h.run("templatePlanPreview()"), /test-plan|operator_required/);
   h.run('setTemplatePlanObjective("重新填写")');
   assert.doesNotMatch(h.run("planningPage()"), /模板接口故障/);
+});
+
+// 前端消费端契约用例。真实场景输入另由 Runtime 路由和浏览器联验。
+test("scene intent previews show the reported sources and keep preview, reference and exclusion roles distinct", async () => {
+  const h = harness();
+  h.api.planMission = async () => ({
+    contract_version: "1.0", intent_source: "rules", plan_source: "template",
+    fallback_reason: null, execution_authorized: false, result: "ready",
+    intent_resolution: { status: "resolved", mission_type: "inspection_snapshot" },
+    plan: {
+      steps: [{ action_type: "camera_capture", status: "dry_run_only" }],
+      preview_binding: { steps_are_outline: true,
+        catalog: { scene_id: "simple_recon_v0_1", map_version: "test-map", catalog_id: "test-catalog" },
+        bindings: {
+          targets: [],
+          preview_only_targets: [{ entity_id:"demo-area-001", evidence:"西北区域" }],
+          reference_only: [{ entity_id:"building-001", evidence:"中央建筑" }],
+          excluded_targets: [{ entity_id:"building-001", evidence:"中央建筑" }],
+          only_listed_targets: true, status_scope: null,
+        },
+      },
+    },
+  });
+  h.run('setPage("planning"); setTemplatePlanObjective("巡检西北区域");');
+  await h.run("generateRequest()");
+  const html = h.run("templatePlanPreview()");
+  assert.match(html, /契约版本<\/dt><dd>1\.0/);
+  assert.match(html, /离线规则识别 <code>rules<\/code>/);
+  assert.match(html, /模板生成 <code>template<\/code>/);
+  assert.match(html, /执行授权<\/dt><dd>未授权执行 <code>false<\/code>/);
+  assert.match(html, /降级原因<\/dt><dd>无/);
+  assert.match(html, /Runtime 模板大纲/);
+  assert.match(html, /场景巡检目标<\/dt><dd>无/);
+  assert.match(html, /演习目标<\/dt><dd><ul><li>西北区域 <code>demo-area-001<\/code>.*仅预览，不可执行/);
+  for (const role of ["定位参照", "排除目标"]) {
+    assert.ok(html.includes(`${role}</dt><dd><ul><li>中央建筑 <code>building-001</code>`));
+  }
+  assert.match(html, /仅列明目标<\/dt><dd>是/);
+  assert.match(html, /状态范围<\/dt><dd>无/);
+  assert.doesNotMatch(html, /<iframe|<canvas|本地模型识别/);
+});
+
+test("clarification and unsupported replies replace the previous plan with Runtime's question and reason", async () => {
+  const h = harness();
+  h.run('setPage("planning"); setTemplatePlanObjective("巡检东北视觉标记");');
+  const oldPlan = { plan_id:"old-preview", steps:[{action_type:"camera_capture"}] };
+  h.api.planMission = async () => ({ result:"ready", plan:oldPlan });
+  await h.run("generateRequest()");
+  assert.match(h.run("templatePlanPreview()"), /old-preview/);
+
+  let respond;
+  const requests = [];
+  h.api.planMission = body => {
+    requests.push(body.objective);
+    return new Promise(resolve => { respond = resolve; });
+  };
+  const pending = h.run("generateRequest()");
+  assert.doesNotMatch(h.run("templatePlanPreview()"), /old-preview|template-plan-steps/);
+  const noPlan = (status, reason_code, question) => ({
+    contract_version:"1.0", intent_source:"rules", plan_source:"none",
+    fallback_reason:null, execution_authorized:false, result:"blocked", plan:null,
+    intent_resolution:{ status, reason_code, question },
+  });
+
+  respond(noPlan("needs_clarification", "TARGET_AMBIGUOUS", "西侧参考点还是东侧参考点？"));
+  await pending;
+  let html = h.run("templatePlanPreview()");
+  assert.match(html, /需要澄清/);
+  assert.match(html, /西侧参考点还是东侧参考点？/);
+  assert.match(html, /无计划 <code>none<\/code>/);
+  assert.doesNotMatch(html, /template-plan-steps|old-preview|策略预检/);
+
+  h.run('setTemplatePlanObjective("巡检中央建筑")');
+  const reference = h.run("generateRequest()");
+  respond(noPlan("needs_clarification", "TARGET_REFERENCE_ONLY", "所选对象仅可作参照。"));
+  await reference;
+  html = h.run("templatePlanPreview()");
+  assert.match(html, /TARGET_REFERENCE_ONLY/);
+  assert.match(html, /可用于定位，也可从本轮目标中排除/);
+  assert.doesNotMatch(html, /template-plan-steps|old-preview|策略预检/);
+
+  h.run('setTemplatePlanObjective("西南和东南都巡检")');
+  const unsupported = h.run("generateRequest()");
+  respond(noPlan("unsupported", "UNSUPPORTED_OBJECTIVE", "请明确任务目标。"));
+  await unsupported;
+  html = h.run("templatePlanPreview()");
+  assert.match(html, /当前输入不受支持/);
+  assert.match(html, /UNSUPPORTED_OBJECTIVE/);
+  assert.doesNotMatch(html, /template-plan-steps|old-preview|策略预检/);
+  assert.deepEqual(requests, ["巡检东北视觉标记", "巡检中央建筑", "西南和东南都巡检"]);
 });
 
 const inspectionObjective = "检查场景里的 target-001 设备标记并记录航点到达。";
@@ -606,6 +708,6 @@ test("policy filters and full event JSON persist across navigation, while unavai
   assert.doesNotMatch(html, /enforced_constraints/);
   assert.equal((h.run("sidebar()").match(/onclick="setPage\(/g)||[]).length, 15);
   assert.match(h.run("assetsPage()"), /规划中.*等待硬件资产数据/s);
-  assert.match(h.run("planningPage()"), /等待 Runtime 返回逐步预检结果/);
+  assert.match(h.run("planningPage()"), /填写任务目标后可生成只读预览/);
   assert.doesNotMatch(h.run("planningPage()"), /18 条策略|42 \/ 100|下发任务|DEMO · 界面预览/);
 });
