@@ -203,6 +203,27 @@ axis alignment is `ned_aligned`, and evidence is fresh,
 `spatial.raw_vehicle_local_pose` for diagnostics but must not use it for common
 scene distance, obstacle, or geofence calculations.
 
+When Simulation publishes fresh, independently sampled integrated health with a
+harness `run_id` and `process_identity_valid: true`, Runtime remembers that run
+separately from live health readiness. After a simulator restart, publish the new run to
+`POST /api/simulation/evidence` before expecting its calibration to be accepted;
+this does not require restarting Runtime or continuously publishing health.
+Calibration cannot declare the active run. Once it is known, a calibration POST
+must include matching `context.run_id`. Otherwise it returns HTTP 400,
+`error: invalid_coordinate_calibration`, with `message` set to
+`coordinate_calibration_run_required` or `coordinate_calibration_run_mismatch`.
+Unbound startup keeps the legacy behavior until the first run is confirmed.
+
+Confirmation of a new run invalidates cached transforms from other runs, even
+when `scene_id` and `map_version` did not change. A previously retired run cannot
+be restored by replaying its health (`invalid_simulation_evidence` /
+`simulation_evidence_run_retired`). Expiry of health does not forget the run or
+shorten the calibration's own lifetime. The optional `spatial.calibration_run_id`
+identifies the transform's run and lets ground suppress an old onboard projection
+without marking the link disconnected. While awaiting calibration for the new run,
+consume `public_position_usable: false`, not the legacy pose, as the public-space
+availability signal.
+
 The executable payload fixture and full compatibility/error contract are in
 `docs/fixtures/runtime_control_contract_v1.json` and
 `docs/runtime_control_execution_contract_v1.md`. `GOTO`, `HOLD`, and
