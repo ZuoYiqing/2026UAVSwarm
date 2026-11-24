@@ -53,6 +53,7 @@ from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.http.demo import DemoRehearsal, parse_injection
 from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
+from uav_runtime.http.planner_preview import PlanPreviewProvenance, serialize_plan_preview
 from uav_runtime.http.preflight import check_preflight, check_peer_isolation
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
@@ -809,10 +810,10 @@ def return_home(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
-    """Dry-run / plan-only bridge to TemplateAgentPlanner.
+    """Versioned plan preview; no model, execution, or adapter is called.
 
-    The planner endpoint returns Mission Plan IR only.  It does not execute
-    action steps, does not call PX4, and does not call adapters.
+    The explicit template is the only wired producer. Merely supplying an
+    objective or naming fallback_hold does not run a model or a fallback.
     """
     req = PlanMissionRequest.from_json(payload)
     intent = MissionIntent(
@@ -823,8 +824,11 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
         requested_profile=req.profile,
         dry_run=req.dry_run,
     )
-    planner = TemplateAgentPlanner()
-    result = planner.plan(intent).to_dict()
+    planned = TemplateAgentPlanner().plan(intent)
+    result = serialize_plan_preview(planned, PlanPreviewProvenance(
+        intent_source="explicit" if req.mission_type.strip() else "none",
+        plan_source="template" if planned.plan is not None else "none",
+    ))
     RUNTIME_STATE_STORE.record_plan_result(result)
     plan = result.get("plan") or {}
     RUNTIME_STATE_STORE.record_event({
@@ -838,9 +842,10 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
 def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     """Submit a Mission Plan IR for real execution.
 
-    This is the endpoint the algorithm side produces against.  Runtime's job
-    here is deliberately narrow: validate the plan shape, record the operator's
-    approval, then sequence the steps and report exactly what happened.
+    The read-only planner does not call this route. It is an execution
+    boundary for an approved Plan IR, not an algorithm or preview endpoint.
+    Runtime validates the plan, records the supplied operator decision, and
+    sequences the steps. A stated operator identity is not authentication.
 
     It does **not** invent planning strategy and does not weaken any safety
     check: every step is executed by calling the ordinary action endpoint, so

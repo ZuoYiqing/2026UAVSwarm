@@ -1,0 +1,40 @@
+[
+  {
+    "case": "explicit_status_preview",
+    "request": {
+      "mission_type": "status_only",
+      "objective": "确认设备状态",
+      "dry_run": true
+    },
+    "http_status": 200,
+    "response_fields": {
+      "contract_version": "1.0",
+      "intent_source": "explicit",
+      "plan_source": "template",
+      "fallback_reason": null,
+      "execution_authorized": false,
+      "result": "ready",
+      "failure_reason": null
+    },
+    "step_action_types": ["health_query", "sensor_read", "report_status"]
+  },
+  {
+    "case": "objective_without_a_resolver",
+    "request": {
+      "objective": "检查设备",
+      "dry_run": true
+    },
+    "http_status": 200,
+    "response_fields": {
+      "contract_version": "1.0",
+      "intent_source": "none",
+      "plan_source": "none",
+      "fallback_reason": null,
+      "execution_authorized": false,
+      "result": "blocked",
+      "failure_reason": "unsupported_mission_type",
+      "plan": null
+    },
+    "step_action_types": []
+  }
+]

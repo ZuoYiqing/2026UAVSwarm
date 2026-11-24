@@ -53,7 +53,7 @@ GET http://127.0.0.1:8765/api/health
 | Action Result JSON | action route response |
 | 最近动作记录 | `GET /api/replay?n=20` |
 | Capability 列表 | `GET /api/capabilities` |
-| Mission Plan | `POST /api/planner/plan-mission` |
+| Mission Plan | `POST /api/planner/plan-mission`（[只读预览来源契约 v1.0](runtime_http_bridge_v0_1.md#post-apiplannerplan-mission)） |
 
 ## 4. SITL-only 约束
 
