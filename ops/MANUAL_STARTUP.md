@@ -309,11 +309,11 @@ cd /mnt/d/2026UAVSwarm && python3 simulation/px4_gazebo/scripts/sample_calibrati
 **有效期 60 秒**（2026-09-24 修改，原为 5000ms）。所以：
 
 - **普通演示**：起飞前发布一次即可，够用一分钟；
-- **需要长时间持续可见**：用下面的循环（每轮 10 秒采集 + 45 秒等待 = 55 秒，
-  在 60 秒有效期内留 5 秒余量）：
+- **需要长时间持续可见**：用下面的循环（每轮 10 秒采集 + 35 秒等待 = 45 秒，
+  在 60 秒有效期内留约 15 秒余量）：
 
 ```bash
-cd /mnt/d/2026UAVSwarm && while true; do python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 10 --publish-runtime http://127.0.0.1:8765/api > /dev/null 2>&1; sleep 45; done
+cd /mnt/d/2026UAVSwarm && while true; do python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 10 --publish-runtime http://127.0.0.1:8765/api > /dev/null 2>&1; sleep 35; done
 ```
 
 **Ctrl+C 停止。** 这个窗口也要一直开着。
