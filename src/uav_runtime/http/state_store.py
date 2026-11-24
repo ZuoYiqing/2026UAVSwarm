@@ -69,6 +69,15 @@ def without_none(value: Any) -> Any:
     return value
 
 
+def _explicit_run_id(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _calibration_run_id(evidence: dict[str, Any]) -> str | None:
+    context = evidence.get("context")
+    return _explicit_run_id(context.get("run_id")) if isinstance(context, dict) else None
+
+
 def vehicle_type_name(mav_type: Any) -> str:
     """Map MAV_TYPE values into the stable Cesium vehicle type vocabulary."""
     try:
@@ -141,6 +150,9 @@ class RuntimeStateStore:
         self._idempotency_index: dict[str, tuple[str, str]] = {}
         self._simulation_evidence: dict[str, Any] | None = None
         self._simulation_evidence_received_at: float | None = None
+        self._active_simulation_run: str | None = None
+        self._simulation_run_sample_time: float | None = None
+        self._retired_simulation_runs: set[str] = set()
         self._ground_reference_binding: dict[str, Any] | None = None
         self._coordinate_calibrations: dict[str, dict[str, Any]] = {}
         self._landing_sites: dict[str, dict[str, Any]] = {}
@@ -534,21 +546,66 @@ class RuntimeStateStore:
             "valid_for_ms": max(100, min(int(evidence["valid_for_ms"]), 60000)),
         })
         with self._lock:
+            run_id = _explicit_run_id(normalized.get("run_id"))
+            if run_id in self._retired_simulation_runs:
+                raise ValueError("simulation_evidence_run_retired")
+            sampled_at = self._fresh_source_time(normalized)
+            # Bind identity only from the verified producer. A fresh health
+            # sample can identify a run even when readiness is degraded.
+            if (run_id is not None and sampled_at is not None
+                    and normalized["evidence_source"] == "simulation_integrated_health"
+                    and normalized.get("process_identity_valid") is True
+                    and (self._simulation_run_sample_time is None or sampled_at > self._simulation_run_sample_time)):
+                if run_id != self._active_simulation_run:
+                    if self._active_simulation_run is not None:
+                        self._retired_simulation_runs.add(self._active_simulation_run)
+                    self._active_simulation_run = run_id
+                    self._coordinate_calibrations = {
+                        node: row for node, row in self._coordinate_calibrations.items()
+                        if _calibration_run_id(row) == run_id
+                    }
+                self._simulation_run_sample_time = sampled_at
             self._simulation_evidence = normalized
             self._simulation_evidence_received_at = self._monotonic()
             # The health envelope transports geometry, but does not own its
             # lifetime. Every publication replaces/revokes the binding; stale
             # replay or negative evidence must never resurrect an old world.
-            self._ground_reference_binding = self._bind_ground_reference(normalized)
+            self._ground_reference_binding = (
+                self._bind_ground_reference(normalized)
+                if self._active_simulation_run is None or run_id == self._active_simulation_run else None
+            )
         return copy.deepcopy(normalized)
 
-    def _source_fresh(self, evidence: dict[str, Any]) -> bool:
+    def _fresh_source_time(self, evidence: dict[str, Any]) -> float | None:
         try:
             source = datetime.fromisoformat(evidence["source_timestamp"].replace("Z", "+00:00"))
-            age_ms = (self._clock() - source.timestamp()) * 1000
-            return source.tzinfo is not None and -100 <= age_ms <= evidence["valid_for_ms"]
+            if source.tzinfo is not None:
+                sampled_at = source.timestamp()
+                age_ms = (self._clock() - sampled_at) * 1000
+                if -100 <= age_ms <= evidence["valid_for_ms"]:
+                    return sampled_at
         except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
-            return False
+            pass
+        return None
+
+    def _source_fresh(self, evidence: dict[str, Any]) -> bool:
+        return self._fresh_source_time(evidence) is not None
+
+    def active_simulation_run_id(self) -> str | None:
+        """Last confirmed harness run, independent of live health freshness."""
+        with self._lock:
+            return self._active_simulation_run
+
+    def check_coordinate_calibration_run(self, evidence: dict[str, Any]) -> None:
+        """Require the confirmed run once known; legacy unbound startup is unchanged."""
+        with self._lock:
+            if self._active_simulation_run is None:
+                return
+            run_id = _calibration_run_id(evidence)
+            if run_id is None:
+                raise ValueError("coordinate_calibration_run_required")
+            if run_id != self._active_simulation_run:
+                raise ValueError("coordinate_calibration_run_mismatch")
 
     def _bind_ground_reference(self, evidence: dict[str, Any]) -> dict[str, Any] | None:
         """Validate a static geometry publication, not ongoing Gazebo health.
@@ -650,6 +707,7 @@ class RuntimeStateStore:
         session = self.vehicle_registry.get_vehicle(node_id).session if self.vehicle_registry is not None else None
         normalized["session_position_epoch"] = getattr(session, "_position_epoch", None)
         with self._lock:
+            self.check_coordinate_calibration_run(normalized)
             self._coordinate_calibrations[node_id] = normalized
         public = copy.deepcopy(normalized)
         public.pop("received_monotonic", None)
@@ -936,6 +994,7 @@ class RuntimeStateStore:
                     "scene_id": self.vehicle_registry.scene_id if self.vehicle_registry is not None else None,
                     "map_version": calibration.get("map_version") if calibration else None,
                     "calibration_version": calibration.get("calibration_version") if calibration else None,
+                    "calibration_run_id": _calibration_run_id(calibration) if calibration else None,
                     "public_frame": "scene_ned",
                     "local_frame": "vehicle_local_ned",
                     "units": "m",

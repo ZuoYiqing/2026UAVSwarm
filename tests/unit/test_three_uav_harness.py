@@ -7,6 +7,7 @@ import math
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,6 +58,53 @@ def test_manifest_has_stable_three_vehicle_mapping() -> None:
         18571,
         18572,
     ]
+
+
+def test_harness_udp_binds_are_distinct_from_runtime_destinations() -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    assert {(host, port) for host, port, _ in harness.required_udp_ports(manifest)} == {
+        ("0.0.0.0", base + index) for base in (14580, 18570, 14280, 13030) for index in range(3)
+    }
+    assert harness.runtime_listener_udp_ports(manifest) == [
+        ("127.0.0.1", 14540 + index, f"UAV-0{index + 1} runtime listener")
+        for index in range(3)
+    ]
+
+
+@pytest.mark.parametrize("blocked_px4_port", [None, 14580, 18571, 14282, 13031])
+def test_start_preflight_allows_runtime_listeners_but_rejects_every_px4_bind_class(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_px4_port: int | None,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    build = tmp_path / "build" / manifest["build_target"]
+    (build / "bin").mkdir(parents=True)
+    (build / "bin" / "px4").touch()
+    (build / "etc").mkdir()
+    model_path = tmp_path / "Tools" / "simulation" / "gz" / "models" / manifest["px4_sim_model"].removeprefix("gz_")
+    model_path.mkdir(parents=True)
+    (model_path / "model.sdf").touch()
+    monkeypatch.setattr(harness, "resolve_px4_dir", lambda _: tmp_path)
+    monkeypatch.setattr(harness, "os", SimpleNamespace(
+        name="posix", access=lambda *_: True, X_OK=harness.os.X_OK, path=harness.os.path,
+    ))
+    monkeypatch.setattr(harness, "_foreign_px4_pids", lambda: [])
+    monkeypatch.setattr(harness, "_running_gazebo_worlds", lambda: [])
+    monkeypatch.setattr(harness, "command_output", lambda _: "stub-version")
+    runtime_ports = {14540, 14541, 14542}
+    ports_probed: set[int] = set()
+
+    def port_available(host: str, port: int) -> bool:
+        assert host == "0.0.0.0"
+        ports_probed.add(port)
+        return port not in runtime_ports and port != blocked_px4_port
+
+    monkeypatch.setattr(harness, "udp_port_available", port_available)
+    if blocked_px4_port is None:
+        assert harness.preflight(manifest)["px4_commit"] == "stub-version"
+    else:
+        with pytest.raises(harness.HarnessError, match=rf"UDP ports are already occupied:.*0\.0\.0\.0:{blocked_px4_port}"):
+            harness.preflight(manifest)
+    assert ports_probed == {base + index for base in (14580, 18570, 14280, 13030) for index in range(3)}
 
 
 def test_retained_runtime_mapping_matches_manifest_truth() -> None:
@@ -267,7 +315,48 @@ def test_empty_cmdline_is_only_exited_with_kernel_zombie_evidence(tmp_path, stat
     tail = [state, *[str(field) for field in range(4, 22)], "123456"]
     (proc / "stat").write_text("4242 (px4) " + " ".join(tail))
     (proc / "cmdline").write_bytes(b"")
-    assert harness.read_process_identity(4242, proc_root=tmp_path).code == expected
+    waits = []
+    result = harness.read_process_identity(4242, proc_root=tmp_path, sleep=waits.append)
+    assert result.code == expected
+    assert len(waits) == (0 if state == "Z" else harness.PROC_EMPTY_CMDLINE_RECHECKS)
+
+
+@pytest.mark.parametrize("transition", ["zombie", "gone", "reused"])
+def test_empty_cmdline_rechecks_the_same_process(tmp_path, transition):
+    proc = tmp_path / "4242"
+    proc.mkdir()
+    stat_path = proc / "stat"
+
+    def write_stat(state, ticks):
+        tail = [state, *[str(field) for field in range(4, 22)], str(ticks)]
+        stat_path.write_text("4242 (gz sim) " + " ".join(tail), encoding="utf-8")
+
+    write_stat("R", 123456)
+    (proc / "cmdline").write_bytes(b"")
+    waits = []
+
+    def advance(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            if transition == "gone":
+                stat_path.unlink()
+            else:
+                write_stat("Z", 123457 if transition == "reused" else 123456)
+
+    result = harness.read_process_identity(4242, proc_root=tmp_path, sleep=advance)
+    assert len(waits) == 2
+    assert result.code == (harness.STALE_STATE if transition == "reused" else harness.PROCESS_EXITED)
+    assert result.identity is None
+
+
+def test_missing_proc_entry_with_live_stat_is_not_an_exit(tmp_path):
+    proc = tmp_path / "4242"
+    proc.mkdir()
+    tail = ["S", *[str(field) for field in range(4, 22)], "123456"]
+    (proc / "stat").write_text("4242 (gz sim) " + " ".join(tail), encoding="utf-8")
+    result = harness.read_process_identity(4242, proc_root=tmp_path)
+    assert result.code == harness.STALE_STATE
+    assert result.detail.startswith("proc_identity_entry_missing:")
 
 
 def test_process_identity_match_allows_signalling() -> None:
@@ -487,6 +576,74 @@ def test_cleanup_evidence_requires_world_exit_and_released_ports() -> None:
     assert evidence["ports"][1]["available"] is False
 
 
+def test_cleanup_still_blocks_occupied_px4_bind_in_legacy_state() -> None:
+    state = {"required_udp_ports": [
+        {"host": "127.0.0.1", "port": 14541, "owner": "UAV-02 runtime listener"},
+        {"host": "127.0.0.1", "port": 14581, "owner": "UAV-02 offboard local"},
+    ]}
+    evidence = harness._wait_for_cleanup(
+        state, timeout_s=0, world_probe=lambda: [], process_probe=lambda _: [],
+        port_probe=lambda host, port: (host, port) != ("0.0.0.0", 14581),
+    )
+    assert evidence["world_stopped"] is True
+    assert evidence["clean"] is False and evidence["ports_released"] is False
+    assert evidence["ports"] == [
+        {"host": "0.0.0.0", "port": 14581, "owner": "UAV-02 offboard local", "available": False},
+    ]
+
+
+@pytest.mark.parametrize("legacy", [True, False], ids=["legacy-state", "partitioned-state"])
+@pytest.mark.parametrize("recover_at_start", [True, False], ids=["start-recovery", "stop"])
+def test_managed_cleanup_keeps_runtime_listeners_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool, recover_at_start: bool,
+) -> None:
+    manifest = harness.load_manifest(MANIFEST_PATH)
+    state_path, pid_path = _write_state(tmp_path, monkeypatch)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["world_name"] = manifest["world_name"]
+    runtime_rows = [
+        {"host": "127.0.0.1", "port": 14540 + index, "owner": f"UAV-0{index + 1} runtime listener"}
+        for index in range(3)
+    ]
+    local_rows = [
+        {"host": host, "port": port, "owner": owner}
+        for host, port, owner in harness.required_udp_ports(manifest)
+    ]
+    state["required_udp_ports"] = (
+        [{**row, "host": "127.0.0.1"} for row in local_rows] + runtime_rows if legacy else local_rows
+    )
+    if not legacy:
+        state["runtime_listener_udp_ports"] = runtime_rows
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(harness, "read_process_identity", lambda _: _exited())
+    monkeypatch.setattr(harness.os, "killpg", lambda *_: pytest.fail("exited group must not be signalled"), raising=False)
+    original_cleanup = harness._wait_for_cleanup
+    probes: list[tuple[str, int]] = []
+    evidence = []
+
+    def port_available(host: str, port: int) -> bool:
+        probes.append((host, port))
+        return port not in {14540, 14541, 14542}
+
+    def cleanup(snapshot, **kwargs):
+        result = original_cleanup(snapshot, **kwargs, world_probe=lambda: [],
+                                  port_probe=port_available, process_probe=lambda _: [])
+        evidence.append(result)
+        return result
+
+    monkeypatch.setattr(harness, "_wait_for_cleanup", cleanup)
+    if recover_at_start:
+        assert harness._validate_start_state(
+            harness.read_state(), manifest=manifest, manifest_path=MANIFEST_PATH, headless=True,
+        ) is False  # cleanup succeeded; proceed to start preflight
+    else:
+        assert harness.stop_harness()["status"] == "stopped"
+    assert probes == [("0.0.0.0", row["port"]) for row in local_rows]
+    assert evidence[0]["ports_released"] is True
+    assert evidence[0]["runtime_listener_udp_ports"] == runtime_rows
+    assert not state_path.exists() and not pid_path.exists()
+
+
 def test_cleanup_incomplete_preserves_state_after_safe_process_stop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -535,9 +692,11 @@ def test_cleanup_waits_for_children_even_when_world_and_ports_are_clear() -> Non
     assert not evidence["clean"]
 
 
-@pytest.mark.parametrize("reused_pid", [False, True])
+@pytest.mark.parametrize("server_case", [
+    "live", "reused", "exiting", "slow_exit", "environ_unavailable", "unreadable", "reused_after_wait",
+])
 def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reused_pid: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_case: str
 ) -> None:
     state_path, _ = _write_state(tmp_path, monkeypatch)
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -548,12 +707,37 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     state["gazebo_processes"] = [server]
     state_path.write_text(json.dumps(state), encoding="utf-8")
     signals: list[tuple[int, int]] = []
+    finished_exiting = False
+    waited_for_cleanup = False
+    read_identity = harness.read_process_identity
+    proc = tmp_path / "4243"
+    proc.mkdir()
+    stat = proc / "stat"
+    stat_tail = " ".join([*[str(field) for field in range(4, 22)], "123456"])
+    stat.write_text(f"4243 (gz sim) R {stat_tail}", encoding="utf-8")
+    (proc / "cmdline").write_bytes(b"")
+
+    def exit_during_retry(_seconds):
+        nonlocal finished_exiting
+        stat.write_text(f"4243 (gz sim) Z {stat_tail}", encoding="utf-8")
+        finished_exiting = True
 
     def identity_reader(pid: int):
         if pid == 4242 or signals:
             return _exited()
-        if reused_pid:
+        if server_case == "reused" or (server_case == "reused_after_wait" and waited_for_cleanup):
             return _observed(pid=4243, proc_start_time_ticks=999999)
+        if server_case == "exiting":
+            return read_identity(pid, proc_root=tmp_path, sleep=exit_during_retry)
+        if server_case == "environ_unavailable":
+            if finished_exiting:
+                return _exited()
+            return harness.ProcessIdentityReadResult(
+                code=harness.STALE_STATE,
+                detail="proc_identity_read_failed:PermissionError: /proc/4243/environ",
+            )
+        if server_case in {"slow_exit", "unreadable", "reused_after_wait"}:
+            return read_identity(pid, proc_root=tmp_path, sleep=lambda _: None)
         return harness.ProcessIdentityReadResult(
             code=harness.IDENTITY_OBSERVED, identity=_identity(pid=4243, pgid=4242)
         )
@@ -561,14 +745,27 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     monkeypatch.setattr(harness, "read_process_identity", identity_reader)
     monkeypatch.setattr(harness.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     monkeypatch.setattr(harness.os, "killpg", lambda *args: pytest.fail("dead group leader"), raising=False)
-    monkeypatch.setattr(harness, "_wait_for_cleanup", lambda *args, **kwargs: {
-        "clean": bool(signals), "live_group_member_pids": [] if signals else [4243]
-    })
-    if reused_pid:
+
+    def cleanup(*_args, **kwargs):
+        nonlocal waited_for_cleanup
+        final_wait = "timeout_s" not in kwargs
+        if final_wait:
+            waited_for_cleanup = True
+            if server_case in {"slow_exit", "environ_unavailable"}:
+                exit_during_retry(0)
+        # Absence of a world, bindings and group members still cannot prove
+        # exit when the recorded process remains unreadable.
+        clean = bool(signals) or finished_exiting or (
+            final_wait and server_case in {"unreadable", "reused_after_wait"}
+        )
+        return {"clean": clean, "live_group_member_pids": [] if clean else [4243]}
+
+    monkeypatch.setattr(harness, "_wait_for_cleanup", cleanup)
+    if server_case in {"reused", "unreadable", "reused_after_wait"}:
         with pytest.raises(harness.HarnessError, match="gazebo_cleanup_identity_invalid"):
             harness.stop_harness()
         assert not signals and state_path.exists()
     else:
         assert harness.stop_harness()["cleanup"]["clean"]
-        assert signals == [(4243, harness.SIGTERM)]
+        assert signals == ([(4243, harness.SIGTERM)] if server_case == "live" else [])
         assert not state_path.exists()

@@ -25,7 +25,7 @@ HTTP bridge 不绕过 Runtime / Policy Gate。`smoke-takeoff` 和 `land` 路由�
 
 ### 3.2 与 Planner
 
-`/api/planner/plan-mission` 只调用 Intent Router + Template Agent Planner，返回 PlanResult JSON。它不执行 action，不调用 PX4，不调用 adapter。
+`/api/planner/plan-mission` 返回带来源的版本化预览 JSON。支持显式模板；有可信场景目录时也支持离线规则识别后展开模板骨架。它不执行 action，不调用模型、PX4 或 adapter。
 
 ### 3.3 与 PX4 Backend
 
@@ -149,6 +149,90 @@ http://127.0.0.1:8765/api
   "dry_run": true
 }
 ```
+
+HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_reason`、
+`plan`、`validation_summary`、`policy_summary`，新增下列顶层字段。
+请求及参数错误回包不变。
+
+| 字段 | v1.0 含义 |
+| --- | --- |
+| `contract_version` | `"1.0"`，仅版本化本路由的预览回包，不是执行 Plan IR 版本。 |
+| `intent_source` | `explicit`：请求方显式提供模板键；`rules`：实际运行了离线识别器（不保证识别成功）；`local_model`：本地模型识别；`none`：未运行识别器且没有显式选择。 |
+| `plan_source` | `template`：模板展开；`algorithm`：算法产生可展示计划；`none`：未生成计划（`plan: null`）。它不是意图识别器类型。 |
+| `fallback_reason` | 不发生降级时为 `null`。真正因模型不可用或低置信切换到离线路径时必带 `model_unavailable` 或 `model_low_confidence`，即使最终未生成计划。 |
+| `execution_authorized` | 恒为 `false`；`ready` 只是预览就绪。传 `dry_run: false` 或附带审批字段也不会提交执行。 |
+
+显式模板键继续走旧路径，`objective` 只是备注，不做识别；`fallback_hold` 等显式模板不算降级。
+要走规则，提供 `objective`，并省略 `mission_type`、传空字符串或传 `"auto"`。
+`"auto"` 是选择规则路径的标记，不是可展开的模板键。这条路径
+直接用离线规则，`fallback_reason: null`；本地模型和算法计划生产者仍未接入。
+调用方不能通过请求字段指定目录、来源或授权。
+
+前端用 `plan_source` 区分“模板预览”“算法预览”“无计划”，再用
+`intent_source` 说明理解方式。只有 `local_model` 表示本地模型识别；
+不能用计划的存在或 `plan_source: "algorithm"` 推断模型调用与执行授权。
+老版本没返回这些字段时，显示来源未知即可。可运行的请求/响应字段样例见
+[`runtime_planner_preview_v1.json`](fixtures/runtime_planner_preview_v1.json)。
+
+#### 规则预览的目录和解析结果（v1.0 兼容扩展）
+
+只读 Runtime 已加载的活动 `scene.json`。目录由部署时随场景提供，不能从
+请求、示例或另一张地图推断。以下是形状示例，**不是**真实场景配置：
+
+```json
+{
+  "intent_catalog": {
+    "contract_version": "1.0",
+    "scene_id": "example-scene",
+    "map_version": "example-map-1",
+    "catalog_id": "example-intent-catalog-v0",
+    "entries": [
+      {"entity_id": "example-target", "label": "例示设备", "aliases": ["例示对象"], "exclusive_group": null}
+    ]
+  }
+}
+```
+
+- `scene_id` / `map_version` 必须与当前活动场景一致；`catalog_id` 标识语义目录版本。
+- 场景负责人从独立 `entity_catalog.json` 投影已发布的语义条目到 `entries`；Runtime 不读取独立目录。每条 ID 不得重复，名字和别名来自同一场景版本。不同实体可以共享别名，识别时会追问。物理巡检目标保持在 `scene.targets`，不因演示标签新增物理目标。
+- 目录可以声明可选数组 `preview_only_entity_ids`（只可选入只读预览的实体）和 `reference_only_entity_ids`（永久只能作参照/排除的实体）。两组不能重复、相交或与物理目标重叠，所有声明 ID 都要出现在 `entries`；场景障碍物不得列在仅预览组。未声明的非物理目标仍被拒绝。省略两组时，只允许物理目标。
+- 缺少目录时保留 `blocked / unsupported_mission_type`、`intent_source: "none"`、`plan: null`；具体原因是 `INTENT_CATALOG_UNAVAILABLE`。版本不匹配、非法条目、未声明 ID 也不选择模板。合成题集只用于隔离验收。
+
+只有请求选择规则路径时，回包增加 `intent_resolution`，内含 `status`、`mission_type`、
+`reason_code`、`question`、`catalog`（场景/地图/目录身份）和 `bindings`。
+绑定分开记录物理 `targets`、`preview_only_targets`、`reference_only`、`excluded_targets`（每条有
+`entity_id` 和作为识别证据的短语）、`only_listed_targets` 和 `status_scope`。
+追问和绑定证据只作文本显示，不当作新请求或授权。
+正向选择永久仅参照实体（即使还混有合法目标）返回
+`needs_clarification / TARGET_REFERENCE_ONLY`，不产计划，不保留任何正向子集，
+但保留已明确的参照和排除项。
+
+当前规则不支持后置动词「西南和东南都巡检」。验证单选组时使用
+「巡检西南和东南」，应返回 `CONFLICTING_TARGETS`，而不是选其中一个。
+
+| 识别结果 | `intent_resolution.status` | 回包 |
+| --- | --- | --- |
+| `bound` | `resolved` | 用已识别的模板键展开。返回 `plan_source: "template"`，并在 `plan.preview_binding` 保留约束及 `steps_are_outline: true`。步骤只是骨架，不是针对目标设计或验证的航线。若模板不能表达该绑定形状，保留解析但不产计划（`intent_not_representable_by_template`）。 |
+| `clarify` | `needs_clarification` | `plan: null`、`plan_source: "none"`；带追问、原因和已确定的参照/排除项，不展示正向目标。 |
+| `unknown` | `unsupported` | 同样不产计划、不猜测目标；返回理由，识别器给出追问时一并保留。 |
+
+Runtime 中的规则副本固定在算法提交 `70a35af6eff2009f30e838ca0517ab2c65550754`。
+算法提供上游原件，Runtime 负责接线和验收；发布新规则时同步复制源码和黄金语料，校验
+[来源锁定文件](../tests/fixtures/runtime_intent_recognition_vendor_v0.json)
+及 [26 条合成 HTTP 用例](../tests/fixtures/runtime_intent_recognition_v0.json)。不需要算法目录出现在部署机、网络、模型或额外服务。
+
+#### 与 `POST /api/plans/execute` 的分工
+
+首轮只读验收不向执行端点提交：不新增前端调用，算法不提交，Runtime 的
+预览路由也不调用它。原有执行端点和逐步 Policy Gate 保持不变。
+
+后续开放执行时，算法产受校验的 **Proposal**；Runtime 从受信场景/地图、
+候选载具和能力上下文校验，并由受控转换器生成固定的 **Plan IR**。
+操作者确认的是这份具体版本（节点、场景/地图、步骤和参数），不是
+输入原话或模板徽标。确认之后才由 Runtime 管理的可信提交方调用
+`/api/plans/execute`；阶段间上下文变化要重新校验，仍逐步过现场 Policy Gate。
+请求里的 `operator_id` 和 `decision` 只是既有格式，不等于完成了可信身份、
+审批或批准了一份预览。本轮未实现这条生产接线。
 
 ### GET /api/capabilities
 

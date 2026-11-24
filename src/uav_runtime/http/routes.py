@@ -23,7 +23,9 @@ from uav_runtime.agent.planner import (
     MissionIntent,
     MissionPlan,
     MissionPlanStep,
+    PLAN_BLOCKED,
     PLAN_READY,
+    PlanResult,
     TemplateAgentPlanner,
 )
 from uav_runtime.http.schemas import (
@@ -52,7 +54,9 @@ from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.http.demo import DemoRehearsal, parse_injection
+from uav_runtime.http.intent_resolution import resolve_preview_intent
 from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
+from uav_runtime.http.planner_preview import PlanPreviewProvenance, serialize_plan_preview
 from uav_runtime.http.preflight import check_preflight, check_peer_isolation
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
@@ -809,27 +813,57 @@ def return_home(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
-    """Dry-run / plan-only bridge to TemplateAgentPlanner.
+    """Versioned plan preview; no model, execution, or adapter is called.
 
-    The planner endpoint returns Mission Plan IR only.  It does not execute
-    action steps, does not call PX4, and does not call adapters.
+    Explicit template keys keep the legacy path. An omitted/blank key or
+    "auto" uses offline rules and the loaded scene catalog, not caller data.
     """
     req = PlanMissionRequest.from_json(payload)
-    intent = MissionIntent(
-        intent_id=f"intent-http-{uuid4().hex[:10]}",
-        mission_type=req.mission_type,
-        source=req.source,
-        objective=req.objective,
-        requested_profile=req.profile,
-        dry_run=req.dry_run,
-    )
-    planner = TemplateAgentPlanner()
-    result = planner.plan(intent).to_dict()
+    resolution = None
+    if req.mission_type.strip() in {"", "auto"}:
+        resolution = resolve_preview_intent(
+            req.objective, scene_id=VEHICLE_REGISTRY.scene_id, scene=VEHICLE_REGISTRY.scene,
+        )
+    mission_type = resolution.mission_type if resolution is not None else req.mission_type
+    if resolution is not None and not resolution.supports_template_outline():
+        planned = PlanResult(
+            result=PLAN_BLOCKED,
+            failure_reason=("intent_not_representable_by_template" if resolution.status == "resolved"
+                            else "unsupported_mission_type"),
+            plan=None,
+            validation_summary={"step_count": 0, "blocked_steps": 0},
+            policy_summary={"checked_steps": 0, "denied_steps": 0, "require_confirm_steps": 0},
+        )
+    else:
+        intent = MissionIntent(
+            intent_id=f"intent-http-{uuid4().hex[:10]}",
+            mission_type=mission_type or "",
+            source=req.source,
+            objective=req.objective,
+            constraints=resolution.bindings() if resolution is not None else {},
+            requested_profile=req.profile,
+            dry_run=True if resolution is not None else req.dry_run,
+        )
+        planned = TemplateAgentPlanner().plan(intent)
+    result = serialize_plan_preview(planned, PlanPreviewProvenance(
+        intent_source=resolution.intent_source if resolution is not None else "explicit",
+        plan_source="template" if planned.plan is not None else "none",
+    ))
+    if resolution is not None:
+        semantic = resolution.to_dict()
+        result["intent_resolution"] = semantic
+        if result["plan"] is not None:
+            # Keep bindings with a saved preview, but never pass them off as
+            # parameters or constraints enforced by these generic steps.
+            result["plan"]["preview_binding"] = {
+                "steps_are_outline": True, "catalog": semantic["catalog"], "bindings": semantic["bindings"],
+            }
+            result["plan"]["explanation"] += " The steps are a template outline, not a target-specific route."
     RUNTIME_STATE_STORE.record_plan_result(result)
     plan = result.get("plan") or {}
     RUNTIME_STATE_STORE.record_event({
         "type": "agent_plan_created", "timestamp": _utc_now(),
-        "plan_id": plan.get("plan_id"), "mission_type": req.mission_type,
+        "plan_id": plan.get("plan_id"), "mission_type": mission_type,
         "status": plan.get("status"), "result": result.get("result"),
     })
     return result
@@ -838,9 +872,10 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
 def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     """Submit a Mission Plan IR for real execution.
 
-    This is the endpoint the algorithm side produces against.  Runtime's job
-    here is deliberately narrow: validate the plan shape, record the operator's
-    approval, then sequence the steps and report exactly what happened.
+    The read-only planner does not call this route. It is an execution
+    boundary for an approved Plan IR, not an algorithm or preview endpoint.
+    Runtime validates the plan, records the supplied operator decision, and
+    sequences the steps. A stated operator identity is not authentication.
 
     It does **not** invent planning strategy and does not weaken any safety
     check: every step is executed by calling the ordinary action endpoint, so
@@ -1150,12 +1185,16 @@ def runtime_snapshot() -> dict[str, Any]:
 def vehicle_snapshot() -> dict[str, Any]:
     """Return the Cesium vehicle feed projection from cached telemetry only."""
     snapshot = _merge_platform_view(RUNTIME_STATE_STORE.vehicle_snapshot(), "vehicle_snapshot")
+    active_run = RUNTIME_STATE_STORE.active_simulation_run_id() if PLATFORM_GATEWAY is not None else None
     overrides = ({row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
                  if DEMO_REHEARSAL is not None else {})
     # merge_projection copies local and remote vehicle rows. Never write an
     # override into the platform cache or into the measured value.
     for vehicle in snapshot["vehicles"]:
         if PLATFORM_GATEWAY is not None and vehicle["id"] == "UAV-02":
+            if active_run is not None:
+                from uav_runtime.platform.view import require_calibration_run
+                require_calibration_run(vehicle, active_run)
             score = _platform_link_quality(vehicle, fresh=snapshot["platform_view"].get("fresh") is True)
             vehicle.update(link_quality=score, link_quality_measured=score, link_quality_mode="LIVE")
         if override := overrides.get(vehicle["id"]):
@@ -1379,6 +1418,10 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, result
     if method == "POST" and normalized == "/api/coordinates/calibration":
         if PLATFORM_GATEWAY is not None and payload.get("node_id") == "UAV-02":
+            try:
+                RUNTIME_STATE_STORE.check_coordinate_calibration_run(payload)
+            except ValueError as exc:
+                raise RequestValidationError("invalid_coordinate_calibration", "body", str(exc)) from exc
             try:
                 return PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
             except Exception:

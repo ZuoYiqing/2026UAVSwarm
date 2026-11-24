@@ -46,7 +46,7 @@ import { VEHICLE_CONTRACT_VERSION } from "./vehicle-contract.js";
 import { VehicleLayer } from "./vehicle-layer.js";
 import { createFlightActionClient } from "./flight-action.js";
 import { QINGLAN_SCENE, RECON_SCENE } from "./scene-alignment.js";
-import { createReferenceScene } from "./reference-scene.js";
+import { createReferenceScene, REFERENCE_VIEW } from "./reference-scene.js";
 import { createParentMessageHandler } from "./parent-bridge.js";
 import { PlanPreviewLayer } from "./plan-preview-layer.js";
 import {
@@ -79,7 +79,7 @@ const sceneDefinitions = Object.freeze({
   },
   recon: {
     label: "后端任务坐标", kind: "reference", showVehicles: true,
-    liveProfile: RECON_SCENE, range: 330,
+    liveProfile: RECON_SCENE, range: REFERENCE_VIEW.rangeM,
   },
   1.1: {
     label: "3D Tiles 1.1",
@@ -694,7 +694,11 @@ async function focusScene() {
   viewer.trackedEntity = undefined;
   const definition = sceneDefinitions[activeSceneId];
   if (definition.kind === "reference") {
-    viewer.camera.lookAt(reconOrigin, new HeadingPitchRange(CesiumMath.toRadians(-25), CesiumMath.toRadians(-50), definition.range));
+    viewer.camera.lookAt(reconOrigin, new HeadingPitchRange(
+      CesiumMath.toRadians(REFERENCE_VIEW.headingDeg),
+      CesiumMath.toRadians(REFERENCE_VIEW.pitchDeg),
+      definition.range,
+    ));
     return;
   }
 
@@ -1259,6 +1263,11 @@ pickHandler.setInputAction((movement) => {
   }
   // 没点到载具 —— 若"飞到这里"已武装，则把该点作为目标
   if (!planPreviewEnabled && elements.gotoArmed?.checked) {
+    if (referenceScene.isDemoPickId(picked?.id)) {
+      cancelGotoTarget();
+      showActionResult("测试标记仅供展示，不可作为前往目标", "error");
+      return;
+    }
     const outcome = handleGroundClick(movement.position);
     if (outcome.ok) {
       showActionResult("已选目标点，点「确认前往」下发", "busy");

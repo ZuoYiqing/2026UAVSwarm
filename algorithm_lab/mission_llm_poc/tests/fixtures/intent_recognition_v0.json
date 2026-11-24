@@ -1,0 +1,40 @@
+{
+  "catalog_id": "synthetic-campus-intent-v0",
+  "catalog": [
+    {"entity_id":"S-PV-W","label":"西侧光伏区","aliases":["西边那排发电板"]},
+    {"entity_id":"S-THERM","label":"热泵机房","aliases":["热泵房"]},
+    {"entity_id":"S-STORE-N","label":"北仓","aliases":["北边仓库"]},
+    {"entity_id":"S-METER-A","label":"访客入口水表点","aliases":["水表点","入口水表"]},
+    {"entity_id":"S-METER-B","label":"展厅门外水表点","aliases":["水表点","展厅外水表"]},
+    {"entity_id":"S-SECTOR-E","label":"东侧区域","aliases":["东边"],"exclusive_group":"one-sector-per-task"},
+    {"entity_id":"S-SECTOR-W","label":"西侧区域","aliases":["西边"],"exclusive_group":"one-sector-per-task"}
+  ],
+  "cases": [
+    {"id":"status-summary","objective":"只查状态。","status":"bound","mission_type":"status_only","status_scope":"summary"},
+    {"id":"status-colloquial","objective":"帮我查看一下当前在线状态。","status":"bound","mission_type":"status_only","status_scope":"online"},
+    {"id":"status-connection","objective":"请查一下各节点的连接状态。","status":"bound","mission_type":"status_only","status_scope":"connection"},
+    {"id":"inspection-pv","objective":"巡检西侧光伏区。","status":"bound","mission_type":"inspection_snapshot","targets":["S-PV-W"]},
+    {"id":"inspection-heat","objective":"巡检热泵机房。","status":"bound","mission_type":"inspection_snapshot","targets":["S-THERM"]},
+    {"id":"inspection-alias","objective":"帮我巡检一下西边那排发电板。","status":"bound","mission_type":"inspection_snapshot","targets":["S-PV-W"],"evidence":["西边那排发电板"]},
+    {"id":"inspection-two","objective":"请核对热泵机房和西侧光伏区。","status":"bound","mission_type":"inspection_snapshot","targets":["S-THERM","S-PV-W"]},
+    {"id":"water-meter-ambiguous","objective":"把水表点列为目标。","status":"clarify","reason_code":"TARGET_AMBIGUOUS","question_includes":["访客入口水表点","展厅门外水表点"]},
+    {"id":"water-meter-resolved","objective":"把展厅外水表列为本轮核对目标。","status":"bound","mission_type":"inspection_snapshot","targets":["S-METER-B"]},
+    {"id":"reference-and-target","objective":"北仓只用来定位，不用核对；本轮只核对热泵机房。","status":"bound","mission_type":"inspection_snapshot","targets":["S-THERM"],"reference_only":["S-STORE-N"],"excluded_targets":["S-STORE-N"],"only_listed_targets":true},
+    {"id":"reference-no-target","objective":"北仓只用来定位，不用核对。","status":"clarify","reason_code":"TASK_TYPE_REQUIRED","reference_only":["S-STORE-N"],"excluded_targets":["S-STORE-N"]},
+    {"id":"explicit-exclusion","objective":"核对热泵机房，不用核对北边仓库。","status":"bound","mission_type":"inspection_snapshot","targets":["S-THERM"],"excluded_targets":["S-STORE-N"]},
+    {"id":"ambiguous-keeps-exclusion","objective":"把水表点列为目标，北仓不用核对。","status":"clarify","reason_code":"TARGET_AMBIGUOUS","excluded_targets":["S-STORE-N"]},
+    {"id":"unbound-negation","objective":"巡检热泵机房，但是不要经过北仓。","status":"clarify","reason_code":"UNRESOLVED_RESTRICTION"},
+    {"id":"not-global-inspection","objective":"巡检热泵机房，北仓只用来定位；不用巡检。","status":"clarify","reason_code":"UNRESOLVED_RESTRICTION","reference_only":["S-STORE-N"],"excluded_targets":["S-STORE-N"]},
+    {"id":"target-role-conflict","objective":"巡检北仓，北仓只用来定位，不用核对。","status":"clarify","reason_code":"TARGET_ROLE_CONFLICT","reference_only":["S-STORE-N"],"excluded_targets":["S-STORE-N"]},
+    {"id":"exclusive-two","objective":"去东边也去西边。","status":"clarify","reason_code":"CONFLICTING_TARGETS","question_includes":["东侧区域","西侧区域"]},
+    {"id":"contradictory-only","objective":"只核对热泵机房，巡检西侧光伏区。","status":"clarify","reason_code":"CONFLICTING_RESTRICTIONS"},
+    {"id":"choose-alternative","objective":"巡检西侧光伏区或者热泵机房。","status":"clarify","reason_code":"TARGET_ALTERNATIVES"},
+    {"id":"unknown-object","objective":"巡检东侧充电棚。","status":"unknown","reason_code":"TARGET_NOT_IN_CATALOG"},
+    {"id":"partial-unknown","objective":"核对北仓和东侧充电棚。","status":"unknown","reason_code":"TARGET_NOT_IN_CATALOG"},
+    {"id":"mixed-intents","objective":"查在线状态，核对热泵机房。","status":"clarify","reason_code":"MULTIPLE_INTENTS"},
+    {"id":"bare-motion","objective":"去北仓。","status":"unknown","reason_code":"UNSUPPORTED_OBJECTIVE"},
+    {"id":"explicit-takeoff-validation-words","objective":"预览起降验证。","status":"bound","mission_type":"simple_takeoff_land"},
+    {"id":"guarded-stop","objective":"紧急停止！","status":"clarify","reason_code":"GUARDED_TEMPLATE"},
+    {"id":"guarded-hold","objective":"现在保持悬停。","status":"clarify","reason_code":"GUARDED_TEMPLATE"}
+  ]
+}
