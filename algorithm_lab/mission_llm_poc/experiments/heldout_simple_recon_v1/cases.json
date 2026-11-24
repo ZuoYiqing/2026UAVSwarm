@@ -1,0 +1,50 @@
+{
+  "benchmark_id": "simple-recon-heldout-v1",
+  "authored_date": "2026-11-24",
+  "split": "new objectives written after freezing the rule source; not used in its development or as model examples",
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "catalog_id": "simple_recon_v0_1-entities-v1",
+  "catalog_sha256": "d674338ec95cc224d5a04461447dd2948a73da817beaaf04b44041cd67f89fdc",
+  "rules_sha256_lf": "a5d34212b36b7c145bf1e13668c19dda8929c14674ff2ba0aaea8fcb8e183abb",
+  "model": {
+    "id": "qwen3.5-0.8b-q4-lab",
+    "profile": "qwen3.5-0.8b",
+    "weights_sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "engine_build": "llama.cpp b10964",
+    "context_tokens": 2048,
+    "temperature": 0.2,
+    "seeds": [11, 29, 53],
+    "max_tokens": 384
+  },
+  "metric_notes": {
+    "complete": "Answerable bound cases: valid preview, exact target/reference/exclusion sets and explicit only flag. Order is a separate metric.",
+    "order": "Multi-target answerable cases: complete plus exact ordered target list and order basis, checked before HTTP separates preview-only and physical IDs.",
+    "false_bind": "Expected-clarify cases containing any positive binding in the structured original answer, even if later rejected. Unparseable answers are invalid, not successful abstentions.",
+    "abstain": "Answerable cases with a valid clarify/unknown answer. Invalid or incomplete outputs are separate and never count as abstention.",
+    "distributions": "One rule run. All three model seeds on every case; pool rates and report min/median/max of the three per-seed rates. Also report latency min/median/max over requests and per-case distribution.",
+    "net_gain": "At least one better median metric with no seed exceeding the rule false-bind count. An abstention decrease counts only when the median other answerable failures do not grow."
+  },
+  "cases": [
+    {"id":"L01","category":"literal","objective":"现在帮我复核东北绿色圆盘。","expected":{"status":"bound","targets":["target-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"目录中东北绿色圆盘是 target-001 的明确别名。"},
+    {"id":"L02","category":"literal","objective":"这一轮请核对西北那块区域。","expected":{"status":"bound","targets":["demo-area-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"原话使用西北区域的独有别名。"},
+    {"id":"L03","category":"literal","objective":"麻烦给我检查东边参考点。","expected":{"status":"bound","targets":["demo-anchor-002"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"东边限定了一个参考点；这是被明确要求核对的演示目标。"},
+    {"id":"L04","category":"literal","objective":"先复核东北视觉标记，再核对西北区。","expected":{"status":"bound","targets":["target-001","demo-area-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":"explicit_sequence"},"rationale":"前件是东北标记，后件是西北区域；两者的场景角色不同但原话明确先后。"},
+    {"id":"L05","category":"literal","objective":"给我核对西侧参考点和东侧参考点。","expected":{"status":"bound","targets":["demo-anchor-001","demo-anchor-002"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":"mention_order"},"rationale":"两个有独立名称的点同时被点名，没有显式先后，也不互斥。"},
+    {"id":"P01","category":"paraphrase","objective":"请检查东北角那块绿颜色的盘状标识。","expected":{"status":"bound","targets":["target-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"东北、绿色、盘状三项与唯一的东北标记目录描述一致。"},
+    {"id":"P02","category":"paraphrase","objective":"麻烦把西北那片地块列为核查对象。","expected":{"status":"bound","targets":["demo-area-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"唯一西北区域是目录中要核查的地块。"},
+    {"id":"P03","category":"paraphrase","objective":"西边那处定位点，帮我复查一遍。","expected":{"status":"bound","targets":["demo-anchor-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"西侧唯一参考点被明确要求复查，『定位点』是名称描述而非本句排除。"},
+    {"id":"P04","category":"paraphrase","objective":"把朝东的那个参考地点列进此次核对清单。","expected":{"status":"bound","targets":["demo-anchor-002"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"地点类型与朝东方位共同唯一限定东侧参考点。"},
+    {"id":"P05","category":"paraphrase","objective":"请在复核西南那片小区域之前，先检查东北那枚绿色圆标。","expected":{"status":"bound","targets":["target-001","demo-sector-001"],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":"explicit_sequence"},"rationale":"先东北绿色标记，再西南区块；不加入东南区块。"},
+    {"id":"A01","category":"clarification","objective":"本轮麻烦核对参考点。","expected":{"status":"clarify","targets":[],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"参考点是东西两点的共享别名，未提供区分条件。"},
+    {"id":"A02","category":"clarification","objective":"请检查刚才提到的那个位置；我没给出名称。","expected":{"status":"clarify","targets":[],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"单条请求不带历史、选中对象或唯一可信指代。"},
+    {"id":"A03","category":"clarification","objective":"这次核对东北视觉标记还是西北区域？先别替我挑。","expected":{"status":"clarify","targets":[],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"两个并列选项，且明确不让系统代选。"},
+    {"id":"A04","category":"clarification","objective":"给我复核东南区块以及西南区块。","expected":{"status":"clarify","targets":[],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"现有目录将两个区块声明为同一互斥组。"},
+    {"id":"A05","category":"clarification","objective":"麻烦检查那个参考点，东边西边我还没定。","expected":{"status":"clarify","targets":[],"reference_only":[],"excluded_targets":[],"only_listed_targets":false,"target_order_basis":null},"rationale":"明确说尚未决定方位，不能用默认值或任选一点。"},
+    {"id":"N01","category":"negation","objective":"中间那栋楼只用于定位，别核对它；麻烦本轮只巡检东北绿色圆盘。","expected":{"status":"bound","targets":["target-001"],"reference_only":["building-001"],"excluded_targets":["building-001"],"only_listed_targets":true,"target_order_basis":null},"rationale":"它在本句有明确先行词：中间那栋楼；建筑仅定位，目标只有圆盘。"},
+    {"id":"N02","category":"negation","objective":"本轮只复核西北区；不要检查东北视觉标记。","expected":{"status":"bound","targets":["demo-area-001"],"reference_only":[],"excluded_targets":["target-001"],"only_listed_targets":true,"target_order_basis":null},"rationale":"西北区是唯一要求复核的对象；东北标记是明确排除项。"},
+    {"id":"N03","category":"negation","objective":"西侧参考点仅作为参照，不用核对；现在核对东边参考点。","expected":{"status":"bound","targets":["demo-anchor-002"],"reference_only":["demo-anchor-001"],"excluded_targets":["demo-anchor-001"],"only_listed_targets":false,"target_order_basis":null},"rationale":"西点是参照及排除项；东点是本轮核对的对象。"},
+    {"id":"N04","category":"negation","objective":"先复核西南区块，再检查东北标记；不用核对东南区块。","expected":{"status":"bound","targets":["demo-sector-001","target-001"],"reference_only":[],"excluded_targets":["demo-sector-002"],"only_listed_targets":false,"target_order_basis":"explicit_sequence"},"rationale":"明确先西南再东北。东南只用于表达排除，不触发两区同选。"},
+    {"id":"N05","category":"negation","objective":"不要检查东北标记，核对南侧充电棚。","expected":{"status":"unknown","targets":[],"reference_only":[],"excluded_targets":["target-001"],"only_listed_targets":false,"target_order_basis":null},"rationale":"该目录没有南侧充电棚；不能退而绑定明确排除的东北标记。"}
+  ]
+}
