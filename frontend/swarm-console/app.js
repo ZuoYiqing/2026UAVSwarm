@@ -1132,7 +1132,7 @@ function missionMapPanel() {
     const pct = dashboard?.assignmentProgress(assignment) ?? null;
     const region = assignment?.region_label || assignment?.region_id || assignment?.task_name
       || (assignment?.waypoints_total > 0 ? `航点 ${assignment.waypoints_reached ?? "—"} / ${assignment.waypoints_total}` : "未收到任务分工");
-    const telemetry = vehicle?.stale ? "遥测过期" : state.dataStatus === "live" && vehicle
+    const telemetry = vehicle?.stale || vehicle?.observationStale ? "遥测过期" : state.dataStatus === "live" && vehicle
       ? (vehicle.connected ? "遥测在线" : "遥测离线") : "等待遥测";
     const phase = assignment?.status || (assignment?.active === true ? "任务中" : assignment?.active === false ? "未在任务中" : telemetry);
     return `<div class="mission-roster-row">
@@ -1197,8 +1197,8 @@ function missionMetricsBar() {
   const denials = auditReady ? timeline.filter(entry => entry.decision === "deny").length : "—";
   const active = builtInDemo ? frame?.actionCount : state.apiStatus === "live" && state.runtimeSnapshotCurrent
     ? state.runtimeSnapshot?.active_actions?.length : null;
-  const online = builtInDemo || (state.apiStatus === "live" && ["live", "stale"].includes(state.dataStatus))
-    ? fleet.filter(vehicle => vehicle.connected && !vehicle.stale).length + " / " + fleet.length : "—";
+  const online = builtInDemo || (state.apiStatus === "live" && state.dataStatus === "live")
+    ? fleet.filter(vehicle => vehicle.connected && !vehicle.stale && !vehicle.observationStale).length + " / " + fleet.length : "—";
   return `<div class="mission-status-strip">
     <span>在线节点 <b>${esc(online)}</b></span><span>执行中动作 <b>${active ?? "—"}</b></span>
     <span>最近拒绝 <b>${denials}</b></span><span>Runtime API <b class="${builtInDemo ? "amber" : api.color}">${builtInDemo ? "离线演习" : api.label}</b></span>

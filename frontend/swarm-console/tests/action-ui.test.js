@@ -99,6 +99,9 @@ test("HTTP loss preserves platform connectivity, task evidence and last trusted 
   assert.equal(h.run("actionPermission('takeoff').allowed"), false);
   assert.equal(h.run("actionPermission('land').allowed"), false);
   assert.equal(h.run("backendStatus().label"), "未知");
+  assert.match(h.run("missionMetricsBar()"), /在线节点 <b>—<\/b>/);
+  assert.match(h.run("missionMapPanel()"), /遥测过期/);
+  assert.doesNotMatch(h.run("missionMapPanel()"), /遥测在线/);
   assert.equal(h.run("state.lastObservationAt"), "2026-10-22T03:00:01Z");
 });
 
