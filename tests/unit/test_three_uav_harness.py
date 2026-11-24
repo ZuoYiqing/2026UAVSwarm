@@ -692,7 +692,9 @@ def test_cleanup_waits_for_children_even_when_world_and_ports_are_clear() -> Non
     assert not evidence["clean"]
 
 
-@pytest.mark.parametrize("server_case", ["live", "reused", "exiting", "slow_exit", "unreadable"])
+@pytest.mark.parametrize("server_case", [
+    "live", "reused", "exiting", "slow_exit", "environ_unavailable", "unreadable", "reused_after_wait",
+])
 def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_case: str
 ) -> None:
@@ -706,6 +708,7 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     signals: list[tuple[int, int]] = []
     finished_exiting = False
+    waited_for_cleanup = False
     read_identity = harness.read_process_identity
     proc = tmp_path / "4243"
     proc.mkdir()
@@ -722,11 +725,18 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     def identity_reader(pid: int):
         if pid == 4242 or signals:
             return _exited()
-        if server_case == "reused":
+        if server_case == "reused" or (server_case == "reused_after_wait" and waited_for_cleanup):
             return _observed(pid=4243, proc_start_time_ticks=999999)
         if server_case == "exiting":
             return read_identity(pid, proc_root=tmp_path, sleep=exit_during_retry)
-        if server_case in {"slow_exit", "unreadable"}:
+        if server_case == "environ_unavailable":
+            if finished_exiting:
+                return _exited()
+            return harness.ProcessIdentityReadResult(
+                code=harness.STALE_STATE,
+                detail="proc_identity_read_failed:PermissionError: /proc/4243/environ",
+            )
+        if server_case in {"slow_exit", "unreadable", "reused_after_wait"}:
             return read_identity(pid, proc_root=tmp_path, sleep=lambda _: None)
         return harness.ProcessIdentityReadResult(
             code=harness.IDENTITY_OBSERVED, identity=_identity(pid=4243, pgid=4242)
@@ -735,17 +745,23 @@ def test_orphaned_gazebo_is_signalled_only_after_its_own_identity_check(
     monkeypatch.setattr(harness, "read_process_identity", identity_reader)
     monkeypatch.setattr(harness.os, "kill", lambda pid, sig: signals.append((pid, sig)))
     monkeypatch.setattr(harness.os, "killpg", lambda *args: pytest.fail("dead group leader"), raising=False)
+
     def cleanup(*_args, **kwargs):
+        nonlocal waited_for_cleanup
         final_wait = "timeout_s" not in kwargs
-        if final_wait and server_case == "slow_exit":
-            exit_during_retry(0)
+        if final_wait:
+            waited_for_cleanup = True
+            if server_case in {"slow_exit", "environ_unavailable"}:
+                exit_during_retry(0)
         # Absence of a world, bindings and group members still cannot prove
         # exit when the recorded process remains unreadable.
-        clean = bool(signals) or finished_exiting or (final_wait and server_case == "unreadable")
+        clean = bool(signals) or finished_exiting or (
+            final_wait and server_case in {"unreadable", "reused_after_wait"}
+        )
         return {"clean": clean, "live_group_member_pids": [] if clean else [4243]}
 
     monkeypatch.setattr(harness, "_wait_for_cleanup", cleanup)
-    if server_case in {"reused", "unreadable"}:
+    if server_case in {"reused", "unreadable", "reused_after_wait"}:
         with pytest.raises(harness.HarnessError, match="gazebo_cleanup_identity_invalid"):
             harness.stop_harness()
         assert not signals and state_path.exists()

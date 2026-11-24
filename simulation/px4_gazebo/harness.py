@@ -55,7 +55,6 @@ PX4_UDP_LOCAL_PORTS = (
 PX4_UDP_LOCAL_SUFFIXES = tuple(f" {role}" for _, role in PX4_UDP_LOCAL_PORTS)
 PROC_EMPTY_CMDLINE_RECHECKS = 4
 PROC_EMPTY_CMDLINE_RECHECK_S = 0.025
-PROC_EMPTY_CMDLINE_DETAIL = "proc_identity_read_failed:ValueError:process cmdline is empty after bounded recheck"
 
 
 def canonical_world_bytes(contents: bytes) -> bytes:
@@ -828,7 +827,7 @@ def read_process_identity(
             if cmdline:
                 break
         else:
-            return ProcessIdentityReadResult(code=STALE_STATE, detail=PROC_EMPTY_CMDLINE_DETAIL)
+            raise ValueError("process cmdline is empty after bounded recheck")
         executable = os.readlink(process_root / "exe")
         cwd = os.readlink(process_root / "cwd")
         run_id = _proc_run_id((process_root / "environ").read_bytes())
@@ -1429,13 +1428,15 @@ def stop_harness() -> dict[str, Any]:
         if (server.get("kind") == "gazebo" and server.get("pgid") in gazebo_groups
                 and server.get("pid") in cleanup["live_group_member_pids"]):
             [decision] = _terminate_process_groups([server], run_id=run_id, individual=True)
-            if decision.code == STALE_STATE and decision.detail == PROC_EMPTY_CMDLINE_DETAIL:
+            if decision.code == STALE_STATE and (decision.detail or "").startswith((
+                "proc_identity_read_failed:", "proc_identity_entry_missing:", "proc_stat_unavailable:",
+            )):
                 pending_exit_checks.append((len(gazebo_decisions), server))
             gazebo_decisions.append(decision)
     if pending_exit_checks:
         # A server may be exiting after its group was signalled. Observe
         # cleanup within the usual budget, then confirm the recorded PID has
-        # exited. An empty cmdline never authorizes a signal or state removal.
+        # exited. An incomplete identity never authorizes a signal or state removal.
         cleanup = _wait_for_cleanup(state)
         if cleanup["clean"]:
             for index, server in pending_exit_checks:
