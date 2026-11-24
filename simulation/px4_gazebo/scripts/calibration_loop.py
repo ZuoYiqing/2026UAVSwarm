@@ -65,6 +65,16 @@ PID_PATH = RUNTIME_ROOT / "calibration_loop.pid"
 #: process exits, so there is no "who deletes it" question at all.
 WORKER_LOCK_PATH = RUNTIME_ROOT / "calibration_loop.lock"
 
+#: Default pause between rounds, in seconds.
+#:
+#: Budget: the published evidence lives for 60 s, and one round costs
+#: ``--duration`` (10 s) of capture plus this pause.  At 45 s the cycle was
+#: 55 s and the measured peak age reached 50.4 s — only 9 s of margin, which a
+#: slow round or a briefly unreachable Runtime would eat.  At 35 s the cycle is
+#: 45 s and the margin is about 15 s.  Runtime clamps ``valid_for_ms`` to
+#: 60000 (``state_store.py``), so the TTL cannot simply be raised.
+DEFAULT_INTERVAL_S = 35.0
+
 #: How many consecutive "the PX4 processes are gone" rounds to tolerate before
 #: giving up.  A *stale* ``harness_state.json`` (left behind by a crash or a
 #: manual kill) still carries a valid-looking ``run_id``, so the run-id check
@@ -297,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--runtime", default="http://127.0.0.1:8765/api")
     parser.add_argument("--duration", type=float, default=10.0)
-    parser.add_argument("--interval", type=float, default=45.0)
+    parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
     parser.add_argument(
         "--once",
         action="store_true",
