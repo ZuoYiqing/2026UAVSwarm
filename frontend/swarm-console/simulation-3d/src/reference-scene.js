@@ -67,18 +67,28 @@ export function createReferenceScene(viewer, toWorld) {
     add({ polyline: { positions: [[0,0,0.5],point].map(toWorld), width: 3, material: Color.fromCssColorString(color) } });
     add({ position: toWorld(point), label: { text, font: "14px sans-serif", fillColor: Color.WHITE, outlineColor: Color.BLACK, outlineWidth: 2, style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0,-12) } });
   }
+  const demoMarkerIds = new Set();
+  const demoOutlines = addDemoMarkers(options => {
+    demoMarkerIds.add(options.id);
+    add(options);
+  }, toWorld);
+  for (const instance of demoOutlines) demoMarkerIds.add(instance.id);
+
   // These outlines are reference overlays. Build them on the render thread
   // so they draw on the default reference view even without terrain geometry.
   const outlines = viewer.scene.primitives.add(new Primitive({
-    geometryInstances: addDemoMarkers(add, toWorld),
+    geometryInstances: demoOutlines,
     appearance: new PolylineColorAppearance({
       translucent: false, renderState: { depthTest: { enabled: false } },
     }),
     asynchronous: false,
     show: false,
   }));
-  return { setVisible: show => {
-    entities.forEach(entity => { entity.show = show; });
-    outlines.show = show;
-  } };
+  return {
+    setVisible: show => {
+      entities.forEach(entity => { entity.show = show; });
+      outlines.show = show;
+    },
+    isDemoPickId: id => demoMarkerIds.has(typeof id === "string" ? id : id?.id),
+  };
 }

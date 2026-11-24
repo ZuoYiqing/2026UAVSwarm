@@ -31,6 +31,17 @@ test("reference scene draws the five catalog markers at their ENU locations", ()
   assert.deepEqual([nw.id, sw.id, se.id], ["recon-demo-area-001", "recon-demo-sector-001", "recon-demo-sector-002"]);
   assert.deepEqual(sw.attributes.color.value, se.attributes.color.value);
   assert([west, east, area, outlines].every(entity => entity.show));
+  for (const instance of outlines.geometryInstances) {
+    assert.equal(scene.isDemoPickId(instance.id), true);
+    assert.equal(scene.isDemoPickId(entities.getById(instance.id + "-fill")), true);
+  }
+  for (const point of [west, east]) {
+    assert.equal(scene.isDemoPickId(point), true);
+    assert.equal(scene.isDemoPickId(entities.getById(point.id + "-post")), true);
+  }
+  assert.equal(scene.isDemoPickId("target-001"), false);
+  assert.equal(scene.isDemoPickId(entities.add({ id: "vehicle:UAV-01" })), false);
+  assert.equal(scene.isDemoPickId(undefined), false);
 
   scene.setVisible(false);
   assert([west, east, area, outlines].every(entity => !entity.show));
