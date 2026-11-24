@@ -27,7 +27,7 @@
     "http_status": 200,
     "response_fields": {
       "contract_version": "1.0",
-      "intent_source": "none",
+      "intent_source": "rules",
       "plan_source": "none",
       "fallback_reason": null,
       "execution_authorized": false,
