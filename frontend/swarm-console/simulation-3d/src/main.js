@@ -1263,6 +1263,11 @@ pickHandler.setInputAction((movement) => {
   }
   // 没点到载具 —— 若"飞到这里"已武装，则把该点作为目标
   if (!planPreviewEnabled && elements.gotoArmed?.checked) {
+    if (referenceScene.isDemoPickId(picked?.id)) {
+      cancelGotoTarget();
+      showActionResult("测试标记仅供展示，不可作为前往目标", "error");
+      return;
+    }
     const outcome = handleGroundClick(movement.position);
     if (outcome.ok) {
       showActionResult("已选目标点，点「确认前往」下发", "busy");
