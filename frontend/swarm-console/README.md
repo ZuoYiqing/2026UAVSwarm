@@ -197,7 +197,7 @@ GET  /api/simulation/status
 
 ## 当前已接入的按钮
 
-- `任务规划 -> 预览巡检模板`：把输入的任务目标随 `inspection_snapshot` 和 `dry_run: true` 提交到 `/api/planner/plan-mission`，展示 Runtime 返回的步骤、逐步策略预检和动作风险级别。航线和完整任务下发尚未接入该页。
+- 从「任务规划」点击「预览任务」，将原话作为 `objective` 提交到 `/api/planner/plan-mission`。Runtime 按活动场景目录识别目标，也支持调用方显式传入 `mission_type`。页面展示契约版本、意图识别、计划来源、降级原因和执行授权。成功时展示目标与约束、只读模板大纲及逐步预检，演习目标带有「仅预览，不可执行」标记。澄清和不支持的结果显示 Runtime 追问或原因码。
 - `任务规划 / 三维集群态势 -> 本地试推理`：选择 32 米、22 米或 47 米题以填入原话，再点「本地试推理」，请求本机 Lab 的 `POST http://127.0.0.1:18118/lab/semantic-preview`。目前仅支持导出目录北侧首排东半幅的限定楼栋题。Lab 和模型需另行就绪，主控台从 `http://127.0.0.1:5178` 或 `http://localhost:5178` 打开。
   - 「检查 Lab」只读取 `/lab/semantic-preview/health`。`ready` 表示 Lab 可接收请求，`model_status: not_checked` 显示为「模型状态未检查」。
   - 实时结果显示原话、模型原始回复、算法结论和 Lab 上报耗时。沿用预览 schema 0.1，检查响应和预览的 `execution_authorized=false`，核对 `evidence_json` 的 UTF-8 SHA-256 及原话、模型回复和结论。原始证据可在「来源与限定条件」展开查看。
