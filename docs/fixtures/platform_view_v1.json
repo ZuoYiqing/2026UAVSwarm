@@ -1,0 +1,33 @@
+{
+  "example_kind": "producer_projection_fixture_not_flight_evidence",
+  "response_projection": {
+    "contract_version": "1.0", "node_id": "UAV-02", "execution_mode": "sitl",
+    "valid_for_ms": 3000, "execution_authorized": false,
+    "projections": {
+      "telemetry": {"version": "1.0", "stale_after_ms": 2000, "nodes": [{"node_id": "UAV-02", "system_id": 2, "component_id": 1, "source": "px4_telemetry"}]},
+      "vehicles": {"vehicles": [{"node_id": "UAV-02", "system_id": 2, "component_id": 1, "endpoint": "udpin:127.0.0.1:14541"}]},
+      "runtime_snapshot": {"version": "1.0", "nodes": [{"node_id": "UAV-02"}]},
+      "vehicle_snapshot": {
+        "version": "1.0", "full_state": true, "scene_id": "simple_recon_v0_1",
+        "vehicles": [{"id": "UAV-02", "spatial": {
+          "public_frame": "scene_ned", "local_frame": "vehicle_local_ned", "units": "m",
+          "calibration_status": "calibrated", "public_position_usable": true,
+          "raw_vehicle_local_pose": {"frame": "vehicle_local_ned", "position_m": {"x": 1.0, "y": 2.0, "z": -3.0}},
+          "scene_pose": {"frame": "scene_ned", "position_m": {"x": 1.0, "y": 10.0, "z": -3.0}}
+        }}]
+      }
+    }
+  },
+  "calibration_request": {
+    "contract_version": "1.0", "scene_id": "simple_recon_v0_1", "map_version": "map-fixture-1",
+    "node_id": "UAV-02", "status": "calibrated", "calibration_version": "cal-fixture-1",
+    "local_origin_id": "origin-fixture-1", "origin_continuity": "verified", "axis_alignment": "ned_aligned",
+    "scene_origin": {"kind": "gazebo_world_ned", "north_m": 0, "east_m": 0, "down_m": 0},
+    "altitude_reference": "scene_origin_z_down", "translation_scene_ned_m": {"north": 0, "east": 8, "down": 0},
+    "source_timestamp": "1970-01-01T00:16:40Z", "valid_for_ms": 5000,
+    "evidence_source": "unit_fixture_not_live"
+  },
+  "internal_route": "GET /api/platform/view",
+  "public_routes_preserved": ["/api/snapshot", "/api/vehicle-snapshot", "/api/telemetry/latest", "/api/vehicles", "/api/simulation/status", "/api/preflight?node_id=UAV-02"],
+  "authority": "Read-only, not admission. Platform transforms its vehicle_local_ned to scene_ned; ground forwards and ages, never transforms again."
+}

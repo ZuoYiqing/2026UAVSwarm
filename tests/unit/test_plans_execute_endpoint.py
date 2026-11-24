@@ -37,7 +37,7 @@ def _plan_payload(**overrides) -> dict:
         ],
     }
     plan.update(overrides.pop("plan", {}))
-    payload = {"plan": plan, "operator_id": "op-1"}
+    payload = {"plan": plan, "operator_id": "op-1", "decision": "approve"}
     payload.update(overrides)
     return payload
 
@@ -156,6 +156,26 @@ def test_map_version_mismatch_is_refused() -> None:
     assert result["failure_reason"] == "map_version_mismatch"
     assert result["detail"]["plan_map_version"] == "qinglan-city-1"
     assert result["detail"]["active_map_version"] == "simple_recon_v0_1-map-1"
+
+
+def test_scene_check_checks_every_calibrated_target(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from uav_runtime.http import routes
+
+    scene = "simple_recon_v0_1"
+    version = "simple_recon_v0_1-map-1"
+    monkeypatch.setattr(routes, "VEHICLE_REGISTRY", _FakeRegistry(scene))
+    monkeypatch.setattr(routes, "RUNTIME_STATE_STORE", SimpleNamespace(
+        coordinate_calibration=lambda node: (
+            {"map_version": version if node == "UAV-01" else "foreign-map"}, "calibrated"
+        ),
+    ))
+    result = routes._check_plan_scene_identity({
+        "scene_id": scene, "map_version": version,
+        "steps": [{"node_id": "UAV-01"}, {"node_id": "UAV-02"}],
+    })
+    assert result["failure_reason"] == "map_version_mismatch"
+    assert result["detail"]["node_id"] == "UAV-02"
 
 
 def test_unavailable_active_scene_is_refused_not_skipped() -> None:

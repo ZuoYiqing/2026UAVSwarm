@@ -29,6 +29,7 @@ of the plan; per current operator policy, the first failure aborts the plan.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import urllib.error
 import urllib.request
@@ -189,10 +190,12 @@ class RealActionExecutor:
         api_base: str = "http://127.0.0.1:8765/api",
         post: Callable[[str, dict[str, Any], float], tuple[int, dict[str, Any]]] | None = None,
         timeout_s: float = 120.0,
+        plan_id: str | None = None,
     ) -> None:
         self.api_base = str(api_base).rstrip("/")
         self._post = post or _default_post
         self.timeout_s = float(timeout_s)
+        self.plan_id = plan_id
 
     # -- parameter shaping -------------------------------------------------
 
@@ -247,6 +250,9 @@ class RealActionExecutor:
         cost us two live-flight bugs.
         """
         evidence: dict[str, Any] = {}
+        for key in ("action_id", "request_id", "trace_id", "idempotency_key", "node_id", "lifecycle_status"):
+            if key in payload:
+                evidence[key] = payload[key]
         if action_type in ("takeoff", "smoke_takeoff"):
             completion = payload.get("completion_evidence")
             if isinstance(completion, dict):
@@ -330,6 +336,15 @@ class RealActionExecutor:
             )
 
         url = f"{self.api_base}{endpoint}"
+        if self.plan_id is not None:
+            # Stable across a lost HTTP response; endpoints enforce both the
+            # idempotency key and the action's actual parameter fingerprint.
+            trace = hashlib.sha256(json.dumps(self.plan_id).encode("ascii")).hexdigest()
+            step_key = hashlib.sha256(json.dumps(
+                [self.plan_id, str(getattr(step, "step_id", ""))],
+            ).encode("ascii")).hexdigest()
+            body.update(request_id=f"plan-step-{step_key}", idempotency_key=f"plan-step-{step_key}",
+                        trace_id=f"plan-{trace}", command_source="agent")
         try:
             status, payload = self._post(url, body, self.timeout_s)
         except urllib.error.HTTPError as exc:
@@ -338,13 +353,16 @@ class RealActionExecutor:
                 detail = json.loads(exc.read().decode("utf-8") or "{}")
             except Exception:  # noqa: BLE001 - body may be empty or not JSON
                 detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
             return StepOutcome(
                 ok=False,
                 action_type=action_type,
                 node_id=node_id,
                 http_status=int(getattr(exc, "code", 0) or 0),
                 failure_reason=str(detail.get("failure_reason") or detail.get("error") or f"http_{getattr(exc, 'code', 'unknown')}"),
-                raw=detail if isinstance(detail, dict) else {},
+                evidence=self._completion_evidence(action_type, detail),
+                raw=detail,
             )
         except Exception as exc:  # noqa: BLE001 - network, timeout, JSON, DNS...
             return StepOutcome(
@@ -370,7 +388,12 @@ class RealActionExecutor:
         # recreate the "plan says done, aircraft did nothing" bug.
         accepted = payload.get("accepted")
         result = payload.get("result")
-        ok = bool(accepted is True) and result != "fail" and status < 400
+        lifecycle = payload.get("lifecycle_status", payload.get("status"))
+        completion = payload.get("completion_evidence")
+        ok = (accepted is True and result == "pass" and status < 400
+              and (lifecycle == "succeeded" or (self.plan_id is None and lifecycle is None))
+              and (self.plan_id is None or action_type != "goto" or payload.get("arrival_observed") is True)
+              and not (isinstance(completion, dict) and completion.get("completion_reached") is False))
         return StepOutcome(
             ok=ok,
             action_type=action_type,
@@ -379,7 +402,9 @@ class RealActionExecutor:
             accepted=accepted if isinstance(accepted, bool) else None,
             result=str(result) if result is not None else None,
             failure_reason=None if ok else str(
-                payload.get("failure_reason") or payload.get("code") or "action_not_accepted"
+                payload.get("failure_reason") or
+                ("action_completion_unconfirmed" if accepted is True and status < 400
+                 else payload.get("code") or "action_not_accepted")
             ),
             evidence=self._completion_evidence(action_type, payload),
             raw=payload,

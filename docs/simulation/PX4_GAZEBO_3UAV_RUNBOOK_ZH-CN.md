@@ -197,20 +197,28 @@ python3 simulation/px4_gazebo/harness.py preflight \
   --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 ```
 
-它会报告：① 这份配置有没有相机；② harness state 是否写在**别的仓库**
-（`harness.py` 的 `REPO_ROOT` 是它所在目录的上两级，因此状态与标定证据跟着
-跑仿真的那个仓库走，而 Runtime 只认本仓库的 `.runtime/`）；
-③ **当前实际在跑的是不是被检查的这一份**。错位时退出码非 0。
+它检查相机配置、状态所在的工作区，以及运行中的 manifest 是否匹配。预检和启停
+共用仿真运行目录，默认是仓库下的 `.runtime/px4_gazebo`。设置
+`UAV_SIM_RUNTIME_ROOT` 可指定其他目录，相对路径以仓库为基准。启停和采样时
+应使用同一目录。如果 Windows 不能访问 WSL 软链接，预检返回
+`harness_state_unreadable` 和非零退出码。此时可在 WSL 同一工作区运行预检。
+`harness_state.status=missing` 表示未找到状态文件，运行 manifest 状态仍是未知。
+其他工作区不可读时单独报告 `worktree_state_scan_incomplete`，并列出未检查的路径。
 
 启动前 Harness 会拒绝：
 
 - 非 Linux / WSL 环境；
-- 缺少 PX4 binary、etc 或 world；
+- 缺少 PX4 binary、etc、world 或 manifest 对应的 Gazebo `model.sdf`；
 - 旧状态文件与当前进程身份不一致；
 - 外部 PX4 进程或其他 Gazebo world；
-- 需要的 UDP 端口已被占用。
+- PX4 本地绑定的 UDP 端口已被占用。Runtime 在 `14540–14542` 的接收 socket 可以保持打开。
 
 启动成功不是完整健康证明，必须继续运行 health。
+
+同一 worktree 的 start/stop 串行执行。对已经完整启动的三机，使用同一配置文件、
+PX4 路径和启动模式重复执行 start 会提示当前 `run_id` 并成功返回。脚本核对
+配置内容、world 文件、受管进程和三个模型。旧版状态缺少配置摘要时，先用原
+worktree 停止后再用新版启动。更换 manifest、GUI 模式或 world 时先停止。
 
 ## 8. 持续健康检查
 
@@ -385,6 +393,9 @@ scenarios/simple_recon_v0_1/missions/three_uav_patrol_v0_1.json
 
 ## 11. 四模块集成运行
 
+演示用的现场验收步骤、区域覆盖函数以及 Gazebo 与 Cesium 的坐标对照见
+[2026-11-13 仿真交付记录](DEMO_READINESS_20261113_ZH-CN.md)。
+
 推荐顺序：
 
 ```text
@@ -428,7 +439,8 @@ state v1.2 记录：
 1. 重新读取 `/proc` 并验证身份；
 2. 身份匹配才发送 SIGTERM；
 3. 超时后再次验证身份，仍匹配才发送 SIGKILL；
-4. 等待 PX4 PID 退出；
+4. 等待 PX4 PID 和受管组内子进程退出。Gazebo server 若仍存活，只有在已记录
+   且再次通过身份校验时才对该 PID 发送信号；
 5. 验证目标 Gazebo world 消失；
 6. 验证相关 UDP 端口可重新绑定；
 7. 全部通过后删除 state 和 PID 文件。
@@ -569,11 +581,12 @@ bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh cleanup
 
 ### stop 返回 cleanup_incomplete
 
-进程可能已退出，但 world 或 UDP 端口仍残留。先停止 Runtime/receiver，再检查：
+按停止结果中的 `live_group_member_pids`、world 和 PX4 本地端口核对残留。
+在对接 Runtime 的重启验收中保留 Runtime 和它的接收端口：
 
 ```bash
 gz topic -l | grep simple_recon_v0_1
-ss -lunp | grep -E '14540|14541|14542|14580|14581|14582'
+ss -lunp | grep -E ':(1458[0-2]|1857[0-2]|1428[0-2]|1303[0-2])\b'
 ```
 
 ### `running_manifest_mismatch`（起的是默认版却以为在跑相机版）

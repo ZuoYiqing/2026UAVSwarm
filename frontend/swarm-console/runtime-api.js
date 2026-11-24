@@ -162,6 +162,10 @@
     telemetryLatest: () => request("/telemetry/latest"),
     snapshot: () => request("/snapshot"),
     vehicleSnapshot: () => request("/vehicle-snapshot"),
+    missionProgress: () => request("/mission/progress"),
+    demoState: () => request("/demo/state"),
+    demoInject: body => request("/demo/inject", { method: "POST", body }),
+    demoClear: body => request("/demo/clear", { method: "POST", body }),
     agentStatus: () => request("/agent/status"),
     simulationStatus: () => request("/simulation/status"),
     // 只经地面网关读取；Bearer 与后台 heartbeat 由 Runtime 配置，不交给浏览器。

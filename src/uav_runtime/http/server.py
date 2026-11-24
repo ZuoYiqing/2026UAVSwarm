@@ -12,13 +12,13 @@ from __future__ import annotations
 import json
 import os
 import argparse
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from uav_runtime.http.routes import dispatch
-from uav_runtime.http.routes import VEHICLE_REGISTRY
+from uav_runtime.http.routes import configure_demo, dispatch
 
 ALLOWED_ORIGINS = {
     "http://localhost:5178",
@@ -55,15 +55,29 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
 
     def _handle_json_request(self) -> None:
         parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
         try:
-            if self.command == "POST" and (parsed.path.startswith("/api/platform/") or parsed.path in {
-                    "/api/simulation/evidence", "/api/coordinates/calibration"}):
+            demo_post = self.command == "POST" and path.startswith("/api/demo/")
+            platform_post = self.command == "POST" and (path.startswith("/api/platform/") or path in {
+                "/api/simulation/evidence", "/api/coordinates/calibration",
+            })
+            if demo_post or platform_post:
                 origin = self.headers.get("Origin")
-                if origin is not None and origin not in ALLOWED_ORIGINS:
-                    self._send_json(403, {"error": "origin_not_allowed"})
+                if ((demo_post and self.client_address[0] != "127.0.0.1")
+                        or (origin is not None and origin not in ALLOWED_ORIGINS)):
+                    error = "local_demo_origin_required" if demo_post else "origin_not_allowed"
+                    self._send_json(403, {"error": error})
                     return
                 if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                     self._send_json(415, {"error": "json_content_type_required"})
+                    return
+            if demo_post:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if not 1 <= length <= 4096:
+                    self._send_json(400, {"error": "invalid_demo_body_length"})
                     return
             if self.command == "GET" and parsed.path == "/api/platform/events/stream":
                 from uav_runtime.http import routes
@@ -134,7 +148,9 @@ def main(argv=None) -> int:
     parser.add_argument("--vehicle-config")
     parser.add_argument("--platform-url")
     parser.add_argument("--platform-token-file", type=Path)
+    parser.add_argument("--run-id", help="Active Simulation harness identity for read-only health evidence")
     args = parser.parse_args(argv)
+    routes.RUNTIME_RUN_ID = args.run_id
     source = VehicleRegistry.from_json(args.vehicle_config) if args.vehicle_config else routes.VEHICLE_REGISTRY
     for excluded in args.exclude_node:
         source.get_vehicle(excluded)
@@ -150,32 +166,39 @@ def main(argv=None) -> int:
         token = args.platform_token_file.read_text(encoding="utf-8").strip()
         if len(token) < 32 or any(c.isspace() for c in token):
             parser.error("platform token must contain at least 32 non-whitespace characters")
-        gateway = PlatformGateway(args.platform_url, token)
+        # Metadata-only fallback: never start this selected registry/session.
+        # It keeps the registered remote node visible before its first report.
+        remote_registry = select_registry(source, ["UAV-02"])
+        remote_store = RuntimeStateStore(vehicle_registry=remote_registry)
+        defaults = {"telemetry": remote_store.telemetry_latest(), "vehicles": {"vehicles": remote_registry.vehicle_rows()},
+                    "runtime_snapshot": remote_store.runtime_snapshot(), "vehicle_snapshot": remote_store.vehicle_snapshot()}
+        gateway = PlatformGateway(args.platform_url, token, default_projections=defaults)
         routes.PLATFORM_GATEWAY = gateway
-    server = create_server()
-    leases = []
     telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-    try:
+    with ExitStack() as resources:
+        server = create_server()
+        resources.callback(server.server_close)
         if telemetry_enabled:
             for handle in registry.list_vehicles():
                 if handle.config.enabled and handle.config.endpoint.startswith("udpin:127.0.0.1:"):
-                    leases.append(TransportLease(handle.config.endpoint))
+                    lease = TransportLease(handle.config.endpoint)
+                    resources.callback(lease.close)
+        # Only this filtered registry owns receivers. Unwind demo, gateway,
+        # registry, leases and HTTP in reverse startup order, even on errors.
+        resources.callback(registry.stop_all)
+        if telemetry_enabled:
             registry.start_all()
         if gateway:
+            resources.callback(gateway.close)
             gateway.start()
+        demo = configure_demo()
+        if demo is not None:
+            resources.callback(demo.close)
         print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if gateway:
-            gateway.stop.set()
-            if gateway.thread:
-                gateway.thread.join(timeout=3)
-        registry.stop_all()
-        for lease in leases:
-            lease.close()
-        server.server_close()
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
     return 0
 
 

@@ -26,6 +26,7 @@
   "endpoints": {
     "submit": "POST /api/platform/tasks",
     "status": "GET /api/platform/status",
+    "view": "GET /api/platform/view",
     "task": "GET /api/platform/tasks/{task_id}",
     "cancel": "POST /api/platform/tasks/{task_id}/cancel",
     "reconcile": "POST /api/platform/tasks/{task_id}/reconcile",

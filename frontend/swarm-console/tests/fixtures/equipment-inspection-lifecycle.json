@@ -1,0 +1,654 @@
+{
+  "evidence_kind": "fake_action_io_and_in_process_runtime_dispatch",
+  "baseline": "6a680feb6e50bdc7729e3ded6069cce6c0928dd3",
+  "producer_commit": "9398b10144d586183d3e1464ffa9eef1f19e9ae6",
+  "scenario": "target-001 equipment marker navigation only",
+  "coverage_parameters": {
+    "area_id": "three-uav-patrol-coverage-v1",
+    "fixture_footprint_radius_m": 10
+  },
+  "plan": {
+    "plan_id": "fake-target-001-patrol-v1",
+    "intent_id": "equipment-inspection-fixture",
+    "mission_type": "equipment_inspection_navigation_only",
+    "scene_id": "simple_recon_v0_1",
+    "map_version": "simple_recon_v0_1-map-1",
+    "explanation": "Fake navigation to target-001 visual marker; NOT sensor inspection.",
+    "steps": [
+      {
+        "step_id": "takeoff",
+        "node_id": "UAV-02",
+        "action_type": "takeoff",
+        "params": {
+          "altitude_m": 6
+        }
+      },
+      {
+        "step_id": "goto-0",
+        "node_id": "UAV-02",
+        "action_type": "goto",
+        "params": {
+          "north_m": 0,
+          "east_m": 25,
+          "down_m": -6,
+          "arrival_tolerance_m": 0.5,
+          "hold_s": 0.5
+        }
+      },
+      {
+        "step_id": "goto-1",
+        "node_id": "UAV-02",
+        "action_type": "goto",
+        "params": {
+          "north_m": 30,
+          "east_m": 25,
+          "down_m": -6,
+          "arrival_tolerance_m": 0.5,
+          "hold_s": 0.5
+        }
+      },
+      {
+        "step_id": "goto-2",
+        "node_id": "UAV-02",
+        "action_type": "goto",
+        "params": {
+          "north_m": 30,
+          "east_m": 15,
+          "down_m": -6,
+          "arrival_tolerance_m": 0.5,
+          "hold_s": 0.5
+        }
+      },
+      {
+        "step_id": "goto-3",
+        "node_id": "UAV-02",
+        "action_type": "goto",
+        "params": {
+          "north_m": 30,
+          "east_m": 25,
+          "down_m": -6,
+          "arrival_tolerance_m": 0.5,
+          "hold_s": 0.5
+        }
+      },
+      {
+        "step_id": "goto-4",
+        "node_id": "UAV-02",
+        "action_type": "goto",
+        "params": {
+          "north_m": 0,
+          "east_m": 25,
+          "down_m": -6,
+          "arrival_tolerance_m": 0.5,
+          "hold_s": 0.5
+        }
+      },
+      {
+        "step_id": "land",
+        "node_id": "UAV-02",
+        "action_type": "land",
+        "params": {}
+      }
+    ]
+  },
+  "completed_run": {
+    "before": {
+      "contract_version": "1.0",
+      "status": "unavailable",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": null,
+      "run_id": null,
+      "scene_id": null,
+      "map_version": null,
+      "source_timestamp": null,
+      "completion_basis": null,
+      "completion_pct": null,
+      "waypoints_reached": null,
+      "waypoints_total": null,
+      "area_total_km2": null,
+      "area_covered_km2": null,
+      "coverage_pct": null,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": null,
+      "vehicles_active": null,
+      "vehicles": [],
+      "coverage": null,
+      "coverage_reason": null,
+      "reason": "no_runtime_plan_execution"
+    },
+    "starting": {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "2400a512adf84db5bd8b5cfd4df4d168",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:47:35.233314+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 0.0,
+      "waypoints_reached": 0,
+      "waypoints_total": 5,
+      "area_total_km2": 0.00475,
+      "area_covered_km2": 0.0,
+      "coverage_pct": 0.0,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 0,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": {
+        "method": "scene_ned_grid_cell_center_v1",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "area_id": "three-uav-patrol-coverage-v1",
+        "frame": "scene_ned",
+        "cell_size_m": 1.0,
+        "footprint_radius_m": 10.0,
+        "sample_count": 0,
+        "area_total_km2": 0.00475,
+        "area_covered_km2": 0.0,
+        "completion_pct": 0.0,
+        "grid": null,
+        "polygon": [
+          {
+            "north_m": -45,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": 25
+          },
+          {
+            "north_m": -45,
+            "east_m": 25
+          }
+        ]
+      },
+      "coverage_reason": null,
+      "reason": null
+    },
+    "first_arrival": {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "2400a512adf84db5bd8b5cfd4df4d168",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:47:35.249393+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 20.0,
+      "waypoints_reached": 1,
+      "waypoints_total": 5,
+      "area_total_km2": 0.00475,
+      "area_covered_km2": 0.000158,
+      "coverage_pct": 3.3263157894736843,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 1,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": {
+        "method": "scene_ned_grid_cell_center_v1",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "area_id": "three-uav-patrol-coverage-v1",
+        "frame": "scene_ned",
+        "cell_size_m": 1.0,
+        "footprint_radius_m": 10.0,
+        "sample_count": 1,
+        "area_total_km2": 0.00475,
+        "area_covered_km2": 0.000158,
+        "completion_pct": 3.3263157894736843,
+        "grid": {
+          "version": "1.0",
+          "frame": "scene_ned",
+          "units": "m",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "area_id": "three-uav-patrol-coverage-v1",
+          "scene_origin": {
+            "reference": "scene_json.origin",
+            "lat_deg": 47.3979709,
+            "lon_deg": 8.5461639,
+            "alt_m": 0.0
+          },
+          "grid_origin_ned_m": {
+            "north_m": -45.0,
+            "east_m": -25.0
+          },
+          "cell_size_m": 20.0,
+          "rows": 5,
+          "columns": 3,
+          "source_cell_size_m": 1.0,
+          "cell_fields": [
+            "north_index",
+            "east_index",
+            "covered_source_cells"
+          ],
+          "covered_cells": [
+            [
+              1,
+              2,
+              31
+            ],
+            [
+              2,
+              2,
+              127
+            ]
+          ]
+        },
+        "polygon": [
+          {
+            "north_m": -45,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": 25
+          },
+          {
+            "north_m": -45,
+            "east_m": 25
+          }
+        ]
+      },
+      "coverage_reason": null,
+      "reason": null
+    },
+    "before_land": {
+      "contract_version": "1.0",
+      "status": "running",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "2400a512adf84db5bd8b5cfd4df4d168",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:47:35.282333+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 100.0,
+      "waypoints_reached": 5,
+      "waypoints_total": 5,
+      "area_total_km2": 0.00475,
+      "area_covered_km2": 0.000508,
+      "coverage_pct": 10.694736842105263,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 1,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": true,
+          "waypoints_reached": 5,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": {
+        "method": "scene_ned_grid_cell_center_v1",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "area_id": "three-uav-patrol-coverage-v1",
+        "frame": "scene_ned",
+        "cell_size_m": 1.0,
+        "footprint_radius_m": 10.0,
+        "sample_count": 5,
+        "area_total_km2": 0.00475,
+        "area_covered_km2": 0.000508,
+        "completion_pct": 10.694736842105263,
+        "grid": {
+          "version": "1.0",
+          "frame": "scene_ned",
+          "units": "m",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "area_id": "three-uav-patrol-coverage-v1",
+          "scene_origin": {
+            "reference": "scene_json.origin",
+            "lat_deg": 47.3979709,
+            "lon_deg": 8.5461639,
+            "alt_m": 0.0
+          },
+          "grid_origin_ned_m": {
+            "north_m": -45.0,
+            "east_m": -25.0
+          },
+          "cell_size_m": 20.0,
+          "rows": 5,
+          "columns": 3,
+          "source_cell_size_m": 1.0,
+          "cell_fields": [
+            "north_index",
+            "east_index",
+            "covered_source_cells"
+          ],
+          "covered_cells": [
+            [
+              1,
+              2,
+              31
+            ],
+            [
+              2,
+              2,
+              127
+            ],
+            [
+              3,
+              1,
+              127
+            ],
+            [
+              3,
+              2,
+              146
+            ],
+            [
+              4,
+              1,
+              31
+            ],
+            [
+              4,
+              2,
+              46
+            ]
+          ]
+        },
+        "polygon": [
+          {
+            "north_m": -45,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": 25
+          },
+          {
+            "north_m": -45,
+            "east_m": 25
+          }
+        ]
+      },
+      "coverage_reason": null,
+      "reason": null
+    },
+    "progress": {
+      "contract_version": "1.0",
+      "status": "completed",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "2400a512adf84db5bd8b5cfd4df4d168",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:47:35.290071+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 100.0,
+      "waypoints_reached": 5,
+      "waypoints_total": 5,
+      "area_total_km2": 0.00475,
+      "area_covered_km2": 0.000508,
+      "coverage_pct": 10.694736842105263,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 0,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": false,
+          "waypoints_reached": 5,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": {
+        "method": "scene_ned_grid_cell_center_v1",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "area_id": "three-uav-patrol-coverage-v1",
+        "frame": "scene_ned",
+        "cell_size_m": 1.0,
+        "footprint_radius_m": 10.0,
+        "sample_count": 5,
+        "area_total_km2": 0.00475,
+        "area_covered_km2": 0.000508,
+        "completion_pct": 10.694736842105263,
+        "grid": {
+          "version": "1.0",
+          "frame": "scene_ned",
+          "units": "m",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "area_id": "three-uav-patrol-coverage-v1",
+          "scene_origin": {
+            "reference": "scene_json.origin",
+            "lat_deg": 47.3979709,
+            "lon_deg": 8.5461639,
+            "alt_m": 0.0
+          },
+          "grid_origin_ned_m": {
+            "north_m": -45.0,
+            "east_m": -25.0
+          },
+          "cell_size_m": 20.0,
+          "rows": 5,
+          "columns": 3,
+          "source_cell_size_m": 1.0,
+          "cell_fields": [
+            "north_index",
+            "east_index",
+            "covered_source_cells"
+          ],
+          "covered_cells": [
+            [
+              1,
+              2,
+              31
+            ],
+            [
+              2,
+              2,
+              127
+            ],
+            [
+              3,
+              1,
+              127
+            ],
+            [
+              3,
+              2,
+              146
+            ],
+            [
+              4,
+              1,
+              31
+            ],
+            [
+              4,
+              2,
+              46
+            ]
+          ]
+        },
+        "polygon": [
+          {
+            "north_m": -45,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": 25
+          },
+          {
+            "north_m": -45,
+            "east_m": 25
+          }
+        ]
+      },
+      "coverage_reason": null,
+      "reason": null
+    },
+    "receipt": {
+      "result": "completed",
+      "failure_reason": null,
+      "aborted_at_step": null,
+      "run_id": "2400a512adf84db5bd8b5cfd4df4d168",
+      "plan": {
+        "plan_id": "fake-target-001-patrol-v1"
+      }
+    }
+  },
+  "failed_run": {
+    "progress": {
+      "contract_version": "1.0",
+      "status": "failed",
+      "mode": "LIVE",
+      "source": "runtime_plan_executor",
+      "mission_id": "fake-target-001-patrol-v1",
+      "run_id": "6e9c6b3bbc2b47a698b316489409c481",
+      "scene_id": "simple_recon_v0_1",
+      "map_version": "simple_recon_v0_1-map-1",
+      "source_timestamp": "2026-11-22T08:47:35.319816+00:00",
+      "completion_basis": "verified_waypoints",
+      "completion_pct": 20.0,
+      "waypoints_reached": 1,
+      "waypoints_total": 5,
+      "area_total_km2": 0.00475,
+      "area_covered_km2": 0.000158,
+      "coverage_pct": 3.3263157894736843,
+      "targets_found": null,
+      "targets_total": null,
+      "degraded": false,
+      "vehicles_active": 0,
+      "vehicles": [
+        {
+          "node_id": "UAV-02",
+          "active": false,
+          "waypoints_reached": 1,
+          "waypoints_total": 5
+        }
+      ],
+      "coverage": {
+        "method": "scene_ned_grid_cell_center_v1",
+        "scene_id": "simple_recon_v0_1",
+        "map_version": "simple_recon_v0_1-map-1",
+        "area_id": "three-uav-patrol-coverage-v1",
+        "frame": "scene_ned",
+        "cell_size_m": 1.0,
+        "footprint_radius_m": 10.0,
+        "sample_count": 1,
+        "area_total_km2": 0.00475,
+        "area_covered_km2": 0.000158,
+        "completion_pct": 3.3263157894736843,
+        "grid": {
+          "version": "1.0",
+          "frame": "scene_ned",
+          "units": "m",
+          "scene_id": "simple_recon_v0_1",
+          "map_version": "simple_recon_v0_1-map-1",
+          "area_id": "three-uav-patrol-coverage-v1",
+          "scene_origin": {
+            "reference": "scene_json.origin",
+            "lat_deg": 47.3979709,
+            "lon_deg": 8.5461639,
+            "alt_m": 0.0
+          },
+          "grid_origin_ned_m": {
+            "north_m": -45.0,
+            "east_m": -25.0
+          },
+          "cell_size_m": 20.0,
+          "rows": 5,
+          "columns": 3,
+          "source_cell_size_m": 1.0,
+          "cell_fields": [
+            "north_index",
+            "east_index",
+            "covered_source_cells"
+          ],
+          "covered_cells": [
+            [
+              1,
+              2,
+              31
+            ],
+            [
+              2,
+              2,
+              127
+            ]
+          ]
+        },
+        "polygon": [
+          {
+            "north_m": -45,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": -25
+          },
+          {
+            "north_m": 50,
+            "east_m": 25
+          },
+          {
+            "north_m": -45,
+            "east_m": 25
+          }
+        ]
+      },
+      "coverage_reason": null,
+      "reason": null
+    },
+    "receipt": {
+      "result": "failed",
+      "failure_reason": "arrival_timeout",
+      "aborted_at_step": "goto-1",
+      "run_id": "6e9c6b3bbc2b47a698b316489409c481",
+      "plan": {
+        "plan_id": "fake-target-001-patrol-v1"
+      }
+    }
+  }
+}

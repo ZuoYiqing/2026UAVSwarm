@@ -380,9 +380,10 @@ class GotoRequest(BackendRequest):
 class PlanExecuteRequest:
     """Submit a Mission Plan IR for real execution on Runtime.
 
-    This is the contract the algorithm side produces against: it hands over a
-    structured plan, Runtime sequences it and applies the Policy Gate before
-    every action.
+    This is the approved-execution request, not the algorithm's Proposal or
+    planner preview. Runtime sequences a submitted plan and applies the Policy
+    Gate before every action. The operator_id field records a supplied identity;
+    it does not authenticate the caller by itself.
 
     **Scene identity is required.**  ``plan.scene_id`` and ``plan.map_version``
     must be present and non-empty.  Runtime refuses a plan it cannot check
@@ -398,7 +399,7 @@ class PlanExecuteRequest:
 
     plan: dict[str, Any]
     operator_id: str
-    decision: str = "approve"
+    decision: str
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> "PlanExecuteRequest":
@@ -430,6 +431,7 @@ class PlanExecuteRequest:
                 "invalid_parameter", "plan.steps", "plan.steps 必须是非空数组",
                 value=steps,
             )
+        step_ids: set[str] = set()
         for index, step in enumerate(steps):
             if not isinstance(step, dict):
                 raise RequestValidationError(
@@ -450,6 +452,13 @@ class PlanExecuteRequest:
                     value=step.get("action_type"),
                 )
             params = step.get("params", {})
+            if step["step_id"] in step_ids:
+                raise RequestValidationError("duplicate_step_id", f"plan.steps[{index}].step_id",
+                                             "step_id 必须在计划中唯一", value=step["step_id"])
+            step_ids.add(step["step_id"])
+            if step.get("status", "ready") not in ("pending", "ready"):
+                raise RequestValidationError("invalid_step_status", f"plan.steps[{index}].status",
+                                             "提交的步骤只能为 pending 或 ready", value=step.get("status"))
             if not isinstance(params, dict):
                 raise RequestValidationError(
                     "invalid_parameter",
@@ -474,7 +483,7 @@ class PlanExecuteRequest:
                 value=operator_id,
             )
 
-        decision = str(payload.get("decision", "approve") or "approve")
+        decision = payload.get("decision")
         if decision not in ("approve", "reject"):
             raise RequestValidationError(
                 "invalid_parameter", "decision", "decision 只能是 approve 或 reject",

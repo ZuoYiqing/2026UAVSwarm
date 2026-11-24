@@ -5,18 +5,19 @@ from __future__ import annotations
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 try:
     from . import harness
     from .evidence import freshness, timestamp_seconds
     from .gazebo_evidence import probe_clock, server_identity, capture_poses
-    from .ground_reference import from_managed_world
+    from .ground_reference import from_managed_world, world_file_revision
 except ImportError:  # Direct script execution adds this directory to sys.path.
     import harness  # type: ignore
     from evidence import freshness, timestamp_seconds
     from gazebo_evidence import probe_clock, server_identity, capture_poses
-    from ground_reference import from_managed_world
+    from ground_reference import from_managed_world, world_file_revision
 
 
 DEFAULT_STABILITY_WINDOW_S = 10.0
@@ -242,10 +243,13 @@ def _runtime_telemetry_probes(
     runtime_telemetry: dict[str, Any] | None,
     *,
     run_id: str | None = None,
+    now: float | None = None,
 ) -> dict[str, dict[str, Any]]:
+    if now is None:
+        now = time.time()
     envelope_reason = "runtime_telemetry_missing"
     if isinstance(runtime_telemetry, dict):
-        valid, reason, _ = freshness(runtime_telemetry)
+        valid, reason, _ = freshness(runtime_telemetry, now=now)
         envelope_reason = "ok" if valid else f"runtime_telemetry_{reason}"
         if runtime_telemetry.get("scene_id") != manifest["scene_id"]:
             envelope_reason = "runtime_telemetry_scene_mismatch"
@@ -304,8 +308,8 @@ def _runtime_telemetry_probes(
             probes[node_id] = _failed_probe("runtime_telemetry_invalid", ValueError("boolean_or_endpoint_mismatch"))
             continue
         try:
-            heartbeat_age = time.time() - timestamp_seconds(row["heartbeat_timestamp"])
-            telemetry_age = time.time() - timestamp_seconds(row["position_timestamp"])
+            heartbeat_age = now - timestamp_seconds(row["heartbeat_timestamp"])
+            telemetry_age = now - timestamp_seconds(row["position_timestamp"])
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             probes[node_id] = _failed_probe("runtime_telemetry_invalid", exc)
             continue
@@ -322,6 +326,8 @@ def _runtime_telemetry_probes(
                 "source": "runtime",
                 "runtime_status": row.get("status"),
                 "runtime_evidence": row.get("evidence", {}),
+                "last_heartbeat_age_s": round(heartbeat_age, 3),
+                "last_telemetry_age_s": round(telemetry_age, 3),
             },
         }
     return probes
@@ -340,26 +346,32 @@ def collect_health(
     model_probe: Callable[[], set[str]] | None = None,
     world_probe: Callable[[], list[str]] = harness._running_gazebo_worlds,
     identity_reader: Callable[[int], harness.ProcessIdentityReadResult] | None = None,
+    now_provider: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
-    """Collect fail-closed simulator and mode-specific telemetry evidence."""
+    """Collect simulator evidence, using a UTC epoch clock for freshness checks."""
     if mode not in HEALTH_MODES:
         raise ValueError(f"unsupported health mode: {mode}")
     state = harness.read_state() or {}
     processes = list(state.get("processes", []))
-    decisions = harness._validate_processes(
-        processes,
-        run_id=str(state.get("run_id", "")),
-        identity_reader=identity_reader,
-    )
-    identity_by_node = {
-        str(row.node_id): row for row in decisions if row.node_id is not None
-    }
+    now_provider = now_provider or time.time
 
     vehicles = list(manifest["vehicles"])
     probe_rows: dict[str, dict[str, Any]] = {}
     expected_world = str(manifest["world_name"])
     worlds = world_probe()
-    source_timestamp = harness.utc_now()
+    reference = None
+    revision = None
+    ground_reference_status = "world_ambiguous"
+    if set(worlds) == {expected_world}:
+        # Even a fresh CLI process should finish disk I/O before sampling live evidence.
+        try:
+            revision = world_file_revision(manifest)
+            reference = from_managed_world(manifest, state, revision=revision)
+            ground_reference_status = "available"
+        except (OSError, ValueError) as exc:
+            ground_reference_status = f"{type(exc).__name__}:{exc}"
+
+    source_timestamp = datetime.fromtimestamp(now_provider(), timezone.utc).isoformat()
     def current_models() -> set[str]:
         if model_probe is not None:
             return model_probe()
@@ -398,20 +410,27 @@ def collect_health(
             models = set()
     source_timestamp = clock.get("source_timestamp", source_timestamp)
     server = server_identity(state, identity_reader=identity_reader)
-    # Re-check identities after probes; process replacement during observation
-    # must not inherit the initial identity decision.
+    # Check process identity after probes so replaced processes cannot inherit readiness.
     decisions = harness._validate_processes(processes, run_id=str(state.get("run_id", "")),
                                             identity_reader=identity_reader)
     identity_by_node = {str(row.node_id): row for row in decisions if row.node_id is not None}
+    if reference is not None:
+        try:
+            if world_file_revision(manifest) != revision:
+                raise ValueError("ground_reference_world_changed_during_probe")
+        except (OSError, ValueError) as exc:
+            reference = None
+            ground_reference_status = f"{type(exc).__name__}:{exc}"
+    if mode == "integrated" and runtime_telemetry_provider is not None:
+        runtime_telemetry = runtime_telemetry_provider()
+    checked_at = now_provider()
     if mode == "integrated":
-        if runtime_telemetry_provider is not None:
-            runtime_telemetry = runtime_telemetry_provider()
-        probe_rows = _runtime_telemetry_probes(manifest, runtime_telemetry, run_id=state.get("run_id"))
+        probe_rows = _runtime_telemetry_probes(manifest, runtime_telemetry, run_id=state.get("run_id"), now=checked_at)
     else:
         for probe in probe_rows.values():
             try:
-                heartbeat_age = time.time() - timestamp_seconds(probe["heartbeat_timestamp"])
-                position_age = time.time() - timestamp_seconds(probe["position_timestamp"])
+                heartbeat_age = checked_at - timestamp_seconds(probe["heartbeat_timestamp"])
+                position_age = checked_at - timestamp_seconds(probe["position_timestamp"])
                 probe["heartbeat_fresh"] = probe.get("heartbeat_fresh") is True and -0.1 <= heartbeat_age <= HEARTBEAT_MAX_AGE_S
                 probe["telemetry_fresh"] = probe.get("telemetry_fresh") is True and -0.1 <= position_age <= TELEMETRY_MAX_AGE_S
                 if not probe["heartbeat_fresh"] or not probe["telemetry_fresh"]:
@@ -522,18 +541,12 @@ def collect_health(
         "evidence_source": "simulation_integrated_health", "run_id": state.get("run_id"),
         "process_identity_valid": server["process_identity_valid"] and all(row["process_identity_valid"] for row in rows),
     }
-    ground_reference_status = "simulation_not_ready"
-    if simulator_ready and set(worlds) == {expected_world}:
-        try:
-            reference = from_managed_world(manifest, state)
-            runtime_evidence["ground_reference"] = reference
-            runtime_evidence["world_sha256"] = reference["world_sha256"]
-            ground_reference_status = "available"
-        except (OSError, ValueError) as exc:
-            ground_reference_status = f"{type(exc).__name__}:{exc}"
-    elif simulator_ready:
-        ground_reference_status = "world_ambiguous"
-    evidence_fresh, evidence_reason, evidence_age = freshness(runtime_evidence)
+    if not simulator_ready:
+        ground_reference_status = "simulation_not_ready"
+    elif reference is not None:
+        runtime_evidence["ground_reference"] = reference
+        runtime_evidence["world_sha256"] = reference["world_sha256"]
+    evidence_fresh, evidence_reason, evidence_age = freshness(runtime_evidence, now=checked_at)
     if not evidence_fresh:
         ready = simulator_ready = False
         runtime_evidence["world"]["status"] = "unknown"
@@ -561,7 +574,7 @@ def collect_health(
         "models": sorted(models),
         "scene_id": manifest["scene_id"],
         "unique_system_ids": unique_system_ids,
-        "checked_at": harness.utc_now(),
+        "checked_at": datetime.fromtimestamp(checked_at, timezone.utc).isoformat(),
         "reason": "ok" if ready else ",".join(dict.fromkeys(top_reasons)),
         "evidence": {
             "observed_worlds": worlds,

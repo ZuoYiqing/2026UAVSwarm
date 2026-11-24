@@ -1,0 +1,45 @@
+{
+  "kind": "uavswarm-semantic-preview",
+  "schema_version": "0.1",
+  "execution_authorized": false,
+  "source": {
+    "kind": "local_model_scene_selection",
+    "model_executed": true,
+    "evidence_file": "higher-2.raw.json",
+    "evidence_sha256": "648ca2ad70ab342d9a2dd36d7159ea5575e40a0229ed3771e09e5160b91728f3",
+    "catalog_file": "docs/fixtures/simple_recon_v0_1_scene_affordances.json",
+    "catalog_content_sha256": "1f431696ef96eaa1631ce60b0bf7d47c07a30ea619c706a5c909367e5c0b79ad",
+    "catalog_review_status": "exported_from_physics_pending_review"
+  },
+  "scene_id": "simple_recon_v0_1",
+  "map_version": "simple_recon_v0_1-map-1",
+  "objective": "请登记已导出目录里，北侧首排东半幅比20米高2米的那栋楼。",
+  "status": "clarify",
+  "reason_code": "MODEL_CHOICE_REQUIRES_REVIEW",
+  "bindings": [],
+  "candidates": [
+    {
+      "entity_id": "link-block-4-3-2-0",
+      "entity_kind": "building",
+      "height_m": 32.0,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    },
+    {
+      "entity_id": "link-block-4-3-3-0",
+      "entity_kind": "building",
+      "height_m": 22.0,
+      "source_reference": "scenarios/simple_recon_v0_1/worlds/simple_recon_v0_1.sdf"
+    }
+  ],
+  "clarification_question": "模型选择未核实；请对照导出目录明确楼栋 ID。",
+  "scope": {
+    "model_alias": "qwen3.5-0.8b-q4-lab",
+    "model_response": "{\"choice\":\"1\"}",
+    "verified": false,
+    "reference": "only the exported northeastern first-row buildings"
+  },
+  "limitations": [
+    "目录为部分物理导出，不能断言全地图不存在其它楼栋。",
+    "仅识别建筑，不生成或派发轨迹、航点和动作。"
+  ]
+}

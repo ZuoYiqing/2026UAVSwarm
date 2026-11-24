@@ -1,5 +1,160 @@
 # Mission LLM Lab v0.1
 
+## 任务书到候选计划：隔离联调样例
+
+本样例固定于项目基线 `6a680fe`。它复用现有 Mission Context / Proposal v0.1：
+原话决定选择哪些目录设备，选中的设备才产生任务和航点。候选只给测试桩或隔离 Fake Adapter
+作输入；示例包装不是新冻结契约，`execution_authorized` 和 `runtime_submission_allowed`
+始终为 `false`。不启动模型、Runtime、仿真或执行链。
+
+| 输入 | 结果 |
+| --- | --- |
+| 请巡检模拟冷却泵和模拟仪表柜。 | UAV-01 负责泵、UAV-02 负责柜，各有两个夹具航点并保留 `OBSERVE` |
+| 请巡检模拟仪表柜。 | 只输出柜的两个航点和 UAV-02 分工，不生成泵的任务 |
+| 请巡检模拟设备。 | 目标有两个候选，`TARGET_AMBIGUOUS`，无部分计划 |
+| 有明确目标，但缺少夹具证据标识 | `FIXTURE_EVIDENCE_REQUIRED`，无计划 |
+
+样例标记 `simple_recon_v0_1 / simple_recon_v0_1-map-1`、共享 `scene_ned`。试验泵/柜、
+节点状态和航点不是物理场景导出或标定证据。任务分工只比较夹具里可用节点到入口的平面距离；
+电量是筛选阈值，不是续航估计。已过滤 stale 节点；任务任一不确定就不交部分结果。
+实际场景可供性清单仍不完整，本样例没有认证障碍物、禁飞区、几何间距、返航或相机能力。
+
+Runtime 的 `PlanExecuteRequest` 不直接收 `assignments[]`：执行形状需要
+`plan_id / scene_id / map_version / steps[]`，步骤需明确 `step_id / action_type / node_id / params`，
+并由独立入口负责人工确认和 Policy。现有 `proposalToPlan` 会查同一份 Context 的有序航点 ID；
+两份巡检候选都因为 `OBSERVE` 尚不可展开被**整份拒绝**。不删观察步骤把飞完当巡检完成。
+候选只要求后续提供采集证据；目前没有观测、检测结果或完工声明。
+
+另有**独立的仅移动用例**：`target-001` 是场景的绿色标记，不是真实设备或检测结果。
+Fake 夹具假定 UAV-02 已在起始点，仅验证两个有序 `goto` 的输入形状及 `plan_id` 关联，
+不含起飞、降落、返航、采集和观察。形状通过请求解析器时只使用内存里的 `decision=reject`，
+不构造可以直接提交的外层审批请求。真实执行入口不能凭额外的 `scope` 或
+`execution_authorized` 字段判断可执行；联调方必须把测试产物留在独立 Fake 入口。
+用例的 `plan_id` 可给 Runtime 的 `mission_id` 做关联，`run_id` 只能由实际的 Fake
+生命周期生成，算法不伪造。`completed` 也只能由对应执行阶段的证据产生。
+
+移动例的已在位起点和去程两点，与仿真侧本地提交 `f6e5a1a` 的离线参考一致；
+这个参考不作为本模块的依赖。起点不是 UAV-02 的实际起降点，也没有从起降点前往起点的
+首航段。该样例不能作为实机或 SITL 上机许可。
+前端和三维可把这些数据标为候选供审阅，但不能用候选点补载具位姿，也不能用轨迹经过目标、
+模型文本或测试报告补造任务进度。进度只消费同一次执行的 Runtime 证据。
+
+在本模块目录复现（新目录，文件不会覆盖）：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/patrol-fixture-check
+python -B -m uavswarm_llm_lab.patrol_candidate --input examples/patrol_candidate_requests_v0_1.json --output artifacts/patrol-fixture-check/candidates.json
+node scripts/check_patrol_candidate_mapping.mjs artifacts/patrol-fixture-check/candidates.json artifacts/patrol-fixture-check/mapping-proof.json
+$env:PYTHONPATH = 'src;../../src'
+python -B scripts/check_patrol_candidate_runtime_shape.py artifacts/patrol-fixture-check/candidates.json artifacts/patrol-fixture-check/mapping-proof.json artifacts/patrol-fixture-check/runtime-schema-proof.json
+```
+
+## 离线协作评测（M-v0.1 / B-v0.2）
+
+这两套题分别测模拟巡检的异构派工，以及抽象记分游戏里的队友协作和对手响应。
+评测不调用 Runtime、主控台、Harness 或飞控，结果不授权执行。
+
+- **原题仍在**：[A-v0.4 的 12 条草案](docs/ANCHORING_A_V04_SWARM_GAME_DRAFT.md)原样保留；
+  它测读懂指代和顺序，不测分工。旧工作树的 B-v0.1 是一个模型替两枚棋子填答案的单轮快照，
+  与下述多回合题不混比分。
+- **异构派工 M-v0.1**：[8 个决策快照和 1 局反馈模拟](src/uavswarm_llm_lab/benchmarks/platform_coordination_m_v0_1.json)。
+  无人机查光伏板，无人车读表；同一资产的已核实异常才触发地面复核。覆盖只拍到图、
+  串错证据、掉线换人、没有合适平台等情况。固定派工 7/8，反馈局未跑完；可重分配规则 8/8，
+  三轮完成模拟任务：原机掉线 → 备用机只补未完成的屋顶任务 → 地面按核实证据复核。
+- **独立棋盘 B-v0.2**：[3 局 × 4 轮](src/uavswarm_llm_lab/benchmarks/board_coordination_b_v0_2.json)。
+  两个棋子分别作答，只在共享条件下向第二枚公开队友意向，只查已结算的对手历史。
+  三种规则策略均 24/24 合法；独选、共享意向、再看对手历史分别得 30、54、69 分，
+  同队重复 12/12、0/12、0/12 轮。最后一种在有 5 次前轮争抢的情况下 0 次重复原选；
+  本队得分提高不等于分差或胜率提高。
+
+### 本地 0.8B 实测（2026-11-20）
+
+RTX 4050、D 盘既有 Qwen3.5-0.8B Q4、llama.cpp b10964、2048 上下文、seed 0、temperature 0。
+题集与规则基线的内容哈希一致。第一轮 83 次请求，单变量对照 70 次，均收到回复，无执行链、
+训练或模型下载；这些含同题复跑，不能当作 153 道新题。复跑的原派工和棋盘共享意向条件
+与第一轮同分。两轮可用 RAM 最低点样 2751 MiB，GPU 最高点样 49 °C，临时模型进程均已关闭。
+
+- **派工**：原模型方案 0/8 合法，三轮反馈局未完成。模型给足了字段，但对 8 个状态都返回
+  同一组四个派工、`deferred: []`。例如只有 RGB 时仍派地面复核；原机掉线后仍将 B 区给原机，
+  同时重排已有证据的 A 区。去掉每项任务的 `preferred` 字段（其余提示、知识和裁判不变），
+  8 份候选仍逐题等价，结果 0/8，不能把失败只归因于默认人选。合格的规则基线是 8/8 并完成反馈局。
+- **棋盘**：模型每项条件各 24 个真实选择，均是单步合法动作。分数与同队重复率另计。
+  看对手历史比只看队友意向少重复上一轮被争抢的牌（2/8 对 6/10），但仍每轮队内撞牌。
+  另给棋子 2 加一句明确的避重提醒、保持选项和裁判不变后，它 12/12 轮弃权，没有提高得分。
+
+| 0.8B 条件 | 本队得分 | 队内重复 / 12 轮 | 有其他不撞牌选项却弃权 |
+| --- | ---: | ---: | ---: |
+| 独立选择 | 17 | 9 | 0 |
+| 共享队友意向 | 13 | 12 | 0 |
+| 再看对手历史 | 19 | 12 | 0 |
+| 共享意向 + 明确避重提醒 | 13 | 0 | 12 |
+
+裁判新增「有不同于队友的公开牌却弃权」和「实际得到分的不同牌张数」指标。前者不假定知道
+对手本轮的选择；用原始选牌重新计分，没有再次推理或覆盖历史数据。最终 **64 项单元测试通过**。
+
+- 逐题规则基线与模拟反馈：`artifacts/coordination-baselines-20261120T035046332Z/`。
+- 真实原答及对照：`artifacts/coordination-qwen08-real-20261120T061228971562Z/` 和
+  `artifacts/coordination-qwen08-ablation-20261120T061602190555Z/`。
+  两个目录的 `responses.jsonl` 留存模型实际看到的消息、约束和原始回复，而非仅最终得分。
+- 新指标复算：`artifacts/coordination-board-regrade-20261120T061820694326Z.json`。制品均由 Git 忽略。
+
+在本模块目录复现两套无模型基线：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/coordination-check -Force
+python -B -m uavswarm_llm_lab.coordination_bench --suite mission --method rules --output artifacts/coordination-check/mission-rules.json
+python -B -m uavswarm_llm_lab.coordination_bench --suite board --method history --output artifacts/coordination-check/board-history.json
+```
+
+输出文件不能事先存在。已有同机离线模型时，切换到 `model` 或 `model-history`，并显式提供
+`--model-url`（回环地址，例如 `http://127.0.0.1:18116/v1`）与 `--model-id`。
+下一步先由规则筛掉掉线、缺证据和已完成的任务，再用新的优先级冲突题检验模型是否能在
+多个合法候选之间做取舍。本轮未测 4B；不把少撞牌、语义正确或模拟完成当作真实巡检通过。
+
+2026-11-20：[主控台的模型实测回放](../../frontend/swarm-console/README.md#当前已接入的按钮)。
+它只验证限定目录中的目标楼栋选择，不测完整任务规划。程序从
+`simple_recon_v0_1 / simple_recon_v0_1-map-1` 的部分导出中选最近的正北坐标排，
+再取东坐标为正的楼栋；本轮候选 1 高 32 米，候选 2 高 22 米。
+模型只看到短语和编号描述，可返回候选编号、`unknown` 或 `clarify`。
+程序独立计算 `20 + 差值` 并比对该范围的目录高度：唯一匹配时检查 ID，无匹配时检查
+`unknown`，并列时检查 `clarify`。模型不一致时保留原始响应，输出待澄清且不绑定。
+0.8B 模型这三次均答候选 1，只有 32 米题正确；这不是泛化准确率。
+
+若已有同机离线推理服务，从本目录执行以下 PowerShell 命令重跑三条，并保存在新目录：
+
+```powershell
+$env:PYTHONPATH = 'src'
+New-Item -ItemType Directory artifacts/scene-preview-try
+python -B scripts/export_local_model_scene_preview.py ../../docs/fixtures/simple_recon_v0_1_scene_affordances.json artifacts/scene-preview-try --local-model-url http://127.0.0.1:18116/v1 --model-alias qwen3.5-0.8b-q4-lab
+```
+
+端口与别名须对应已启动的本地模型；脚本不自动启动模型、不覆盖原证据、不向 Runtime 提交。
+每条输出包含可导入的 `*.preview.json` 和可追溯的 `*.raw.json`。
+
+### 本机实时试推理接口（开发版）
+
+这和已合入主控台的回放是两个入口。模型已经在本机运行后，从本目录启动算法服务：
+
+```powershell
+$env:PYTHONPATH = 'src'
+python -B scripts/serve_semantic_preview.py
+```
+
+默认 Lab 端口为 `127.0.0.1:18118`，推理服务为 `127.0.0.1:18116/v1`，模型别名为
+`qwen3.5-0.8b-q4-lab`。Lab 不调用 Runtime，不启动模型，不写审计或飞行状态。
+浏览器只允许 5178 控制台的两个回环来源：`http://127.0.0.1:5178` 和 `http://localhost:5178`。
+
+- `GET /lab/semantic-preview/health`：只检查 Lab 服务，`model_status: "not_checked"` 不表示模型可用。
+- `POST /lab/semantic-preview`：JSON 只允许 `objective`。例如 `{"objective":"请登记已导出目录里，北侧首排东半幅比20米高2米的那栋楼。"}`。首版仅受理这一范围的楼栋题。
+- HTTP 200 返回 `api_version: "0.1"`、`mode: "live"`、`elapsed_ms`、`preview`（沿用回放
+  格式）及 `evidence_json`（与 `preview.source.evidence_sha256` 对应的原始 UTF-8 文本）。
+  200 不一定是绑定成功；看 `preview.status`。外层和预览都明确声明 `execution_authorized: false`。
+- 422（目标不受理）、429（已有推理进行）、502（模型回复被拒）、503（模型不可用）、504（模型超时）
+  通过 `error.reason_code` 区分；均无可用预览，不用回放数据替代实时失败。未加载前端也可用
+  本模块的回环 HTTP 测试验证协议（`python -B -m unittest discover -s tests -q`）。
+
 2026-10-05 最新：[三款模型的逐例输入输出及测试方法](docs/MODEL_EXPERIMENT_WALKTHROUGH_20261005.md)，
 [MiniCPM 采样/格式实验与背景地标修复](docs/MINICPM_SAMPLING_AND_ROLE_FIX_20261005.md)。
 旧报告的分数均是旧代码实验记录；修复后的规则基线另列，不能回写成旧实验的成绩。

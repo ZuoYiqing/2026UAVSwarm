@@ -9,19 +9,23 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import parse_qs
 from uuid import uuid4
 
 from uav_runtime.adapters.px4_sitl_backend import Px4SitlBackend
 from uav_runtime.adapters.px4_runtime_adapter import Px4RuntimeActionAdapter
+from uav_runtime.agent import executor as plan_execution
 from uav_runtime.agent.executor import RealActionExecutor
 from uav_runtime.agent.lifecycle import PlanApproval, PlanExecutionController, PlanStatus
 from uav_runtime.agent.planner import (
     MissionIntent,
     MissionPlan,
     MissionPlanStep,
+    PLAN_BLOCKED,
     PLAN_READY,
+    PlanResult,
     TemplateAgentPlanner,
 )
 from uav_runtime.http.schemas import (
@@ -49,11 +53,16 @@ from uav_runtime.runtime.orchestrator import RuntimeOrchestrator
 from uav_runtime.runtime.audit_log import AuditLog
 from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
-from uav_runtime.http.preflight import check_preflight
+from uav_runtime.http.demo import DemoRehearsal, parse_injection
+from uav_runtime.http.intent_resolution import resolve_preview_intent
+from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
+from uav_runtime.http.planner_preview import PlanPreviewProvenance, serialize_plan_preview
+from uav_runtime.http.preflight import check_preflight, check_peer_isolation
 from uav_runtime.runtime.vehicle_registry import VehicleHandle, VehicleRegistry, VehicleRegistryError
 
 AUDIT_PATH = os.environ.get("UAV_RUNTIME_AUDIT_PATH", "audit/runtime.audit.jsonl")
 PLATFORM_GATEWAY = None
+RUNTIME_RUN_ID = None
 BRIDGE_VERSION = "0.1"
 _DEFAULT_VEHICLE_CONFIG = (
     Path(__file__).resolve().parents[3]
@@ -64,6 +73,70 @@ _DEFAULT_VEHICLE_CONFIG = (
 )
 VEHICLE_REGISTRY = VehicleRegistry.from_json(os.environ.get("UAV_RUNTIME_VEHICLE_CONFIG", _DEFAULT_VEHICLE_CONFIG))
 RUNTIME_STATE_STORE = RuntimeStateStore(vehicle_registry=VEHICLE_REGISTRY)
+DEMO_REHEARSAL: DemoRehearsal | None = None
+_MISSION_PROGRESS: MissionProgress | None = None
+_MISSION_PROGRESS_LOCK = Lock()
+
+
+def mission_progress() -> dict[str, Any]:
+    with _MISSION_PROGRESS_LOCK:
+        progress = _MISSION_PROGRESS
+    return progress.snapshot() if progress is not None else unavailable_progress()
+
+
+def configure_demo() -> DemoRehearsal | None:
+    """Enable the rehearsal only at explicit server startup."""
+    global DEMO_REHEARSAL
+    if os.environ.get("UAV_RUNTIME_DEMO_ENABLED") != "1":
+        return None
+
+    def measured(node_id: str) -> int:
+        if node_id == "UAV-02" and PLATFORM_GATEWAY is not None:
+            view = PLATFORM_GATEWAY.cached_view()
+            snapshot = (view.get("projections") or {}).get("vehicle_snapshot") or {}
+            row = next((v for v in snapshot.get("vehicles", []) if v.get("id") == node_id), {})
+            return _platform_link_quality(row, fresh=view.get("fresh") is True)
+        handle = VEHICLE_REGISTRY.get_vehicle(node_id)
+        state = VEHICLE_REGISTRY.refresh_state(handle)
+        read = getattr(handle.session, "link_quality", None)
+        return read() if callable(read) and state.connected and not state.stale else 0
+
+    def append(event: dict[str, Any]) -> None:
+        AuditLog(AUDIT_PATH).append(event)
+        RUNTIME_STATE_STORE.record_event(event)
+
+    DEMO_REHEARSAL = DemoRehearsal(
+        lambda: [row["node_id"] for row in vehicles()["vehicles"] if row.get("enabled") is True],
+        measured, append,
+    )
+    DEMO_REHEARSAL.start()
+    return DEMO_REHEARSAL
+
+
+def _demo_route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+    demo = DEMO_REHEARSAL
+    if method == "GET" and path == "/api/demo/state":
+        return 200, demo.state() if demo else {
+            "contract_version": "1.0", "enabled": False, "mode": "LIVE", "overrides": [],
+            "held_out": [], "assignments": [], "execution_authorized": False, "flight_command_sent": False,
+        }
+    if method != "POST" or path not in {"/api/demo/inject", "/api/demo/clear"}:
+        return 404, {"error": "not_found"}
+    if demo is None:
+        return 404, {"error": "demo_disabled"}
+    node = body.get("node_id")
+    if not isinstance(node, str) or node not in demo.nodes():
+        return 400, {"error": "invalid_demo_node"}
+    try:
+        if path == "/api/demo/clear":
+            if set(body) != {"node_id"}:
+                raise ValueError("unexpected_demo_field")
+            changed = demo.clear(node)
+        else:
+            changed = demo.inject(node, *parse_injection(body))
+    except ValueError as exc:
+        return 400, {"error": str(exc)}
+    return 200, {**demo.state(), "changed": changed}
 
 
 def _utc_now() -> str:
@@ -92,6 +165,27 @@ def preflight(query: str = "") -> dict[str, Any]:
     node_ids = values.get("node_id", [])
     if set(values) != {"node_id"} or len(node_ids) != 1 or not node_ids[0].strip():
         raise RequestValidationError("invalid_parameter", "node_id", "Exactly one explicit node_id is required; overrides are forbidden")
+    if PLATFORM_GATEWAY is not None and node_ids[0] == "UAV-02":
+        try:
+            code, result = PLATFORM_GATEWAY.read_preflight()
+            if (code != 200 or result.get("node_id") != "UAV-02" or result.get("contract_version") != "1.0"
+                    or result.get("execution_authorized") is not False or result.get("flight_command_sent") is not False
+                    or not isinstance(result.get("nodes"), dict) or set(result["nodes"]) != {"UAV-02"}
+                    or result.get("status") not in {"ready", "not_ready"}):
+                raise ValueError("invalid_platform_preflight")
+            peers, reasons = check_peer_isolation(VEHICLE_REGISTRY)
+            result["nodes"] = {**peers, **result.get("nodes", {})}
+            result["reason_codes"] = sorted(set(result.get("reason_codes", []) + reasons))
+            if result["reason_codes"]:
+                result["status"] = "not_ready"
+            result["source"] = "runtime_platform_gateway"
+            return result
+        except Exception:
+            return {"contract_version": "1.0", "preflight_id": f"preflight-{uuid4()}",
+                    "node_id": "UAV-02", "timestamp": _utc_now(), "nodes": {},
+                    "status": "not_ready", "execution_authorized": False, "flight_command_sent": False,
+                    "home_evidence": None, "rtl_destination_evidence": None, "ground_context": None,
+                    "reason_codes": ["platform_link_unavailable"], "source": "runtime_platform_gateway"}
     return check_preflight(VEHICLE_REGISTRY, RUNTIME_STATE_STORE, node_ids[0])
 
 
@@ -461,6 +555,7 @@ def _execute_flight_action(
     cancel_event = admission["cancel_event"]
     RUNTIME_STATE_STORE.transition_action(action_id, "executing")
     landing_context: tuple[dict[str, Any], dict[str, Any]] | None = None
+    goto_calibration: dict[str, Any] | None = None
     execution_cursor: int | None = None
     execution_started = False
     try:
@@ -501,6 +596,7 @@ def _execute_flight_action(
             calibration, calibration_status = RUNTIME_STATE_STORE.coordinate_calibration(
                 handle.config.node_id
             )
+            goto_calibration = calibration
             translation = (calibration or {}).get("translation_scene_ned_m")
             if calibration_status != "calibrated" or not isinstance(translation, dict):
                 # **拒绝执行，而不是"尽力而为"地飞。** 没有可信平移量时把 scene 坐标
@@ -601,6 +697,20 @@ def _execute_flight_action(
         out.update(identity)
         out["execution_admitted"] = True
         out["policy_decision"] = policy_event
+        if action == "goto" and out.get("result") == "pass" and goto_calibration:
+            try:
+                current_calibration, status = RUNTIME_STATE_STORE.coordinate_calibration(handle.config.node_id)
+            except (ValueError, VehicleRegistryError):
+                current_calibration, status = None, "unavailable"
+            if (status == "calibrated" and current_calibration
+                    and all(current_calibration.get(key) == goto_calibration.get(key) for key in (
+                        "calibration_version", "session_position_epoch", "translation_scene_ned_m",
+                        "scene_id", "map_version",
+                    ))):
+                out["arrival_calibration"] = {key: goto_calibration.get(key) for key in (
+                    "scene_id", "map_version", "calibration_version", "session_position_epoch",
+                    "translation_scene_ned_m",
+                )}
         if action == "land" and out.get("result") == "pass":
             current_context = RUNTIME_STATE_STORE.ground_landing_context(handle.config.node_id)
             if (landing_context is None or current_context is None
@@ -703,27 +813,57 @@ def return_home(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
-    """Dry-run / plan-only bridge to TemplateAgentPlanner.
+    """Versioned plan preview; no model, execution, or adapter is called.
 
-    The planner endpoint returns Mission Plan IR only.  It does not execute
-    action steps, does not call PX4, and does not call adapters.
+    Explicit template keys keep the legacy path. An omitted/blank key or
+    "auto" uses offline rules and the loaded scene catalog, not caller data.
     """
     req = PlanMissionRequest.from_json(payload)
-    intent = MissionIntent(
-        intent_id=f"intent-http-{uuid4().hex[:10]}",
-        mission_type=req.mission_type,
-        source=req.source,
-        objective=req.objective,
-        requested_profile=req.profile,
-        dry_run=req.dry_run,
-    )
-    planner = TemplateAgentPlanner()
-    result = planner.plan(intent).to_dict()
+    resolution = None
+    if req.mission_type.strip() in {"", "auto"}:
+        resolution = resolve_preview_intent(
+            req.objective, scene_id=VEHICLE_REGISTRY.scene_id, scene=VEHICLE_REGISTRY.scene,
+        )
+    mission_type = resolution.mission_type if resolution is not None else req.mission_type
+    if resolution is not None and not resolution.supports_template_outline():
+        planned = PlanResult(
+            result=PLAN_BLOCKED,
+            failure_reason=("intent_not_representable_by_template" if resolution.status == "resolved"
+                            else "unsupported_mission_type"),
+            plan=None,
+            validation_summary={"step_count": 0, "blocked_steps": 0},
+            policy_summary={"checked_steps": 0, "denied_steps": 0, "require_confirm_steps": 0},
+        )
+    else:
+        intent = MissionIntent(
+            intent_id=f"intent-http-{uuid4().hex[:10]}",
+            mission_type=mission_type or "",
+            source=req.source,
+            objective=req.objective,
+            constraints=resolution.bindings() if resolution is not None else {},
+            requested_profile=req.profile,
+            dry_run=True if resolution is not None else req.dry_run,
+        )
+        planned = TemplateAgentPlanner().plan(intent)
+    result = serialize_plan_preview(planned, PlanPreviewProvenance(
+        intent_source=resolution.intent_source if resolution is not None else "explicit",
+        plan_source="template" if planned.plan is not None else "none",
+    ))
+    if resolution is not None:
+        semantic = resolution.to_dict()
+        result["intent_resolution"] = semantic
+        if result["plan"] is not None:
+            # Keep bindings with a saved preview, but never pass them off as
+            # parameters or constraints enforced by these generic steps.
+            result["plan"]["preview_binding"] = {
+                "steps_are_outline": True, "catalog": semantic["catalog"], "bindings": semantic["bindings"],
+            }
+            result["plan"]["explanation"] += " The steps are a template outline, not a target-specific route."
     RUNTIME_STATE_STORE.record_plan_result(result)
     plan = result.get("plan") or {}
     RUNTIME_STATE_STORE.record_event({
         "type": "agent_plan_created", "timestamp": _utc_now(),
-        "plan_id": plan.get("plan_id"), "mission_type": req.mission_type,
+        "plan_id": plan.get("plan_id"), "mission_type": mission_type,
         "status": plan.get("status"), "result": result.get("result"),
     })
     return result
@@ -732,9 +872,10 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
 def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     """Submit a Mission Plan IR for real execution.
 
-    This is the endpoint the algorithm side produces against.  Runtime's job
-    here is deliberately narrow: validate the plan shape, record the operator's
-    approval, then sequence the steps and report exactly what happened.
+    The read-only planner does not call this route. It is an execution
+    boundary for an approved Plan IR, not an algorithm or preview endpoint.
+    Runtime validates the plan, records the supplied operator decision, and
+    sequences the steps. A stated operator identity is not authentication.
 
     It does **not** invent planning strategy and does not weaken any safety
     check: every step is executed by calling the ordinary action endpoint, so
@@ -748,6 +889,29 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     the response names the failing step and the ones that never ran.
     """
     req = PlanExecuteRequest.from_json(payload)
+    try:
+        prior, created = RUNTIME_STATE_STORE.claim_plan_execution(req.plan["plan_id"], {
+            "plan": req.plan, "operator_id": req.operator_id, "decision": req.decision,
+        })
+    except ActionLifecycleError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise RequestValidationError("invalid_plan_json", "plan", "plan 必须为有限 JSON") from exc
+    if not created:
+        return {**prior, "idempotent_replay": True}
+    try:
+        result = _plans_execute_once(req)
+    except Exception as exc:
+        RUNTIME_STATE_STORE.finish_plan_execution(req.plan["plan_id"], {
+            "result": "failed", "failure_reason": "plan_execution_exception",
+            "error_class": type(exc).__name__, "plan": req.plan,
+            "execution_mode": "real", "step_outcomes": [],
+        })
+        raise
+    return RUNTIME_STATE_STORE.finish_plan_execution(req.plan["plan_id"], result)
+
+
+def _plans_execute_once(req: PlanExecuteRequest) -> dict[str, Any]:
     payload_plan = req.plan
 
     # --- 场景身份核对：在任何一步起飞之前 -------------------------------
@@ -777,6 +941,24 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
             "step_outcomes": [],
         }
 
+    # Validate every target before any step: a bad later node cannot permit
+    # partial takeoff on an earlier node.
+    if req.decision == "approve":
+        for raw in payload_plan["steps"]:
+            reason = _plan_step_rejection(raw)
+            if reason is None:
+                continue
+            result = {
+                "result": "blocked", "failure_reason": reason, "plan": payload_plan,
+                "execution_mode": "real", "step_outcomes": [],
+                "detail": {"step_id": raw["step_id"], "node_id": raw.get("node_id")},
+            }
+            RUNTIME_STATE_STORE.record_event({
+                "type": "agent_plan_rejected_preflight", "plan_id": payload_plan["plan_id"],
+                "failure_reason": reason, "detail": result["detail"], "timestamp": _utc_now(),
+            })
+            return result
+
     steps = [
         MissionPlanStep(
             step_id=str(raw["step_id"]),
@@ -801,7 +983,7 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
         # 用与动作链路同一个审计文件。注意这里**不能**用 rt：RuntimeOrchestrator
         # 是按次为单个动作构造的（见 _policy_checked_sitl_action），不是模块级对象。
         audit=AuditLog(AUDIT_PATH),
-        action_executor=RealActionExecutor(api_base=_self_api_base()),
+        action_executor=RealActionExecutor(api_base=_self_api_base(), plan_id=plan.plan_id),
     )
     loaded = controller.load_plan(plan)
     approval = PlanApproval.create(
@@ -826,10 +1008,31 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
             "step_outcomes": [],
         }
 
-    result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    # Observe existing execution; this projection never submits an action,
+    # changes an outcome, or reads another runner's standalone report.
+    global _MISSION_PROGRESS
+    coverage, coverage_reason, coverage_polygon = configured_coverage(
+        getattr(VEHICLE_REGISTRY, "scene", None), payload_plan["map_version"],
+    )
+    progress = MissionProgress(
+        controller.action_executor, approved, scene_id=payload_plan["scene_id"],
+        map_version=payload_plan["map_version"],
+        coverage=coverage, coverage_reason=coverage_reason, coverage_polygon=coverage_polygon,
+    )
+    controller.action_executor = progress
+    with _MISSION_PROGRESS_LOCK:
+        RUNTIME_STATE_STORE.bind_plan_run(plan.plan_id, progress.run_id)
+        _MISSION_PROGRESS = progress
+    try:
+        result = controller.execute_plan_real(approved, operator_id=req.operator_id)
+    except Exception:
+        progress.finish("failed")
+        raise
+    progress.finish(result.get("result"))
     RUNTIME_STATE_STORE.record_event({
         "type": "agent_plan_execution_result", "timestamp": _utc_now(),
         "plan_id": plan.plan_id,
+        "run_id": progress.run_id,
         "mission_type": plan.mission_type,
         "operator_id": req.operator_id,
         "result": result.get("result"),
@@ -839,6 +1042,35 @@ def plans_execute(payload: dict[str, Any]) -> dict[str, Any]:
     })
     RUNTIME_STATE_STORE.record_plan_result(result)
     return result
+
+
+def _plan_step_rejection(step: dict[str, Any]) -> str | None:
+    node = step.get("node_id", "")
+    if not node.strip():
+        return "step_target_vehicle_missing"
+    try:
+        handle = VEHICLE_REGISTRY.get_vehicle(node)
+    except VehicleRegistryError as exc:
+        return exc.code
+    if not handle.config.enabled:
+        return "vehicle_disabled"
+    action = step["action_type"].strip().lower()
+    try:
+        plan_execution.RealActionExecutor._require_endpoint(action)
+    except plan_execution.StepExecutionRefused as exc:
+        return exc.code
+    if action == "goto":
+        _, status = RUNTIME_STATE_STORE.coordinate_calibration(node)
+        if status != "calibrated":
+            return "coordinate_calibration_unavailable"
+        params = step.get("params", {})
+        if any(type(params.get(axis)) not in (int, float) for axis in ("north_m", "east_m", "down_m")):
+            return "goto_coordinates_required"
+        try:
+            GotoRequest.from_json({"node_id": node, **params})
+        except (RequestValidationError, OverflowError):
+            return "invalid_goto_parameters"
+    return None
 
 
 def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
@@ -874,8 +1106,7 @@ def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
         }
 
     # map_version 以当前节点的标定为准（它是坐标换算实际依据的那份地图版本）。
-    # 没有可用标定时不做判断 —— 那属于 coordinate_calibration_unavailable，
-    # 应由 goto 自己在执行时报告，不在这里冒充场景不匹配。
+    # 没有可用标定不冒充版本不匹配；计划预检和 GOTO 路由另行拒绝。
     node_ids = {str(step.get("node_id") or "") for step in plan.get("steps", [])}
     node_ids.discard("")
     for node_id in sorted(node_ids):
@@ -892,7 +1123,6 @@ def _check_plan_scene_identity(plan: dict[str, Any]) -> dict[str, Any] | None:
                     "node_id": node_id,
                 },
             }
-        break
 
     return None
 
@@ -906,26 +1136,85 @@ def _self_api_base() -> str:
     return f"http://127.0.0.1:{os.environ.get('UAV_RUNTIME_HTTP_PORT', '8765')}/api"
 
 
+def simulation_runtime_telemetry(query: str = "") -> tuple[int, dict[str, Any]]:
+    """Dedicated health evidence, deliberately distinct from UI telemetry/latest."""
+    if query:
+        return 400, {"error": "invalid_query", "flight_command_sent": False}
+    if not isinstance(RUNTIME_RUN_ID, str) or not RUNTIME_RUN_ID.strip():
+        return 503, {"error": "runtime_run_id_required", "flight_command_sent": False}
+    from uav_runtime.http.telemetry_evidence import local_evidence, remote_evidence
+    evidence = local_evidence(VEHICLE_REGISTRY, RUNTIME_RUN_ID)
+    if PLATFORM_GATEWAY is not None:
+        evidence["vehicles"] = [row for row in evidence["vehicles"] if row["node_id"] != "UAV-02"]
+        evidence["vehicles"].append(remote_evidence(PLATFORM_GATEWAY.cached_view(),
+                                                  scene_id=VEHICLE_REGISTRY.scene_id, run_id=RUNTIME_RUN_ID))
+    evidence["vehicles"].sort(key=lambda row: row["node_id"])
+    return 200, evidence
+
+
 def telemetry_latest(query: str = "") -> dict[str, Any]:
     """Return a cached telemetry snapshot without opening a MAVLink session."""
     node_id = parse_qs(query, keep_blank_values=True).get("node_id", [None])[0] or None
-    return RUNTIME_STATE_STORE.telemetry_latest(node_id=node_id)
+    if PLATFORM_GATEWAY is not None and node_id == "UAV-02":
+        from uav_runtime.platform.view import merge_projection
+        view = PLATFORM_GATEWAY.cached_view()
+        local = {"version": "1.0", "status": "unavailable", "fresh": False, "age_ms": None,
+                 "stale_after_ms": 3000, "backend": None, "backend_mode": None, "endpoint": None,
+                 "reason": "platform_view_unavailable", "source": "runtime_platform_gateway"}
+        local.update((view.get("projections") or {}).get("telemetry") or {})
+        local.update({"timestamp": _utc_now(), "nodes": []})
+        return merge_projection(local, view, "telemetry")
+    local = RUNTIME_STATE_STORE.telemetry_latest(node_id=node_id)
+    return _merge_platform_view(local, "telemetry") if node_id is None else local
 
 
 def vehicles() -> dict[str, Any]:
     """List registered nodes; reading registry state cannot execute commands."""
-    return {"version": "1.0", "timestamp": _utc_now(), "scene_id": VEHICLE_REGISTRY.scene_id,
-            "vehicles": VEHICLE_REGISTRY.vehicle_rows(), "source": "vehicle_registry"}
+    return _merge_platform_view({"version": "1.0", "timestamp": _utc_now(), "scene_id": VEHICLE_REGISTRY.scene_id,
+            "vehicles": VEHICLE_REGISTRY.vehicle_rows(), "source": "vehicle_registry"}, "vehicles")
 
 
 def runtime_snapshot() -> dict[str, Any]:
     """Return the non-blocking console snapshot assembled from owned state."""
-    return RUNTIME_STATE_STORE.runtime_snapshot()
+    snapshot = _merge_platform_view(RUNTIME_STATE_STORE.runtime_snapshot(), "runtime_snapshot")
+    if PLATFORM_GATEWAY is not None:
+        snapshot["simulation_status"] = simulation_status()
+    return snapshot
 
 
 def vehicle_snapshot() -> dict[str, Any]:
     """Return the Cesium vehicle feed projection from cached telemetry only."""
-    return RUNTIME_STATE_STORE.vehicle_snapshot()
+    snapshot = _merge_platform_view(RUNTIME_STATE_STORE.vehicle_snapshot(), "vehicle_snapshot")
+    active_run = RUNTIME_STATE_STORE.active_simulation_run_id() if PLATFORM_GATEWAY is not None else None
+    overrides = ({row["node_id"]: row for row in DEMO_REHEARSAL.state()["overrides"]}
+                 if DEMO_REHEARSAL is not None else {})
+    # merge_projection copies local and remote vehicle rows. Never write an
+    # override into the platform cache or into the measured value.
+    for vehicle in snapshot["vehicles"]:
+        if PLATFORM_GATEWAY is not None and vehicle["id"] == "UAV-02":
+            if active_run is not None:
+                from uav_runtime.platform.view import require_calibration_run
+                require_calibration_run(vehicle, active_run)
+            score = _platform_link_quality(vehicle, fresh=snapshot["platform_view"].get("fresh") is True)
+            vehicle.update(link_quality=score, link_quality_measured=score, link_quality_mode="LIVE")
+        if override := overrides.get(vehicle["id"]):
+            vehicle.update(link_quality=override["value"], link_quality_mode="DEMO")
+    return snapshot
+
+
+def _platform_link_quality(vehicle: dict[str, Any], *, fresh: bool) -> int:
+    value = vehicle.get("link_quality_measured")
+    if (fresh and vehicle.get("connected") is True and (vehicle.get("telemetry") or {}).get("stale") is False
+            and vehicle.get("link_quality_mode") == "LIVE" and type(value) is int and 0 <= value <= 100):
+        return value
+    return 0
+
+
+def _merge_platform_view(local, key):
+    if PLATFORM_GATEWAY is None:
+        return local
+    from uav_runtime.platform.view import merge_projection
+    return merge_projection(local, PLATFORM_GATEWAY.cached_view(), key)
 
 
 def agent_status() -> dict[str, Any]:
@@ -935,7 +1224,24 @@ def agent_status() -> dict[str, Any]:
 
 def simulation_status() -> dict[str, Any]:
     """Report Gazebo as unknown until independent simulator evidence exists."""
-    return RUNTIME_STATE_STORE.simulation_status()
+    status = RUNTIME_STATE_STORE.simulation_status()
+    if PLATFORM_GATEWAY is not None:
+        rows = vehicles()["vehicles"]
+        enabled = [row for row in rows if row.get("enabled", True)]
+        connected = [row for row in enabled if row.get("connected") and not row.get("stale", True)]
+        status.update({"total_registered_nodes": len(rows), "total_enabled_nodes": len(enabled),
+                       "connected_nodes": len(connected), "stale_nodes": sum(bool(r.get("stale", True)) for r in enabled),
+                       "offline_nodes": len(enabled) - len(connected), "any_px4_connected": bool(connected),
+                       "all_enabled_px4_connected": bool(enabled) and len(connected) == len(enabled),
+                       "px4_sitl_connected": bool(connected)})
+        if status.get("evidence_fresh"):
+            model_rows = {str(row.get("node_id")): row for row in status.get("models", []) if isinstance(row, dict)}
+            world = status.get("world")
+            ready = (status.get("clock_advancing") is True and isinstance(world, dict) and world.get("status") == "ready"
+                     and bool(enabled) and all(model_rows.get(row["node_id"], {}).get("status") == "ready" for row in enabled))
+            status.update({"status": "ready" if ready else "degraded", "gazebo_probe_status": "ready" if ready else "degraded",
+                           "reason": None if ready else "simulation_evidence_incomplete"})
+    return status
 
 
 def publish_simulation_evidence(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1060,6 +1366,10 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
 
 
 def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
+    if method == "GET" and normalized == "/api/mission/progress":
+        return 200, mission_progress()
+    if normalized.startswith("/api/demo/"):
+        return _demo_route(method, normalized, payload)
     if normalized.startswith("/api/platform/"):
         from uav_runtime.platform.contract import PlatformError
         if PLATFORM_GATEWAY is None:
@@ -1095,7 +1405,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         result = return_home(payload)
         return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/plans/execute":
-        return 200, plans_execute(payload)
+        result = plans_execute(payload)
+        return int(result.pop("_http_status", 200)), result
     if method == "POST" and normalized == "/api/simulation/evidence":
         result = publish_simulation_evidence(payload)
         if PLATFORM_GATEWAY is not None:
@@ -1107,6 +1418,10 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, result
     if method == "POST" and normalized == "/api/coordinates/calibration":
         if PLATFORM_GATEWAY is not None and payload.get("node_id") == "UAV-02":
+            try:
+                RUNTIME_STATE_STORE.check_coordinate_calibration_run(payload)
+            except ValueError as exc:
+                raise RequestValidationError("invalid_coordinate_calibration", "body", str(exc)) from exc
             try:
                 return PLATFORM_GATEWAY.publish_diagnostic(normalized, payload)
             except Exception:
@@ -1132,6 +1447,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
         return 200, skills(query)
     if method == "GET" and normalized == "/api/telemetry/latest":
         return 200, telemetry_latest(query)
+    if method == "GET" and normalized == "/api/simulation/runtime-telemetry":
+        return simulation_runtime_telemetry(query)
     if method == "GET" and normalized == "/api/vehicles":
         return 200, vehicles()
     if method == "GET" and normalized == "/api/snapshot":
@@ -1168,6 +1485,7 @@ def _action_audit_event(event_type: str, out: dict[str, Any], cfg: Any, node_id:
         "ack_evidence": out.get("ack_evidence"),
         "completion_evidence": out.get("completion_evidence"),
         "completion_state": out.get("completion_state"),
+        "completion_timeout_detail": out.get("completion_timeout_detail"),
         "max_altitude_m": out.get("max_altitude_m"),
         "threshold_reached": out.get("threshold_reached"),
         "result": out.get("result"),

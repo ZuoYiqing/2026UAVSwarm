@@ -11,6 +11,7 @@ def select_registry(registry: VehicleRegistry, node_ids: list[str]) -> VehicleRe
     selected = VehicleRegistry(scene_id=registry.scene_id,
                                default_node_id=registry.default_node_id if registry.default_node_id in node_ids else None,
                                session_factory=registry._session_factory)
+    selected.scene = registry.scene
     for node_id in node_ids:
         selected.register_vehicle(registry.get_vehicle(node_id).config)
     return selected

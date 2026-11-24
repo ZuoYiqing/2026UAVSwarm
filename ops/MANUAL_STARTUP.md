@@ -51,6 +51,92 @@
 
 ## 1. 前置检查（首次在新机器上必做）
 
+### 1.0 三个必须先确认的环境前提
+
+> **2026-11-23 补。** 这三条不满足时，后面的步骤会以**看起来毫不相干**的方式失败，
+> 排查成本很高。先花一分钟确认。
+
+#### ① 用哪个用户
+
+| 机器 | 默认用户 | 怎么进 |
+|---|---|---|
+| **本机开发机** | **`zyq`** | 直接 `wsl` |
+| **weier 验收机** | `root`（`wsl --import` 导入的镜像就是 root） | 直接 `wsl` |
+
+**本机不要加 `-u root`**：`/root` 下既没有 PX4 也没有 pymavlink，加了会看到
+`PX4 SITL binary missing` 或 `No module named pymavlink`，看起来像环境坏了。
+
+```bash
+whoami        # 本机应为 zyq
+echo $HOME    # 本机应为 /home/zyq
+```
+
+#### ② `.runtime` 必须是指向 ext4 的软链接
+
+**为什么**：PX4 启动时把 `dataman`（1.2 MB）、`eeprom/`、`log/` 写进**自己的 cwd**，
+而 harness 把 cwd 设成 `.runtime/px4_gazebo/UAV-0x`。如果该路径落在 `/mnt/d`
+（Windows 的 9p 挂载）上，这些 IO 会阻塞 —— **PX4 只输出 2 行日志就僵住，
+Gazebo 世界里永远不出现模型**，harness 最后报
+`timed out waiting for Gazebo model x500_...`。
+
+**实测对照**（同一套环境变量，只换 cwd 所在文件系统）：
+
+| cwd 所在 | 结果 |
+|---|---|
+| `/tmp`（ext4） | ✅ 9 秒内模型出现 |
+| `/mnt/d/...`（9p） | ❌ 30 秒无任何进展 |
+
+**检查**：
+
+```bash
+cd /mnt/d/2026UAVSwarm
+ls -ld .runtime
+readlink -f .runtime
+```
+
+**期望**：`.runtime -> /home/zyq/uavswarm-runtime`，且 `readlink -f` 解析到
+**`/home/...`**（ext4），**不是** `/mnt/d/...`。
+
+**不对时这样修**：
+
+```bash
+cd /mnt/d/2026UAVSwarm
+rm -rf /home/zyq/uavswarm-runtime
+[ -d .runtime ] && [ ! -L .runtime ] && mv .runtime /home/zyq/uavswarm-runtime
+ln -sfn /home/zyq/uavswarm-runtime .runtime
+ls -ld .runtime
+```
+
+> ⚠️ **已知副作用**：这个软链接会让 **Windows 侧的 Python 跑 pytest 时 5 项
+> preflight 测试失败** —— Windows 穿不过 WSL 软链接，`RUNTIME_ROOT.resolve()`
+> 在两边算出不同路径。**测试请在 WSL 里跑**，那边全绿。
+
+#### ③ PX4 的 `parameters.bson` 必须存在
+
+**为什么**：`build/px4_sitl_default/etc/` 里若没有参数文件，PX4 判定"首次运行"，
+走自动配置分支然后**退出**（`Startup script returned with return value: 15`）。
+harness 等不到模型就报超时 —— 这个错看起来像 Gazebo 的问题，实际是 PX4 自己退了。
+
+**检查**：
+
+```bash
+ls -la /home/zyq/PX4-Autopilot/build/px4_sitl_default/etc/parameters*.bson
+```
+
+**期望**：`parameters.bson` 和 `parameters_backup.bson` 都在。
+
+**缺失时补齐**（源码包解出来的树就是没有，要首次运行才生成）：
+
+```bash
+PX4=/home/zyq/PX4-Autopilot/build/px4_sitl_default
+cp "$PX4/rootfs/parameters.bson" "$PX4/etc/parameters.bson"
+cp "$PX4/rootfs/parameters_backup.bson" "$PX4/etc/parameters_backup.bson"
+```
+
+---
+
+### 1.1 四件关键件
+
 在 **WSL** 里执行：
 
 ```bash
@@ -95,10 +181,12 @@ git status --short
 > **先自检（推荐，2026-10-09 新增）**
 >
 > ```bash
-> cd /mnt/d/2026UAVSwarm
-> python3 simulation/px4_gazebo/harness.py preflight \
->   --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+> cd /mnt/d/2026UAVSwarm && python3 simulation/px4_gazebo/harness.py preflight --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 > ```
+>
+> ⚠️ **写成一行。** 用 `\` 换行续写时，这个命令会在某些终端里被拆成两个参数，
+> 报 `unrecognized arguments: simulation/px4_gazebo/config/...json` ——
+> 看起来像参数名写错了，实际是续行没生效。实测踩过。
 >
 > 它检查三件事并给出结论：① 这份配置有没有相机；② harness state 是否写在**别的仓库**
 > （那会让 Runtime 读到过期标定）；③ **当前实际在跑的是不是被检查的这一份**。
@@ -137,11 +225,11 @@ Harness state: /mnt/d/2026UAVSwarm/.runtime/px4_gazebo/harness_state.json
 **⚠️ 要相机版就用这条**（多了 `--config` 与 GPU 适配器变量）：
 
 ```bash
-cd /mnt/d/2026UAVSwarm
-MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
-  bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless \
-    --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+cd /mnt/d/2026UAVSwarm && MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 ```
+
+> ⚠️ **写成一行。** 用 `\` 换行的版本在粘贴时容易多出一个空格或丢掉续行符，
+> 结果被拆成几条命令 —— 实测踩过（报 `unrecognized arguments: ...json`）。
 
 **`MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` 不能省。** 不加它 WSL 会挑到集显，
 实时因子从 **0.84 掉到 0.18**（实测，见 `docs/simulation/MONO_CAM_3UAV_ACCEPTANCE_ZH-CN.md`）。
@@ -205,10 +293,15 @@ UNCONN 0 0 127.0.0.1:14542 0.0.0.0:* users:(("python3",pid=NNNNN,fd=6))
 会拒绝显示载具**（这是安全设计：防止用凭空猜的坐标把飞机画在错误位置）。
 
 ```bash
-cd /mnt/d/2026UAVSwarm
-python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 2 \
-  --publish-runtime http://127.0.0.1:8765/api
+cd /mnt/d/2026UAVSwarm && python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 10 --publish-runtime http://127.0.0.1:8765/api
 ```
+
+> ⚠️ **`--duration` 必须给 10，不要给 2。**
+>
+> 标定的门槛是"**至少 10 对样本，且跨度 ≥1.0 秒**"（`calibration.py:129`）。
+> `--duration 2` 的时候只有约 12 对、跨度 1.7 秒，**有时够有时不够** ——
+> 实测报过 `ValueError:calibration_insufficient_samples`，而失败现场看起来
+> 完全正常（仿真在跑、三机在线）。给 10 秒能采到约 65 对、跨度 8 秒，很稳。
 
 **该看到**：`"status": "PASS"`，`publications` 数组有 **3 条**，每条 `"http_status": 200`，
 且 `published_valid_for_ms` 约 **59800**（≈60 秒）。
@@ -216,26 +309,26 @@ python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 2 \
 **有效期 60 秒**（2026-09-24 修改，原为 5000ms）。所以：
 
 - **普通演示**：起飞前发布一次即可，够用一分钟；
-- **需要长时间持续可见**：用下面的循环，每 55 秒刷新一次：
+- **需要长时间持续可见**：用下面的循环（每轮 10 秒采集 + 35 秒等待 = 45 秒，
+  在 60 秒有效期内留约 15 秒余量）：
 
 ```bash
-cd /mnt/d/2026UAVSwarm
-while true; do
-  python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 2 \
-    --publish-runtime http://127.0.0.1:8765/api > /dev/null
-  sleep 50
-done
+cd /mnt/d/2026UAVSwarm && while true; do python3 simulation/px4_gazebo/scripts/sample_calibration.py --duration 10 --publish-runtime http://127.0.0.1:8765/api > /dev/null 2>&1; sleep 35; done
 ```
 
 **Ctrl+C 停止。** 这个窗口也要一直开着。
 
-> 脚本限制 `--duration` 必须在 2~10 秒之间。
+> 脚本限制 `--duration` 必须在 2~10 秒之间 —— 但**下限在实践上就是 10**，
+> 理由见上。
 >
 > **为什么不能更长**：Runtime 侧 `state_store.py` 把 `valid_for_ms` 钳制在
 > `[100, 60000]`，60000 就是它接受的上限。想要更长需要改 Runtime 契约。
 > 而标定的**真正有效性**并不靠 TTL —— 它由 `local_origin_id`（PX4 原点字段 +
 > reset counter + 完整进程身份 + Gazebo model_id 的哈希）保证：身份一变标定立即
 > 失效，与 TTL 无关。TTL 只是兜住"标定本身很旧"这种情况。
+
+> **这条是已知技术债**：标定本该在仿真起来后自动续期。目前只能手工跑上面那条命令
+> （或循环）。`codex/auto-calibration-on-start` 分支做的是自动化，还没合入。
 
 ### 【Windows 窗口 4】主控制台
 
@@ -292,9 +385,7 @@ VITE v7.0.6  ready in xxx ms
 前面五步只证明"能看到"。**下面这一步才证明"能控制"。**
 
 ```bash
-curl -s -X POST http://127.0.0.1:8765/api/actions/smoke-takeoff \
-  -H 'Content-Type: application/json' \
-  -d '{"node_id":"UAV-01","altitude_m":3}'
+curl -s -X POST http://127.0.0.1:8765/api/actions/smoke-takeoff -H 'Content-Type: application/json' -d '{"node_id":"UAV-01","altitude_m":3}'
 ```
 
 **含义**：让 UAV-01 执行 ARM → 起飞到 3 米 → 观察高度 → 自动降落。
@@ -707,8 +798,7 @@ goto 收尾错误地落到 RTL（自主返航）
 **正确的探测方法**：用**非法的**参数，让参数校验先拦下来：
 
 ```bash
-curl -s -X POST http://127.0.0.1:8765/api/actions/takeoff \
-  -H 'Content-Type: application/json' -d '{"altitude_m":-1}'
+curl -s -X POST http://127.0.0.1:8765/api/actions/takeoff -H 'Content-Type: application/json' -d '{"altitude_m":-1}'
 # 期望 HTTP 400 invalid_parameter → 说明路由存在（且没有执行任何动作）
 ```
 
@@ -772,9 +862,7 @@ sub_mode=0)`，而 `sub_mode=0` 在 AUTO 下未定义，PX4 落到了 RTL 行为
 
 ```bash
 # 目标是 scene_ned：北/东/下（z 向下为正，所以 -3 = 高度 3 米）
-curl -s -X POST http://127.0.0.1:8765/api/actions/goto \
-  -H 'Content-Type: application/json' \
-  -d '{"node_id":"UAV-01","north_m":4.0,"east_m":0.0,"down_m":-3.0}'
+curl -s -X POST http://127.0.0.1:8765/api/actions/goto -H 'Content-Type: application/json' -d '{"node_id":"UAV-01","north_m":4.0,"east_m":0.0,"down_m":-3.0}'
 ```
 
 * **必须先有有效标定**，否则直接拒绝（`coordinate_calibration_unavailable`），
@@ -820,9 +908,7 @@ gz model --list | grep x500
 #   相机版  : x500_mono_cam_0 / x500_mono_cam_1 / x500_mono_cam_2
 
 # ② 自检会明确报出来（推荐，退出码非 0 可直接在脚本里消费）
-cd /mnt/d/2026UAVSwarm
-python3 simulation/px4_gazebo/harness.py preflight \
-  --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+cd /mnt/d/2026UAVSwarm && python3 simulation/px4_gazebo/harness.py preflight --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 #   → [error] running_manifest_mismatch
 #     本检查针对的是 …/three_uav_mono_cam_sitl.json，
 #     但当前实际在跑的是 …/three_uav_sitl.json
@@ -848,9 +934,7 @@ bash simulation/px4_gazebo/scripts/stop_three_uav.sh
 for p in 14540 14541 14542; do ss -lunp | grep -q ":$p " && echo "$p 仍占用" || echo "$p 空闲"; done
 
 # 再按相机版重启（第 2 节那条带 GPU 变量的命令）
-MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
-  bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless \
-    --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
+cd /mnt/d/2026UAVSwarm && MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA bash simulation/px4_gazebo/scripts/start_three_uav.sh --headless --config simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json
 ```
 
 #### 相关：`ops.sh` 的默认值
@@ -858,8 +942,7 @@ MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
 `ops.sh start` 起的是默认版。要它起相机版，用环境变量：
 
 ```bash
-UAV_SIM_CONFIG=simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json \
-  bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh start
+UAV_SIM_CONFIG=simulation/px4_gazebo/config/three_uav_mono_cam_sitl.json bash /mnt/d/2026UAVSwarm-worktrees/_ops/ops.sh start
 ```
 
 `ops.sh status` 会显示当前用的 manifest，并在它是无相机版时给出警告。

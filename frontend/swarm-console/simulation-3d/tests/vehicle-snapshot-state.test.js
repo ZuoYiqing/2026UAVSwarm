@@ -177,7 +177,7 @@ test("Cesium entity and trail freeze at A during stale B then resume at fresh C"
   assert.equal(layer.isRecordStale(record), false);
 });
 
-test("a newly discovered stale vehicle is placed once and remains removable", () => {
+test("a newly discovered stale vehicle is placed without a trail and remains removable", () => {
   installCanvasStub();
   const layer = new VehicleLayer(
     createViewerStub(),
@@ -189,11 +189,12 @@ test("a newly discovered stale vehicle is placed once and remains removable", ()
   apply(100, [withStatus(vehicle("MR-STALE", 40), { stale: true, ageMs: 4_000 })]);
   const record = layer.getRecords()[0];
   assert.equal(record.worldPosition.x, 6_378_177);
-  assert.equal(record.trailPositions.length, 1);
+  assert.equal(record.entity.show, true);
+  assert.equal(record.trailPositions.length, 0);
 
   apply(700, [withStatus(vehicle("MR-STALE", 90), { stale: true, ageMs: 4_600 })]);
   assert.equal(record.worldPosition.x, 6_378_177);
-  assert.equal(record.trailPositions.length, 1);
+  assert.equal(record.trailPositions.length, 0);
   assert.equal(record.vehicle.telemetry.ageMs, 4_600);
 
   apply(1_300, []);

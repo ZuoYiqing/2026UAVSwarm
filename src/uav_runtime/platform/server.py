@@ -12,6 +12,7 @@ from .contract import PlatformError, canonical, identifier
 from .service import PlatformService
 from .store import TaskStore
 from .transport import JsonClient
+from .view import produce_view
 
 
 class PlatformHttpServer(ThreadingHTTPServer):
@@ -60,6 +61,10 @@ class PlatformHandler(BaseHTTPRequestHandler):
             path, method = parsed.path.rstrip("/"), self.command
             if method == "GET" and path == "/api/platform/status":
                 self._send(200, service.status())
+            elif method == "GET" and path == "/api/platform/view":
+                if query:
+                    raise PlatformError("invalid_query")
+                self._send(200, produce_view(service, self.server.evidence_dispatch))
             elif method == "POST" and path == "/api/platform/link/heartbeat":
                 if set(body) - {"contract_version"}:
                     raise PlatformError("invalid_heartbeat")
@@ -152,6 +157,7 @@ def main(argv=None):
     if args.execution_mode == "sitl":
         from .deployment import SitlActions
         actions = SitlActions(args.node_id, args.vehicle_config, str(args.store_dir / "actions.audit.jsonl"))
+        actions.routes.RUNTIME_RUN_ID = args.run_id
     service = PlatformService(store, node_id=args.node_id, mode=args.execution_mode,
                               execute=actions.execute if actions else None, observe=actions.observe if actions else None,
                               candidate=(lambda body: candidate.request("POST", body=body)) if candidate else None, run_id=args.run_id)

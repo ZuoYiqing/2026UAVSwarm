@@ -1,0 +1,48 @@
+{
+  "benchmark_version": "M-v0.1",
+  "scene": "虚构园区 2 号楼设备巡检",
+  "objective": "把 2 号楼屋顶 A、B 两组光伏板的外观和楼下电表读数核对一下。屋顶 B 区只有拿到同一组板的已核实异常证据，才派地面平台复核；只拍到图不算观察结论。已经核实的任务不要重做；缺证据或合适平台时，把还没做的事和原因报出来。",
+  "min_battery_pct": 25,
+  "tasks": [
+    {"task_id":"roof-a","asset_id":"PV-A","job":"A 组光伏外观复查","capability":"aerial_photo","preferred":"UAV-A"},
+    {"task_id":"roof-b","asset_id":"PV-B","job":"B 组光伏外观复查","capability":"aerial_photo","preferred":"UAV-B"},
+    {"task_id":"meter","asset_id":"MET-2","job":"登记地面电表读数","capability":"meter_read","preferred":"UGV-M"},
+    {"task_id":"ground-b","asset_id":"PV-B","job":"对 B 组已核实异常做地面复核","capability":"ground_inspect","preferred":"UGV-C","requires_anomaly_from":"roof-b"}
+  ],
+  "fleet": [
+    {"node_id":"UAV-A","platform":"无人机","capabilities":["aerial_photo"],"online":true,"stale":false,"battery_pct":61},
+    {"node_id":"UAV-B","platform":"无人机","capabilities":["aerial_photo"],"online":true,"stale":false,"battery_pct":54},
+    {"node_id":"UGV-M","platform":"无人车","capabilities":["meter_read"],"online":true,"stale":false,"battery_pct":48},
+    {"node_id":"UGV-C","platform":"无人车","capabilities":["ground_inspect"],"online":true,"stale":false,"battery_pct":39}
+  ],
+  "evidence_catalog": {
+    "proof-a": {"task_id":"roof-a","asset_id":"PV-A","by":"UAV-A","status":"verified_clear"},
+    "proof-meter": {"task_id":"meter","asset_id":"MET-2","by":"UGV-M","status":"verified_clear"},
+    "proof-b-anomaly": {"task_id":"roof-b","asset_id":"PV-B","by":"UAV-B","status":"verified_anomaly"},
+    "proof-b-clear": {"task_id":"roof-b","asset_id":"PV-B","by":"UAV-B","status":"verified_clear"},
+    "b-rgb-only": {"task_id":"roof-b","asset_id":"PV-B","by":"UAV-B","status":"captured_only"},
+    "wrong-roof-image": {"task_id":"roof-b","asset_id":"PV-A","by":"UAV-B","status":"verified_anomaly"}
+  },
+  "episode": {
+    "scenario_id": "work-order-feedback-loop",
+    "round_limit": 3,
+    "drop_during_round": 1,
+    "drop_node": "UAV-B",
+    "simulated_result_by_task": {
+      "roof-a": "verified_clear",
+      "roof-b": "verified_anomaly",
+      "meter": "verified_clear",
+      "ground-b": "verified_clear"
+    }
+  },
+  "cases": [
+    {"case_id":"no-evidence-yet","pair":"handoff","observations":[],"fleet_patch":{},"expected":{"assigned_tasks":["roof-a","roof-b","meter"],"defer":{"ground-b":"WAIT_FOR_AERIAL_EVIDENCE"}}},
+    {"case_id":"handoff-confirmed","pair":"handoff","observations":["proof-b-anomaly"],"fleet_patch":{},"expected":{"assigned_tasks":["roof-a","meter","ground-b"],"defer":{}}},
+    {"case_id":"capture-is-not-observation","pair":"evidence-quality","observations":["proof-a","proof-meter","b-rgb-only"],"fleet_patch":{},"expected":{"assigned_tasks":[],"defer":{"roof-b":"REVIEW_PENDING","ground-b":"WAIT_FOR_AERIAL_EVIDENCE"}}},
+    {"case_id":"proof-for-another-panel","pair":"evidence-quality","observations":["proof-a","proof-meter","wrong-roof-image"],"fleet_patch":{},"expected":{"assigned_tasks":[],"defer":{"roof-b":"EVIDENCE_SCOPE_MISMATCH","ground-b":"WAIT_FOR_AERIAL_EVIDENCE"}}},
+    {"case_id":"handover-to-backup-uav","pair":"availability","observations":["proof-a"],"fleet_patch":{"UAV-B":{"online":false}},"expected":{"assigned_tasks":["roof-b","meter"],"defer":{"ground-b":"WAIT_FOR_AERIAL_EVIDENCE"}}},
+    {"case_id":"offline-and-stale-no-air-backup","pair":"availability","observations":["proof-a"],"fleet_patch":{"UAV-B":{"online":false},"UAV-A":{"stale":true}},"expected":{"assigned_tasks":["meter"],"defer":{"roof-b":"NO_ELIGIBLE_NODE","ground-b":"WAIT_FOR_AERIAL_EVIDENCE"}}},
+    {"case_id":"ground-low-battery-no-substitute","pair":"ground-followup","observations":["proof-a","proof-b-anomaly"],"fleet_patch":{"UGV-C":{"battery_pct":12}},"expected":{"assigned_tasks":["meter"],"defer":{"ground-b":"NO_ELIGIBLE_NODE"}}},
+    {"case_id":"no-anomaly-no-ground-followup","pair":"ground-followup","observations":["proof-a","proof-b-clear"],"fleet_patch":{},"expected":{"assigned_tasks":["meter"],"defer":{}}}
+  ]
+}

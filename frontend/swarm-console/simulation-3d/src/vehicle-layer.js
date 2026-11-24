@@ -189,11 +189,13 @@ export class VehicleLayer {
     const colorCss = colorForVehicle(vehicle);
     const color = Color.fromCssColorString(colorCss);
     let record = this.records.get(vehicle.id);
-    const freezePose = Boolean(record?.worldPosition && !hasFreshPose(vehicle));
+    const freshPose = hasFreshPose(vehicle);
+    const freezePose = Boolean(record?.worldPosition && !freshPose);
     const worldPosition = freezePose ? record.worldPosition : vehicle.positionUsable === false || !vehicle.position ? null : this.positionToWorld(vehicle.position);
 
     if (!record) {
-      const trailPositions = worldPosition ? [worldPosition.clone()] : [];
+      // A last-known marker is not a live trail sample.
+      const trailPositions = freshPose && worldPosition ? [worldPosition.clone()] : [];
       const routeEntity = this.viewer.entities.add({
         id: `vehicle-route:${vehicle.id}`,
         properties: { semantic: "telemetry_trail", vehicle_id: vehicle.id },
@@ -243,7 +245,7 @@ export class VehicleLayer {
         routeEntity,
         trailPositions,
         worldPosition,
-        lastTrailTimestampMs: timestampMs,
+        lastTrailTimestampMs: trailPositions.length ? timestampMs : null,
         markerKey: `${vehicle.vehicleType}:${colorCss}`,
       };
       this.records.set(vehicle.id, record);
@@ -262,13 +264,13 @@ export class VehicleLayer {
         record.entity.billboard.rotation = -CesiumMath.toRadians(
           vehicle.attitude.yawDeg,
         );
-        if (
+        if (freshPose && (
           !record.trailPositions.length || (timestampMs - record.lastTrailTimestampMs >= 450 &&
           Cartesian3.distance(
             record.trailPositions[record.trailPositions.length - 1],
             worldPosition,
           ) >= 1)
-        ) {
+        )) {
           record.trailPositions.push(worldPosition.clone());
           if (record.trailPositions.length > 160) {
             record.trailPositions.shift();

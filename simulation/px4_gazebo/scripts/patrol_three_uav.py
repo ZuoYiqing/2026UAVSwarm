@@ -75,12 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--command-timeout", type=float, default=10.0)
     parser.add_argument("--landing-timeout", type=float, default=45.0)
+    parser.add_argument("--coverage-area", help="Explicit scene coverage polygon ID")
+    parser.add_argument("--coverage-footprint-radius-m", type=float,
+                        help="Assumed horizontal footprint radius for geometric coverage")
     parser.add_argument("--pretty", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if bool(args.coverage_area) != (args.coverage_footprint_radius_m is not None):
+        parser.error("--coverage-area and --coverage-footprint-radius-m must be supplied together")
     started_at = harness.utc_now()
     payload: dict[str, Any]
     health = None
@@ -91,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
             args.patrol,
             manifest=manifest,
             scene=scene,
+        )
+        coverage = (
+            patrol.AreaCoverage(scene, args.coverage_area, footprint_radius_m=args.coverage_footprint_radius_m)
+            if args.coverage_area else None
         )
 
         # The standalone validator must own all three UDP listeners. Runtime or
@@ -117,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             command_timeout_s=args.command_timeout,
             landing_timeout_s=args.landing_timeout,
             motion_observer=MotionEvidenceRecorder(manifest, controllers),
+            coverage=coverage,
         )
         payload["health"] = health
         payload["manifest_path"] = str(args.config.resolve())

@@ -160,7 +160,7 @@ test("reconnect reconciles existing pending actions through GET only, never repl
 
 test("cold start stays unknown and editing an input does not hide observation loss", () => {
   const h = harness();
-  h.run("state.fleet=[]; state.lastObservationAt=null; state.vehicleSnapshot=null");
+  h.run("state.page='backend'; state.fleet=[]; state.lastObservationAt=null; state.vehicleSnapshot=null");
   h.run("applyApiFailure('health', {kind:'network',message:'fixture lost'}, false)");
   assert.equal(h.run("state.dataStatus"), "unavailable");
   assert.match(h.run("observationNotice()"), /接收：unknown/);

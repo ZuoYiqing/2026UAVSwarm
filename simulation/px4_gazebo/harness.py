@@ -13,10 +13,12 @@ import math
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +28,33 @@ from typing import Any, Callable
 HARNESS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = HARNESS_DIR.parent.parent
 DEFAULT_MANIFEST_PATH = HARNESS_DIR / "config" / "three_uav_sitl.json"
-RUNTIME_ROOT = REPO_ROOT / ".runtime" / "px4_gazebo"
-STATE_PATH = RUNTIME_ROOT / "harness_state.json"
+DEFAULT_RUNTIME_DIR = Path(".runtime") / "px4_gazebo"
+STATE_FILENAME = "harness_state.json"
+
+
+def resolve_runtime_root(repo_root: Path) -> Path:
+    """Resolve the same simulation state root for start, stop and preflight."""
+    configured = os.environ.get("UAV_SIM_RUNTIME_ROOT")
+    root = Path(os.path.expandvars(configured)).expanduser() if configured else DEFAULT_RUNTIME_DIR
+    return root if root.is_absolute() else repo_root / root
+
+
+RUNTIME_ROOT = resolve_runtime_root(REPO_ROOT)
+STATE_PATH = RUNTIME_ROOT / STATE_FILENAME
 MINIMUM_VEHICLE_COUNT = 3
 HARNESS_RUN_ID_ENV = "UAV_SWARM_HARNESS_RUN_ID"
 WORLD_SHA256_SCHEME = "sha256-lf-v1"
+RUNTIME_LISTENER_SUFFIX = " runtime listener"
+PX4_UDP_BIND_HOST = "0.0.0.0"
+PX4_UDP_LOCAL_PORTS = (
+    (14580, "offboard local"),
+    (18570, "GCS local"),
+    (14280, "payload local"),
+    (13030, "gimbal local"),
+)
+PX4_UDP_LOCAL_SUFFIXES = tuple(f" {role}" for _, role in PX4_UDP_LOCAL_PORTS)
+PROC_EMPTY_CMDLINE_RECHECKS = 4
+PROC_EMPTY_CMDLINE_RECHECK_S = 0.025
 
 
 def canonical_world_bytes(contents: bytes) -> bytes:
@@ -164,6 +188,17 @@ def load_json(path: Path) -> dict[str, Any]:
 def resolve_repo_path(value: str) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def resolve_vehicle_runtime_dir(value: str) -> Path:
+    path = resolve_repo_path(value)
+    if path.is_relative_to(REPO_ROOT / DEFAULT_RUNTIME_DIR):
+        path = RUNTIME_ROOT / path.relative_to(REPO_ROOT / DEFAULT_RUNTIME_DIR)
+    root = RUNTIME_ROOT.resolve()
+    resolved = path.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise HarnessError(f"vehicle runtime directory outside the simulation runtime root: {path}")
+    return resolved
 
 
 def resolve_px4_dir(manifest: dict[str, Any]) -> Path:
@@ -436,20 +471,22 @@ def udp_port_available(host: str, port: int) -> bool:
 
 
 def required_udp_ports(manifest: dict[str, Any]) -> list[tuple[str, int, str]]:
-    ports: list[tuple[str, int, str]] = []
-    for vehicle in manifest["vehicles"]:
-        instance = int(vehicle["px4_instance"])
-        host, endpoint_port = parse_udpin_endpoint(str(vehicle["command_endpoint"]))
-        ports.extend(
-            (
-                (host, endpoint_port, f"{vehicle['node_id']} runtime listener"),
-                ("127.0.0.1", 14580 + instance, f"{vehicle['node_id']} offboard local"),
-                ("127.0.0.1", 18570 + instance, f"{vehicle['node_id']} GCS local"),
-                ("127.0.0.1", 14280 + instance, f"{vehicle['node_id']} payload local"),
-                ("127.0.0.1", 13030 + instance, f"{vehicle['node_id']} gimbal local"),
-            )
-        )
-    return ports
+    """Only ports bound by the PX4 processes of this harness run."""
+    # Match PX4's IPv4 INADDR_ANY bind, not the offboard destination address.
+    return [
+        (PX4_UDP_BIND_HOST, base + int(vehicle["px4_instance"]), f"{vehicle['node_id']} {role}")
+        for vehicle in manifest["vehicles"]
+        for base, role in PX4_UDP_LOCAL_PORTS
+    ]
+
+
+def runtime_listener_udp_ports(manifest: dict[str, Any]) -> list[tuple[str, int, str]]:
+    """PX4 send destinations owned by Runtime; never probed as free binds."""
+    return [
+        (*parse_udpin_endpoint(str(vehicle["command_endpoint"])),
+         f"{vehicle['node_id']}{RUNTIME_LISTENER_SUFFIX}")
+        for vehicle in manifest["vehicles"]
+    ]
 
 
 def process_alive(pid: int) -> bool:
@@ -460,12 +497,17 @@ def process_alive(pid: int) -> bool:
     return True
 
 
-def read_state() -> dict[str, Any] | None:
-    if not STATE_PATH.exists():
-        return None
+def _read_optional_state(path: Path) -> dict[str, Any] | None:
     try:
-        return load_json(STATE_PATH)
-    except (OSError, json.JSONDecodeError, HarnessError) as exc:
+        return load_json(path)
+    except FileNotFoundError:
+        return None
+
+
+def read_state() -> dict[str, Any] | None:
+    try:
+        return _read_optional_state(STATE_PATH)
+    except (OSError, UnicodeError, json.JSONDecodeError, HarnessError) as exc:
         raise HarnessError(
             f"{STALE_STATE}: invalid harness state at {STATE_PATH}: {exc}"
         ) from exc
@@ -542,10 +584,16 @@ def _running_gazebo_worlds() -> list[str]:
     return sorted(set(worlds))
 
 
-def _validate_start_state(current_state: dict[str, Any] | None) -> None:
-    """Reject a duplicate run and clean only identity-proven exited state."""
+def _validate_start_state(
+    current_state: dict[str, Any] | None,
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    headless: bool,
+) -> bool:
+    """Return True only for the same complete, live, managed launch."""
     if not current_state:
-        return
+        return False
     processes = list(current_state.get("processes", []))
     identities = _validate_processes(
         processes,
@@ -561,10 +609,46 @@ def _validate_start_state(current_state: dict[str, Any] | None) -> None:
             f"{unsafe[0].code}: "
             + json.dumps([row.to_dict() for row in unsafe], sort_keys=True)
         )
-    if any(row.code == IDENTITY_MATCH for row in identities):
-        raise HarnessError("this harness is already running; stop it first")
-    if identities and all(row.code == PROCESS_EXITED for row in identities):
+    if all(row.code == PROCESS_EXITED for row in identities):
+        cleanup = _wait_for_cleanup(current_state, timeout_s=0)
+        if not cleanup["clean"]:
+            raise HarnessError("cleanup_incomplete:" + json.dumps(cleanup, sort_keys=True))
         _cleanup_harness_state(processes)
+        return False
+    if any(row.code != IDENTITY_MATCH for row in identities):
+        raise HarnessError("managed_run_incomplete: stop the existing run before restarting")
+    requested_nodes = {row["node_id"] for row in manifest["vehicles"]}
+    if {row.node_id for row in identities} != requested_nodes:
+        raise HarnessError("managed_run_incomplete: running vehicle set differs")
+
+    world_path = resolve_repo_path(str(manifest["world_path"])).resolve()
+    if (current_state.get("manifest_path") != str(manifest_path.resolve())
+            or current_state.get("manifest_sha256") != _manifest_digest(manifest)
+            or current_state.get("px4_dir") != str(resolve_px4_dir(manifest))
+            or current_state.get("mode") != ("headless" if headless else "gui")
+            or current_state.get("world_name") != manifest["world_name"]
+            or current_state.get("world_path") != str(world_path)
+            or not world_path.is_file()
+            or current_state.get("world_file_sha256") != hashlib.sha256(world_path.read_bytes()).hexdigest()):
+        raise HarnessError("running_configuration_mismatch: stop the existing run before changing configuration")
+
+    try:
+        from .gazebo_evidence import server_identity
+    except ImportError:
+        from gazebo_evidence import server_identity
+    if not server_identity(current_state)["process_identity_valid"]:
+        raise HarnessError("gazebo_process_identity_invalid: stop the existing run before restarting")
+    if _running_gazebo_worlds() != [manifest["world_name"]]:
+        raise HarnessError("gazebo_world_unavailable_or_conflicting: expected " + manifest["world_name"])
+    missing = {str(row["gazebo_model_name"]) for row in manifest["vehicles"]} - gazebo_models()
+    if missing:
+        raise HarnessError("gazebo_models_missing: " + ", ".join(sorted(missing)))
+    return True
+
+
+def _manifest_digest(manifest: dict[str, Any]) -> str:
+    contents = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(contents).hexdigest()
 
 
 def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -587,7 +671,10 @@ def preflight(manifest: dict[str, Any]) -> dict[str, Any]:
     if not world_path.is_file():
         raise HarnessError(f"Gazebo world missing: {world_path}")
 
-    _validate_start_state(read_state())
+    model = str(manifest["px4_sim_model"]).removeprefix("gz_")
+    model_path = px4_dir / "Tools" / "simulation" / "gz" / "models" / model / "model.sdf"
+    if not model_path.is_file():
+        raise HarnessError(f"Gazebo model missing: {model_path}")
     foreign_px4 = _foreign_px4_pids()
     if foreign_px4:
         raise HarnessError(
@@ -714,26 +801,33 @@ def _proc_run_id(environ: bytes) -> str:
 
 
 def read_process_identity(
-    pid: int, *, proc_root: Path = Path("/proc")
+    pid: int, *, proc_root: Path = Path("/proc"), sleep: Callable[[float], None] = time.sleep,
 ) -> ProcessIdentityReadResult:
     """Read one coherent identity snapshot from Linux procfs."""
     process_root = proc_root / str(pid)
+    first_start_time = None
     try:
         first_stat = (process_root / "stat").read_text(encoding="utf-8")
         first_start_time = _parse_proc_start_time(first_stat)
         if first_stat[first_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
             return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_is_zombie_or_dead")
-        cmdline = tuple(
-            part.decode("utf-8", errors="surrogateescape")
-            for part in (process_root / "cmdline").read_bytes().split(b"\0")
-            if part
-        )
-        if not cmdline:
-            second_stat = (process_root / "stat").read_text(encoding="utf-8")
-            if (_parse_proc_start_time(second_stat) == first_start_time
-                    and second_stat[second_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}):
-                return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
-            raise ValueError("process cmdline is empty")
+        for attempt in range(PROC_EMPTY_CMDLINE_RECHECKS + 1):
+            if attempt:
+                sleep(PROC_EMPTY_CMDLINE_RECHECK_S)
+                stat = (process_root / "stat").read_text(encoding="utf-8")
+                if _parse_proc_start_time(stat) != first_start_time:
+                    return ProcessIdentityReadResult(code=STALE_STATE, detail="process_changed_while_reading_procfs")
+                if stat[stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
+                    return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
+            cmdline = tuple(
+                part.decode("utf-8", errors="surrogateescape")
+                for part in (process_root / "cmdline").read_bytes().split(b"\0")
+                if part
+            )
+            if cmdline:
+                break
+        else:
+            raise ValueError("process cmdline is empty after bounded recheck")
         executable = os.readlink(process_root / "exe")
         cwd = os.readlink(process_root / "cwd")
         run_id = _proc_run_id((process_root / "environ").read_bytes())
@@ -741,8 +835,20 @@ def read_process_identity(
         second_start_time = _parse_proc_start_time(
             (process_root / "stat").read_text(encoding="utf-8")
         )
-    except (FileNotFoundError, ProcessLookupError):
-        return ProcessIdentityReadResult(code=PROCESS_EXITED)
+    except (FileNotFoundError, ProcessLookupError) as exc:
+        # A missing individual procfs entry need not mean the PID has exited.
+        try:
+            current_stat = (process_root / "stat").read_text(encoding="utf-8")
+            current_start_time = _parse_proc_start_time(current_stat)
+        except (FileNotFoundError, ProcessLookupError):
+            return ProcessIdentityReadResult(code=PROCESS_EXITED)
+        except (OSError, UnicodeError, ValueError) as stat_error:
+            return ProcessIdentityReadResult(code=STALE_STATE, detail=f"proc_stat_unavailable:{stat_error}")
+        if first_start_time is not None and first_start_time != current_start_time:
+            return ProcessIdentityReadResult(code=STALE_STATE, detail="process_changed_while_reading_procfs")
+        if current_stat[current_stat.rfind(")") + 2:].split()[0] in {"Z", "X"}:
+            return ProcessIdentityReadResult(code=PROCESS_EXITED, detail="process_exited_during_read")
+        return ProcessIdentityReadResult(code=STALE_STATE, detail=f"proc_identity_entry_missing:{exc}")
     except (OSError, UnicodeError, ValueError) as exc:
         return ProcessIdentityReadResult(
             code=STALE_STATE,
@@ -943,10 +1049,11 @@ def _terminate_process_groups(
     kill_timeout_s: float = 2.0,
     identity_reader: Callable[[int], ProcessIdentityReadResult] | None = None,
     signal_sender: Callable[[int, int], None] | None = None,
+    individual: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[ProcessIdentityDecision]:
-    """Stop verified process groups without ever trusting PID/PGID alone."""
+    """Stop verified process groups or a single verified process."""
     decisions = _validate_processes(
         processes,
         run_id=run_id,
@@ -961,14 +1068,15 @@ def _terminate_process_groups(
     managed_pids = {row.pid for row in decisions if row.code == IDENTITY_MATCH}
     if not managed_pids:
         return decisions
-    sender = signal_sender or getattr(os, "killpg", None)
+    sender = signal_sender or (os.kill if individual else getattr(os, "killpg", None))
     if sender is None:
         raise HarnessError("process-group signalling requires Linux/WSL")
+    signal_target = "pid" if individual else "pgid"
     for item, row in reversed(list(zip(processes, decisions))):
         if row.code != IDENTITY_MATCH:
             continue
         try:
-            sender(int(item["pgid"]), SIGTERM)
+            sender(int(item[signal_target]), SIGTERM)
         except ProcessLookupError:
             continue
 
@@ -1005,7 +1113,7 @@ def _terminate_process_groups(
         if row is None or row.code != IDENTITY_MATCH:
             continue
         try:
-            sender(int(item["pgid"]), SIGKILL)
+            sender(int(item[signal_target]), SIGKILL)
         except ProcessLookupError:
             continue
 
@@ -1050,6 +1158,10 @@ def _cleanup_harness_state(processes: list[dict[str, Any]]) -> None:
 
 def start_harness(manifest_path: Path, *, headless: bool) -> None:
     manifest = load_manifest(manifest_path)
+    current_state = read_state()
+    if _validate_start_state(current_state, manifest=manifest, manifest_path=manifest_path, headless=headless):
+        print(f"Harness already running: run_id={current_state['run_id']}")
+        return
     environment = preflight(manifest)
     world_path = Path(environment["world_path"]).resolve()
     world_bytes = world_path.read_bytes()
@@ -1061,8 +1173,10 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
         "version": "1.2",
         "run_id": run_id,
         "manifest_path": str(manifest_path.resolve()),
+        "manifest_sha256": _manifest_digest(manifest),
         "started_at": utc_now(),
         "mode": "headless" if headless else "gui",
+        "px4_dir": str(environment["px4_dir"]),
         "px4_commit": environment["px4_commit"],
         "gazebo_version": environment["gazebo_version"],
         "world_name": manifest["world_name"],
@@ -1074,12 +1188,16 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
             {"host": host, "port": port, "owner": owner}
             for host, port, owner in required_udp_ports(manifest)
         ],
+        "runtime_listener_udp_ports": [
+            {"host": host, "port": port, "owner": owner}
+            for host, port, owner in runtime_listener_udp_ports(manifest)
+        ],
         "processes": [],
     }
     opened_logs: list[Any] = []
     try:
         for index, vehicle in enumerate(manifest["vehicles"]):
-            runtime_dir = resolve_repo_path(str(vehicle["runtime_dir"]))
+            runtime_dir = resolve_vehicle_runtime_dir(str(vehicle["runtime_dir"]))
             runtime_dir.mkdir(parents=True, exist_ok=True)
             stdout_handle = (runtime_dir / "stdout.log").open("ab", buffering=0)
             stderr_handle = (runtime_dir / "stderr.log").open("ab", buffering=0)
@@ -1176,11 +1294,36 @@ def start_harness(manifest_path: Path, *, headless: bool) -> None:
                 f"start failed ({exc}); cleanup refused/incomplete: "
                 + json.dumps([row.to_dict() for row in problem], sort_keys=True)
             ) from exc
+        cleanup = _wait_for_cleanup(state)
+        if not cleanup["clean"]:
+            raise HarnessError(f"start failed ({exc}); cleanup_incomplete:"
+                               + json.dumps(cleanup, sort_keys=True)) from exc
         _cleanup_harness_state(processes)
         raise
     finally:
         for handle in opened_logs:
             handle.close()
+
+
+def _live_group_members(processes: list[dict[str, Any]]) -> list[int]:
+    """Observe children that can outlive a PX4 group leader."""
+    if os.name != "posix" or not processes:
+        return []
+    groups = {int(row["pgid"]) for row in processes}
+    live = []
+    for path in Path("/proc").iterdir():
+        if not path.name.isdecimal():
+            continue
+        try:
+            stat = (path / "stat").read_text(encoding="utf-8", errors="replace")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        comm_end = stat.rfind(") ")
+        fields = stat[comm_end + 2:].split()
+        if (comm_end >= 0 and len(fields) >= 3 and fields[0] not in {"Z", "X"}
+                and fields[2].isdecimal() and int(fields[2]) in groups):
+            live.append(int(path.name))
+    return sorted(live)
 
 
 def _wait_for_cleanup(
@@ -1189,14 +1332,29 @@ def _wait_for_cleanup(
     timeout_s: float = 10.0,
     world_probe: Callable[[], list[str]] = _running_gazebo_worlds,
     port_probe: Callable[[str, int], bool] = udp_port_available,
+    process_probe: Callable[[list[dict[str, Any]]], list[int]] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Wait until this run's world disappears and UDP ports are reusable."""
+    """Wait for the world, process groups and their own UDP bindings to exit."""
     expected_world = str(state.get("world_name", ""))
-    port_rows = list(state.get("required_udp_ports", []))
+    legacy_port_list = "runtime_listener_udp_ports" not in state
+    runtime_ports = list(state.get("runtime_listener_udp_ports", []))
+    port_rows = []
+    for row in state.get("required_udp_ports", []):
+        owner = row.get("owner")
+        # Legacy state mixed listeners into the required list with this label
+        # suffix. Leave any unlabeled or unrecognized row required.
+        if legacy_port_list and isinstance(owner, str) and owner.endswith(RUNTIME_LISTENER_SUFFIX):
+            runtime_ports.append(row)
+        elif (legacy_port_list and row.get("host") == "127.0.0.1"
+              and isinstance(owner, str) and owner.endswith(PX4_UDP_LOCAL_SUFFIXES)):
+            port_rows.append({**row, "host": PX4_UDP_BIND_HOST})
+        else:
+            port_rows.append(row)
     deadline = monotonic() + max(0.0, timeout_s)
     while True:
+        live_members = (process_probe or _live_group_members)(list(state.get("processes", [])))
         worlds = world_probe()
         ports = []
         for row in port_rows:
@@ -1212,14 +1370,16 @@ def _wait_for_cleanup(
             )
         world_stopped = not expected_world or expected_world not in worlds
         ports_released = all(row["available"] for row in ports)
-        clean = world_stopped and ports_released
+        clean = not live_members and world_stopped and ports_released
         evidence = {
             "clean": clean,
             "expected_world": expected_world or None,
             "observed_worlds": worlds,
             "world_stopped": world_stopped,
             "ports_released": ports_released,
+            "live_group_member_pids": live_members,
             "ports": ports,
+            "runtime_listener_udp_ports": runtime_ports,
         }
         if clean or monotonic() >= deadline:
             return evidence
@@ -1237,9 +1397,10 @@ def stop_harness() -> dict[str, Any]:
             "cleanup": {"clean": True},
         }
     processes = list(state.get("processes", []))
+    run_id = str(state.get("run_id", ""))
     decisions = _terminate_process_groups(
         processes,
-        run_id=str(state.get("run_id", "")),
+        run_id=run_id,
     )
     unsafe = [
         row
@@ -1257,7 +1418,36 @@ def stop_harness() -> dict[str, Any]:
             "failed to stop harness processes: "
             + json.dumps([row.to_dict() for row in remaining], sort_keys=True)
         )
-    cleanup = _wait_for_cleanup(state)
+    cleanup = _wait_for_cleanup(state, timeout_s=2)
+    # A server can outlive its PX4 group leader. The group is no longer
+    # eligible for another signal. Use the recorded server identity instead.
+    gazebo_decisions = []
+    pending_exit_checks = []
+    gazebo_groups = {row["pgid"] for row in processes if row.get("owns_gazebo")}
+    for server in state.get("gazebo_processes", []):
+        if (server.get("kind") == "gazebo" and server.get("pgid") in gazebo_groups
+                and server.get("pid") in cleanup["live_group_member_pids"]):
+            [decision] = _terminate_process_groups([server], run_id=run_id, individual=True)
+            if decision.code == STALE_STATE and (decision.detail or "").startswith((
+                "proc_identity_read_failed:", "proc_identity_entry_missing:", "proc_stat_unavailable:",
+            )):
+                pending_exit_checks.append((len(gazebo_decisions), server))
+            gazebo_decisions.append(decision)
+    if pending_exit_checks:
+        # A server may be exiting after its group was signalled. Observe
+        # cleanup within the usual budget, then confirm the recorded PID has
+        # exited. An incomplete identity never authorizes a signal or state removal.
+        cleanup = _wait_for_cleanup(state)
+        if cleanup["clean"]:
+            for index, server in pending_exit_checks:
+                confirmed = validate_process_identity(server, run_id=run_id)
+                if confirmed.code in {PROCESS_EXITED, PROCESS_IDENTITY_MISMATCH}:
+                    gazebo_decisions[index] = confirmed
+    if any(row.code in {STALE_STATE, PROCESS_IDENTITY_MISMATCH} for row in gazebo_decisions):
+        raise HarnessError("gazebo_cleanup_identity_invalid:"
+                           + json.dumps([row.to_dict() for row in gazebo_decisions], sort_keys=True))
+    if not cleanup["clean"]:
+        cleanup = _wait_for_cleanup(state)
     if not cleanup["clean"]:
         raise HarnessError(
             "cleanup_incomplete:" + json.dumps(cleanup, sort_keys=True)
@@ -1268,6 +1458,7 @@ def stop_harness() -> dict[str, Any]:
         "idempotent": False,
         "run_id": state.get("run_id"),
         "processes": [row.to_dict() for row in decisions],
+        "gazebo_processes": [row.to_dict() for row in gazebo_decisions],
         "cleanup": cleanup,
     }
     print(json.dumps(payload, indent=2))
@@ -1378,11 +1569,9 @@ def preflight_manifest(
     ① **这份 manifest 有没有相机。** 无相机是**警告**不是错误 —— 无相机仿真本身
        是合法用途，报成错误会破坏现有工作流。但它必须被**说出来**：否则"只有相机
        动作会失败"这件事在别处完全看不出来。
-    ② **harness state 是否在别的仓库。** `REPO_ROOT` 是本文件所在目录的上两级，
-       因此状态与标定证据写在**跑仿真的那个仓库**下。而 Runtime 只认
-       `repo_root/.runtime/`。若状态只存在于别的 worktree，标定必然读到过期证据
-       （表现为"前端能连上飞机，但标定 stale、三维视图不显示、`goto` 被拒`）。
-       这一条是**错误**，因为光看运行状态发现不了。
+    ② **harness state 是否可读，或存在于别的仓库。** 本地路径与启停使用同一个
+       运行目录解析规则。默认检查当前仓库的 `.runtime/px4_gazebo`，也可用
+       `UAV_SIM_RUNTIME_ROOT` 指定目录。不同工作区的证据不能混作一次运行。
     ③ **当前实际在跑的是不是被检查的这一份。** 这一条是 2026-10-09 补的，
        起因是一次实测：调用方拿**相机** manifest 跑本检查，而实际在跑的是
        **默认** manifest，结果报了 `camera.present=True`、`ok: True` ——
@@ -1410,16 +1599,68 @@ def preflight_manifest(
             ),
         })
 
-    local_state = repo_root / ".runtime" / "px4_gazebo" / "harness_state.json"
-    other_states: list[Path] = []
-    if worktrees_root is not None and worktrees_root.is_dir():
-        for candidate in sorted(worktrees_root.glob("*/.runtime/px4_gazebo/harness_state.json")):
-            try:
-                if candidate.resolve() == local_state.resolve():
+    local_state = resolve_runtime_root(repo_root) / STATE_FILENAME
+    state: dict[str, Any] | None = None
+    state_status = "missing"
+    try:
+        state = _read_optional_state(local_state)
+        if state is not None:
+            state_status = "readable"
+    except OSError as exc:
+        state_status = "unreadable"
+        findings.append({
+            "code": "harness_state_unreadable",
+            "severity": "error",
+            "path": str(local_state),
+            "detail": f"当前系统无法读取仿真状态 {local_state}：{exc}。请在运行仿真的系统中预检，或指定可读取的运行目录。",
+        })
+    except (UnicodeError, json.JSONDecodeError, HarnessError) as exc:
+        state_status = "invalid"
+        findings.append({
+            "code": "harness_state_invalid",
+            "severity": "error",
+            "path": str(local_state),
+            "detail": f"仿真状态格式无效 {local_state}：{exc}。",
+        })
+
+    other_states: set[Path] = set()
+    unreadable_worktrees: dict[str, str] = {}
+    if worktrees_root is not None:
+        try:
+            checkouts = sorted(worktrees_root.iterdir())
+        except (FileNotFoundError, NotADirectoryError):
+            checkouts = []
+        except OSError as exc:
+            checkouts = []
+            unreadable_worktrees[str(worktrees_root)] = str(exc)
+        relative_paths = {DEFAULT_RUNTIME_DIR / STATE_FILENAME}
+        if local_state.is_relative_to(repo_root):
+            relative_paths.add(local_state.relative_to(repo_root))
+        try:
+            resolved_local_state = local_state.resolve()
+        except (OSError, RuntimeError):
+            resolved_local_state = local_state.absolute()
+        for checkout in checkouts:
+            for relative_path in relative_paths:
+                candidate = checkout / relative_path
+                if candidate.absolute() == local_state.absolute():
                     continue
-            except OSError:
-                pass
-            other_states.append(candidate)
+                try:
+                    if stat.S_ISREG(candidate.stat().st_mode) and candidate.resolve() != resolved_local_state:
+                        other_states.add(candidate)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except (OSError, RuntimeError) as exc:
+                    unreadable_worktrees[str(candidate)] = str(exc)
+
+    if unreadable_worktrees:
+        findings.append({
+            "code": "worktree_state_scan_incomplete",
+            "severity": "warning",
+            "detail": "当前系统无法检查部分其他工作区的仿真状态，可在 WSL 内复查。",
+            "paths": sorted(unreadable_worktrees),
+            "errors": unreadable_worktrees,
+        })
 
     if other_states:
         # 本仓库有没有状态都要报 —— 两者都有更危险：本仓库那份可能是**旧的**，
@@ -1427,31 +1668,28 @@ def preflight_manifest(
         #
         # detail 里**直接带上路径**：`paths` 字段是给机器读的，而这句话是给人读的。
         # 让人再去翻 JSON 才能知道是哪个 worktree，等于没说。
-        listed = "、".join(str(p) for p in other_states)
+        paths = [str(path) for path in sorted(other_states)]
+        listed = "、".join(paths)
+        local_detail = {
+            "missing": "本仓库没有这份状态。",
+            "readable": "本仓库也有一份，但它可能来自更早的运行。",
+            "unreadable": "当前系统无法读取本仓库的状态。",
+            "invalid": "本仓库的状态格式无效。",
+        }[state_status]
         findings.append({
             "code": "state_in_other_worktree",
             "severity": "error",
-            "local_state_present": local_state.is_file(),
+            "local_state_present": None if state_status == "unreadable" else state_status != "missing",
             "detail": (
                 f"仿真状态存在于别的仓库：{listed}。"
-                f"而 Runtime 只认 {local_state}。"
-                + ("本仓库也有一份，但它可能来自**更早的运行**。"
-                   if local_state.is_file() else "本仓库没有这份状态。")
-                + " 结果会是「前端能连上飞机，但标定读到过期证据」。"
-                " 要么从本仓库启动仿真，要么让调用方把仓库根指向那个 worktree。"
+                f"本次检查读取 {local_state}。{local_detail}"
+                " 请确认启动和标定使用同一工作区和运行目录。"
             ),
-            "paths": [str(p) for p in other_states],
+            "paths": paths,
         })
 
     # --- ③ 实际在跑的是不是被检查的这一份 ---------------------------------
-    running_path: str | None = None
-    if local_state.is_file():
-        try:
-            state = load_json(local_state)
-            if isinstance(state, dict):
-                running_path = str(state.get("manifest_path") or "") or None
-        except (OSError, json.JSONDecodeError, HarnessError):
-            running_path = None
+    running_path = (str(state.get("manifest_path") or "") or None) if state is not None else None
 
     matches = _same_manifest(running_path, manifest_path)
     if matches is False:
@@ -1481,6 +1719,7 @@ def preflight_manifest(
             "path": running_path,
             "matches_checked": matches,
         },
+        "harness_state": {"path": str(local_state), "status": state_status},
         "repo_root": str(repo_root),
         "findings": findings,
     }
@@ -1519,6 +1758,20 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@contextmanager
+def _lifecycle_lock():
+    """Serialize CLI start/stop for the same state directory."""
+    if os.name != "posix":
+        yield
+        return
+    import fcntl
+
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+    with (RUNTIME_ROOT / "harness.lock").open("ab") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -1528,7 +1781,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "mapping":
             print_mapping_table(load_manifest(args.config))
         elif args.command == "start":
-            start_harness(args.config, headless=bool(args.headless))
+            with _lifecycle_lock():
+                start_harness(args.config, headless=bool(args.headless))
         elif args.command == "preflight":
             manifest = load_manifest(args.config)
             repo_root = Path(args.repo_root)
@@ -1547,8 +1801,9 @@ def main(argv: list[str] | None = None) -> int:
             # 若错位时仍返回 0，调用方就只能解析文字判断，那迟早会失效。
             return 0 if report["ok"] else 1
         elif args.command == "stop":
-            stop_harness()
-    except HarnessError as exc:
+            with _lifecycle_lock():
+                stop_harness()
+    except (HarnessError, OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0

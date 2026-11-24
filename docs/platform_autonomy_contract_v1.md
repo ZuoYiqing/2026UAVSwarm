@@ -1,5 +1,15 @@
 # Single-platform task execution v1.0
 
+Simulation health handoff now has a dedicated read-only producer and optional
+platform-view extension. Ground additionally supplies `--run-id` when using
+`GET /api/simulation/runtime-telemetry`; existing task routes are unchanged.
+See `runtime_telemetry_health_contract_v1.md` for the exact source clocks,
+fixture and atomic file exporter. This does not constitute LIVE acceptance.
+
+Windows separate-CLI fake process/link-loss/restart verification is documented
+in `runtime_process_boundary_verification_20261030.md`; its opt-in script cannot
+run SITL or submit flight tasks. This is not PX4/Gazebo acceptance.
+
 UAV-02's companion is a separate long-lived process with a SQLite task/event
 store and one MAVLink receiver. An HTTP request accepts an immutable bounded
 task; its worker executes independently of ground/browser connections. This
@@ -147,8 +157,19 @@ The ground facade caps full task/status replies at 8 MiB and model replies at
 The ground gateway returns 503 platform_link_unavailable/unknown on link failure.
 It never rewrites a platform task as failed. Frontends retain last-confirmed
 platform state and mark its observation stale. They must not automatically
-resubmit POST requests on reconnect. Existing /api/snapshot, /api/events and
-legacy action views remain unchanged; platform state is an additive namespace.
+resubmit POST requests on reconnect. Existing /api/events and legacy action views
+remain unchanged; platform state is an additive namespace. The follow-up public
+snapshot fusion preserves existing shapes and includes the remotely owned node.
+
+The authenticated `GET /api/platform/view` publishes platform-owned, calibrated
+read-only projections. Ground polls this independently of its heartbeat and
+merges a freshness-bounded cache into the existing snapshot/telemetry/vehicle
+feeds; it never opens UAV-02's transport or adds its origin offset again.
+Missing/stale views retain the node and last pose, mark public position unusable,
+and never rewrite task terminal state. Fake views cannot become PX4 evidence.
+Ground UAV-02 preflight forwards read-only HOME/RTL diagnostics to the owner and
+rechecks local 01/03 isolation; it remains non-authorizing. Exact fields, TTLs,
+errors, fixture and compatibility: `platform_view_contract_v1.md`.
 
 Runtime owns this contract/fixture and src/uav_runtime changes. Algorithm owns
 candidate service/model artifacts; Simulation owns process topology, sensors,
