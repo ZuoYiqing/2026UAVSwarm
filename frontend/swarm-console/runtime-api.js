@@ -26,6 +26,8 @@
   const DEFAULT_BASE_URL = "http://127.0.0.1:8765/api";
   const STORAGE_KEY = "swarm-console.runtime-api-base-url";
   const DEFAULT_TIMEOUT_MS = 5000;
+  const DEFAULT_PLAN_TIMEOUT_MS = 20_000;
+  const PLAN_SLOW_HINT_MS = 5_000;
   const ACTION_TIMEOUT_GRACE_MS = 5000;
 
   function smokeTakeoffTimeoutMs(body = {}) {
@@ -70,10 +72,11 @@
     const baseUrl = getConfiguredBaseUrl().replace(/\/+$/, "");
     const url = `${baseUrl}${path}`;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(
-      () => controller.abort(),
-      options.timeoutMs || DEFAULT_TIMEOUT_MS
-    );
+    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    const slowId = options.onSlow && options.slowHintMs > 0 && options.slowHintMs < timeoutMs
+      ? window.setTimeout(() => options.onSlow(timeoutMs), options.slowHintMs)
+      : null;
     const headers = { ...(options.headers || {}) };
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -103,6 +106,7 @@
       throw error;
     } finally {
       window.clearTimeout(timeoutId);
+      if (slowId !== null) window.clearTimeout(slowId);
     }
 
     let payload = {};
@@ -126,6 +130,20 @@
     return payload;
   }
 
+  function planMission(body, opts = {}) {
+    const configured = Number(new URLSearchParams(global.location?.search).get("planTimeoutMs"));
+    const defaultTimeoutMs = Number.isInteger(configured) && configured > 0 && configured <= 2_147_483_647
+      ? configured
+      : DEFAULT_PLAN_TIMEOUT_MS;
+    return request("/planner/plan-mission", {
+      method: "POST",
+      body,
+      timeoutMs: opts.timeoutMs ?? defaultTimeoutMs,
+      slowHintMs: opts.slowHintMs ?? PLAN_SLOW_HINT_MS,
+      onSlow: opts.onSlow,
+    });
+  }
+
   global.SwarmRuntimeApi = {
     getConfiguredBaseUrl,
     setConfiguredBaseUrl,
@@ -146,7 +164,7 @@
       body,
       timeoutMs: landTimeoutMs(body),
     }),
-    planMission: (body) => request("/planner/plan-mission", { method: "POST", body }),
+    planMission,
     replayLast: (n = 20) => request(`/replay?n=${encodeURIComponent(n)}`),
     capabilities: () => request("/capabilities"),
     events: (n = 50) => request(`/events?n=${encodeURIComponent(n)}`),

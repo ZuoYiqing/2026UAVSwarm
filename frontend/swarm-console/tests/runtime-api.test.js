@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-function loadApi(fetchImpl) {
+function loadApi(fetchImpl, windowOverrides = {}) {
   const previous = {
     window: global.window,
     localStorage: global.localStorage,
@@ -15,6 +15,7 @@ function loadApi(fetchImpl) {
       getItem: (key) => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value),
     },
+    ...windowOverrides,
   };
   global.localStorage = global.window.localStorage;
   global.fetch = fetchImpl;
@@ -48,6 +49,96 @@ test("request deadline covers a stalled response body", async () => {
   global.window.setTimeout = (callback) => setTimeout(callback, 10);
   try {
     await assert.rejects(runtime.api.health(), (error) => error.kind === "timeout");
+  } finally {
+    runtime.restore();
+  }
+});
+
+function controlledTimers() {
+  const pending = new Set();
+  const scheduled = [];
+  return {
+    pending,
+    scheduled,
+    window: {
+      setTimeout(callback, delay) {
+        const timer = { callback, delay };
+        pending.add(timer);
+        scheduled.push(delay);
+        return timer;
+      },
+      clearTimeout(timer) { pending.delete(timer); },
+    },
+    fire(delay) {
+      const timer = [...pending].find(item => item.delay === delay);
+      assert.ok(timer, `No timer scheduled at ${delay} ms`);
+      pending.delete(timer);
+      timer.callback();
+    },
+  };
+}
+
+test("mission preview hints at 5 seconds and times out at 20 seconds even if only the response body stalls", async () => {
+  const timers = controlledTimers();
+  const hints = [];
+  let signal;
+  const runtime = loadApi(async (url, options) => {
+    assert.equal(url, "http://127.0.0.1:8765/api/planner/plan-mission");
+    assert.equal(options.method, "POST");
+    assert.deepEqual(JSON.parse(options.body), { objective: "巡检东北视觉标记" });
+    signal = options.signal;
+    return {
+      ok: true, status: 200,
+      text: () => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }),
+    };
+  }, timers.window);
+  try {
+    const pending = runtime.api.planMission({ objective: "巡检东北视觉标记" }, {
+      onSlow: timeoutMs => hints.push(timeoutMs),
+    });
+    const timedOut = assert.rejects(pending, error => error.kind === "timeout");
+    await Promise.resolve();
+    assert.deepEqual(timers.scheduled, [20_000, 5_000]);
+    assert.deepEqual(hints, []);
+    timers.fire(5_000);
+    assert.deepEqual(hints, [20_000]);
+    assert.equal(signal.aborted, false);
+    timers.fire(20_000);
+    await timedOut;
+    assert.equal(timers.pending.size, 0);
+  } finally {
+    runtime.restore();
+  }
+});
+
+test("mission preview respects the URL and call-specific timeouts and clears timers on early replies", async () => {
+  const timers = controlledTimers();
+  const location = { search: "?planTimeoutMs=30000" };
+  const earlyReply = { result: "ready" };
+  let status = 200;
+  const runtime = loadApi(async () => response(earlyReply, status), { ...timers.window, location });
+  const onSlow = () => assert.fail("Completed preview must not display a slow hint");
+  try {
+    assert.deepEqual(await runtime.api.planMission({}, { onSlow }), earlyReply);
+    assert.deepEqual(timers.scheduled, [30_000, 5_000]);
+    assert.equal(timers.pending.size, 0);
+
+    timers.scheduled.length = 0;
+    status = 503;
+    await assert.rejects(runtime.api.planMission({}, { timeoutMs: 25_000, slowHintMs: 3_000, onSlow }),
+      error => error.kind === "http" && error.status === 503);
+    assert.deepEqual(timers.scheduled, [25_000, 3_000]);
+    assert.equal(timers.pending.size, 0);
+
+    timers.scheduled.length = 0;
+    location.search = "?planTimeoutMs=invalid";
+    status = 200;
+    await runtime.api.planMission({}, { onSlow });
+    await runtime.api.vehicles();
+    assert.deepEqual(timers.scheduled, [20_000, 5_000, 5_000]);
+    assert.equal(timers.pending.size, 0);
   } finally {
     runtime.restore();
   }

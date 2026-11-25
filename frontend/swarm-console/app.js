@@ -59,7 +59,7 @@ const state = {
   dataStatus: "checking",
   lastBackendResult: null,
   lastActionResult: null,
-  templatePlan: { objective: "", inFlight: false, reply: null, error: null },
+  templatePlan: { objective: "", inFlight: false, slowHint: "", reply: null, error: null },
   fixturePlan: {},
   semanticPreview: {},
   semanticPreviewDetailsOpen: false,
@@ -1540,6 +1540,12 @@ function twinPage() {
   </div>`;
 }
 
+function templatePlanButtonLabel() {
+  const { inFlight, slowHint } = state.templatePlan;
+  if (!inFlight) return "预览任务";
+  return slowHint ? "继续等待…" : "识别中…";
+}
+
 function planningPage() {
   const { objective, inFlight } = state.templatePlan;
   const inputsDisabled = inFlight || state.fixturePlan.executing ? " disabled" : "";
@@ -1551,7 +1557,7 @@ function planningPage() {
           <textarea rows="4" id="template-plan-objective" data-template-plan-objective placeholder="输入或粘贴任务书"${inputsDisabled}>${esc(objective)}</textarea></div>
           <div class="planning-actions">
             <button class="button" id="template-plan-example" type="button" onclick="useTemplatePlanExample()"${inputsDisabled}>填入巡检示例</button>
-            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inputsDisabled}>${inFlight ? "等待 Runtime…" : "预览任务"}</button>
+            <button class="button primary" id="template-plan-submit" type="button" onclick="generateRequest()"${inputsDisabled}>${templatePlanButtonLabel()}</button>
           </div>
           <p class="small">Runtime 根据当前场景目录识别目标，返回只读预览或追问。</p>`)}
         ${panel("载具状态", vehicleTable(), "scroll")}
@@ -1614,11 +1620,11 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
 }
 
 function templatePlanPreview() {
-  const { inFlight, reply, error } = state.templatePlan;
+  const { inFlight, slowHint, reply, error } = state.templatePlan;
   if (!reply) {
     const content = error
       ? `<p class="inline-error">${esc(error)}</p>`
-      : `<p class="small">${inFlight ? "等待 Runtime 识别任务…" : "填写任务目标后可生成只读预览。"}</p>`;
+      : `<p class="small">${inFlight ? esc(slowHint || "等待 Runtime 识别任务…") : "填写任务目标后可生成只读预览。"}</p>`;
     return panel("Runtime 任务预览", content);
   }
   const provenance = templatePlanProvenance(reply);
@@ -1676,7 +1682,7 @@ function renderTemplatePlan() {
     const control = document.getElementById(id);
     if (!control) continue;
     control.disabled = Boolean(inFlight || state.fixturePlan.executing);
-    if (id === "template-plan-submit") control.textContent = inFlight ? "等待 Runtime…" : "预览任务";
+    if (id === "template-plan-submit") control.textContent = templatePlanButtonLabel();
   }
 }
 
@@ -2221,12 +2227,18 @@ async function generateRequest(missionType) {
   draft.error = null;
   renderTemplatePlan();
   try {
-    draft.reply = await callRuntime("plan", () => window.SwarmRuntimeApi.planMission(request), error => {
-      draft.error = error.message;
+    draft.reply = await callRuntime("plan", () => window.SwarmRuntimeApi.planMission(request, {
+      onSlow(maxWaitMs) {
+        draft.slowHint = `Runtime 响应较慢，继续等待（最多 ${maxWaitMs / 1000} 秒）`;
+        renderTemplatePlan();
+      },
+    }), error => {
+      draft.error = error.kind === "timeout" ? "Runtime 响应超时" : error.message;
       return null;
     }, { notifyFailure: false });
   } finally {
     draft.inFlight = false;
+    draft.slowHint = "";
     renderTemplatePlan();
     render();
   }
