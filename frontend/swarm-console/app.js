@@ -1600,6 +1600,32 @@ function templatePlanProvenance(reply) {
   ]);
 }
 
+const previewOrderBasisLabels = new Map([
+  ["explicit_sequence", "原话明确先后"],
+  ["mention_order", "按提及顺序"],
+]);
+
+function templatePlanOrder(bindings) {
+  if (!bindings || !Object.hasOwn(bindings, "target_order_basis")) return null;
+  const { target_order_basis: basis, target_order: orderedIds, targets, preview_only_targets: previewTargets } = bindings;
+  if (basis === null && orderedIds === undefined) return "无顺序要求";
+  if (!Array.isArray(targets) || !Array.isArray(previewTargets)) return "顺序未上报";
+
+  const entries = [...targets, ...previewTargets];
+  if (entries.some(entry => typeof entry?.entity_id !== "string" || !entry.entity_id)) return "顺序未上报";
+  const names = new Map(targets.map(entry => [entry.entity_id, entry.evidence || entry.entity_id]));
+  for (const entry of previewTargets) {
+    names.set(entry.entity_id, `${entry.evidence || entry.entity_id}（仅预览）`);
+  }
+  const mixed = targets.length > 0 && previewTargets.length > 0;
+  const ids = orderedIds === undefined && !mixed ? [...names.keys()] : orderedIds;
+  if (!Array.isArray(ids) || ids.length < 2 || ids.length !== entries.length || new Set(ids).size !== ids.length
+    || ids.some(id => !names.has(id))) return "顺序未上报";
+
+  const label = previewOrderBasisLabels.get(basis);
+  return ids.map(id => esc(names.get(id))).join(" → ") + (label ? ` <span class="small">（${esc(label)}）</span>` : "");
+}
+
 function templatePlanBinding({ catalog, bindings }, missionType) {
   const list = (items, note = "") => {
     if (!Array.isArray(items)) return "未上报";
@@ -1607,6 +1633,7 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
     if (items.some(item => typeof item?.entity_id !== "string" || !item.entity_id)) return "绑定信息异常";
     return `<ul>${items.map(({ entity_id, evidence }) => `<li>${esc(evidence || entity_id)} <code>${esc(entity_id)}</code>${note}</li>`).join("")}</ul>`;
   };
+  const order = templatePlanOrder(bindings);
   return previewFields([
     ["任务类型", `<code>${esc(missionType ?? "未上报")}</code>`],
     ["场景 / 地图 / 目录", [catalog?.scene_id, catalog?.map_version, catalog?.catalog_id].map(id => esc(id ?? "未上报")).join(" / ")],
@@ -1614,9 +1641,58 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
     ["演习目标", list(bindings?.preview_only_targets, ' <span class="amber">仅预览，不可执行</span>')],
     ["定位参照", list(bindings?.reference_only)],
     ["排除目标", list(bindings?.excluded_targets)],
+    ...(order === null ? [] : [["核对顺序", order]]),
     ["仅列明目标", bindings?.only_listed_targets === true ? "是" : bindings?.only_listed_targets === false ? "否" : "未上报"],
     ["状态范围", esc(bindings?.status_scope === null ? "无" : bindings?.status_scope ?? "未上报")],
   ]);
+}
+
+const modelRejectionLabels = new Map([
+  ["MODEL_JSON_INVALID", "模型回答不是合法的 JSON"],
+  ["MODEL_FIELDS_INVALID", "模型回答的字段不符合要求"],
+  ["MODEL_INDEX_INVALID", "目录编号列表不符合要求"],
+  ["MODEL_DUPLICATE_SELECTION", "重复选择了同一目录对象"],
+  ["TARGET_REFERENCE_ONLY", "把仅供定位的参照对象选成了目标"],
+  ["CONFLICTING_TARGETS", "选中的目标互斥"],
+  ["MODEL_ROLE_CONFLICT", "所选目标与参照或排除约束冲突"],
+  ["MODEL_ABSTAINED", "模型没有选出巡检目标"],
+  ["MODEL_TIMEOUT", "模型响应超时"],
+  ["MODEL_UNAVAILABLE", "模型服务不可用"],
+  ["MODEL_BUSY", "模型正在处理其他请求"],
+  ["MODEL_THREAD_UNAVAILABLE", "模型请求无法启动"],
+  ["MODEL_INPUT_TOO_LARGE", "模型输入超过大小上限"],
+  ["MODEL_INPUT_INVALID", "模型输入格式无效"],
+  ["MODEL_RESPONSE_TOO_LARGE", "模型回包超过大小上限"],
+  ["MODEL_ENVELOPE_INVALID", "模型服务回包格式无效"],
+  ["MODEL_TEXT_MISSING", "模型回包缺少文本"],
+  ["MODEL_ID_MISMATCH", "回包中的模型标识与配置不符"],
+  ["MODEL_RESPONSE_INCOMPLETE", "模型回答未完整返回"],
+  ["MODEL_TOOL_CALL_REFUSED", "模型回包包含工具调用"],
+]);
+
+function templateModelAnswer(diagnostics) {
+  if (!Array.isArray(diagnostics?.attempts)) return "";
+  const attempts = diagnostics.attempts.filter(attempt => typeof attempt?.adopted === "boolean"
+    && (attempt.raw_text === null || typeof attempt.raw_text === "string"));
+  if (!attempts.length) return "";
+
+  const adoption = diagnostics.adopted === true ? "已采用" : diagnostics.adopted === false ? "未采用" : "采纳状态未知";
+  const answers = attempts.map((attempt, index) => {
+    const status = attempt.adopted ? "已采用" : "未采用";
+    const reason = attempt.not_adopted_reason;
+    const reasonText = typeof reason === "string" && reason
+      ? `${esc(modelRejectionLabels.get(reason) || "Runtime 上报原因")} <code>${esc(reason)}</code>`
+      : "未上报";
+    const raw = attempt.redacted === true ? '<p class="small">原答已由 Runtime 脱敏</p>'
+      : attempt.raw_text === null ? '<p class="small">本次未提供原答文本</p>'
+      : attempt.raw_text === "" ? '<p class="small">模型返回了空文本</p>'
+      : `<pre class="json"><code>${esc(attempt.raw_text)}</code></pre>`;
+    return `${attempts.length > 1 ? `<p class="small"><b>第 ${index + 1} 次 · ${status}</b></p>` : ""}
+      ${attempt.adopted ? "" : `<p class="small">未采用原因 ${reasonText}</p>`}
+      ${raw}
+      ${attempt.truncated === true ? '<p class="small">原答已由 Runtime 截断</p>' : ""}`;
+  }).join("");
+  return `<details class="template-model-answer" open><summary>模型原答 · ${adoption}</summary>${answers}</details>`;
 }
 
 function templatePlanPreview() {
@@ -1628,6 +1704,7 @@ function templatePlanPreview() {
     return panel("Runtime 任务预览", content);
   }
   const provenance = templatePlanProvenance(reply);
+  const modelAnswer = templateModelAnswer(reply.model_diagnostics);
   const intent = reply.intent_resolution;
   if (intent && (intent.status !== "resolved" || intent.reason_code === "TARGET_REFERENCE_ONLY")) {
     const title = intent.status === "needs_clarification" ? "需要澄清"
@@ -1638,13 +1715,13 @@ function templatePlanPreview() {
     return panel(title, `${question ? `<p>${esc(question)}</p>` : ""}
       ${referenceNote}
       ${intent.reason_code ? `<p class="small"><code>${esc(intent.reason_code)}</code></p>` : ""}
-      ${provenance}`);
+      ${provenance}${modelAnswer}`);
   }
 
   const plan = reply.plan_source === "none" || reply.execution_authorized === true ? null : reply.plan;
   const outcome = `<p>${badge(templateResultNames.get(reply.result) || "结果未识别", plan ? "cyan" : "amber")}
     ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>`;
-  if (!plan) return panel("Runtime 任务预览", `${provenance}${outcome}<p class="small">本次没有可显示的计划。</p>`);
+  if (!plan) return panel("Runtime 任务预览", `${provenance}${outcome}<p class="small">本次没有可显示的计划。</p>${modelAnswer}`);
 
   const binding = plan.preview_binding;
   const outline = binding?.steps_are_outline === true;
@@ -1668,6 +1745,7 @@ function templatePlanPreview() {
       ${binding ? templatePlanBinding(binding, intent?.mission_type ?? plan.mission_type) : ""}
       ${outline ? '<p class="small">以下为模板通用步骤。目标和约束见上方绑定。</p>' : ""}
       ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : '<p class="small">Runtime 未返回计划步骤</p>'}
+      ${modelAnswer}
       <details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>`)}
     ${precheck ? panel("逐步策略预检与风险", `<div class="planning-table"><table class="table">
       <thead><tr><th>步骤</th><th>预检结论</th><th>依据</th><th>动作风险级别</th></tr><tbody>${precheck}</tbody></table></div>
