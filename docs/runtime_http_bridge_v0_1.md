@@ -157,16 +157,26 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 | 字段 | v1.0 含义 |
 | --- | --- |
 | `contract_version` | `"1.0"`，仅版本化本路由的预览回包，不是执行 Plan IR 版本。 |
-| `intent_source` | `explicit`：请求方显式提供模板键；`rules`：实际运行了离线识别器（不保证识别成功）；`local_model`：本地模型识别；`none`：未运行识别器且没有显式选择。 |
+| `intent_source` | `explicit`：请求方显式提供模板键；`rules`：产出来自离线识别器（不保证识别成功）；`local_model`：实际采用了本地模型的目录决策；`none`：未运行识别器且没有显式选择。 |
 | `plan_source` | `template`：模板展开；`algorithm`：算法产生可展示计划；`none`：未生成计划（`plan: null`）。它不是意图识别器类型。 |
-| `fallback_reason` | 不发生降级时为 `null`。真正因模型不可用或低置信切换到离线路径时必带 `model_unavailable` 或 `model_low_confidence`，即使最终未生成计划。 |
+| `fallback_reason` | 未降级为 `null`。模型服务不可用、超时或忙为 `model_unavailable`；模型回包不合法为 `model_invalid_output`；合法回包的 `t` 为空为 `model_abstained`。旧版本可返回 `model_low_confidence`，新版模型路径不再发送该值。 |
+| `model_diagnostics` | 只读可选字段。模型路径选中或降级时带 `adopted`、`not_adopted_reason` 和按顺序记录的 `attempts`，每条包含 `raw_text`、`adopted`、`not_adopted_reason`、`truncated`、`redacted`。无文本时为 `null`，疑似敏感内容整条显示 `[redacted]`。规则拦截、模型关闭及显式模板均省略此字段。 |
 | `execution_authorized` | 恒为 `false`；`ready` 只是预览就绪。传 `dry_run: false` 或附带审批字段也不会提交执行。 |
 
 显式模板键继续走旧路径，`objective` 只是备注，不做识别；`fallback_hold` 等显式模板不算降级。
-要走规则，提供 `objective`，并省略 `mission_type`、传空字符串或传 `"auto"`。
-`"auto"` 是选择规则路径的标记，不是可展开的模板键。这条路径
-直接用离线规则，`fallback_reason: null`；本地模型和算法计划生产者仍未接入。
+自动预览：提供 `objective`，并省略 `mission_type`、传空字符串或传 `"auto"`。
+`"auto"` 不是模板键。模型关闭时直接走原有规则，`fallback_reason: null`；
+模型开启时，规则先判定本请求是否可交给模型。只有明确且可表示为巡检预览的请求进入模型，
+歧义、互斥、目录外、应急、状态查询和起降验证保持原有规则回包，均不调用模型。
 调用方不能通过请求字段指定目录、来源或授权。
+
+通过门禁后，合法模型决策以 `LOCAL_MODEL_SELECTED_INTENT` 采用，无须与规则的目标、
+顺序或约束布尔值相同。编号必须在目录内；仅参照实体、显式定位／排除的实体和模型自己
+标为参照或排除的实体不能同时作为目标，互斥成员不能并选。绑定的 `evidence` 仅引用原话出现的
+目录名称或别名，找不到则为空字符串。输出不合法时至多重试一次，两次共用默认 18 秒预算。
+诊断仅在响应中返回，不保存到计划、事件或审计；只提取模型可见回答，截断为最多 1024 字符，
+不回传请求提示词、令牌、模型内部路径或推理链。消费者应以纯文本渲染，不解释为 HTML 或命令；
+该可选诊断及错误码是 v1.0 的兼容扩展。
 
 前端用 `plan_source` 区分“模板预览”“算法预览”“无计划”，再用
 `intent_source` 说明理解方式。只有 `local_model` 表示本地模型识别；

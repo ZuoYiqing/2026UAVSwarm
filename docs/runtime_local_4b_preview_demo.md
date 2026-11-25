@@ -86,18 +86,33 @@ curl --fail --silent --show-error --max-time 20 http://127.0.0.1:8765/api/planne
 
 | 路径 | 页面可见字段 |
 | --- | --- |
-| 真实模型输出通过校验 | `intent_source: "local_model"`，`fallback_reason: null` |
+| 真实模型输出通过校验 | `intent_source: "local_model"`，`fallback_reason: null`，不要求与规则选择一致 |
 | 服务未就绪、超时或正在忙 | `intent_source: "rules"`，`fallback_reason: "model_unavailable"` |
-| 回答无效、换目标、漏排除项或改顺序 | `intent_source: "rules"`，`fallback_reason: "model_low_confidence"`（拒收原因，不代表测出了一个置信度分数） |
+| 两次回答不合法 | `intent_source: "rules"`，`fallback_reason: "model_invalid_output"` |
+| 回答合法但目标数组为空 | `intent_source: "rules"`，`fallback_reason: "model_abstained"` |
 | 目录目标有歧义、互斥、属于仅参照项或规则无法绑定 | 不叫模型去猜；保留原有澄清或拒绝回包，无降级标记 |
 
-自动预览先用当前场景目录验证请求能明确绑定。模型只看到用户原话和编号目录，不看到规则答案；
-模型选出的目标、顺序、仅定位与排除项须与已验证约束一致。通过后采用模型绑定，字面证据仍来自原话。
+自动预览先用当前场景目录判断请求能否进入模型。模型只看到用户原话和编号目录，不看到规则答案；
+它选出的合法目标、顺序和角色会用于预览，即使与规则不同。仅参照对象、互斥和显式排除仍不可绕过，
+模型选中没有字面依据的对象时，`evidence` 为空，不伪造证据。第一次为 seed 11、temperature 0；
+只有输出不合法时才用 seed 29、temperature 0.2 重试一次，弃答和不可用不重试。
 这是首演版的有限识别，不代表支持目录外对象或自由任务分解。模型预算默认 **18 秒**，
-给目标页面 **20 秒**的规划请求留约 2 秒。主控制台尚无该请求的外部配置入口，当前仓库页面仍是
-5 秒；需要前端负责人为 `planMission` 单独接入可配置的默认 `20000` ms，不改变其他 API 超时。
-本改动没有修改前端文件或收紧模型输出。生成方式仍为 `plan_source: "template"`，步骤只是骨架；
+两次尝试共用此预算，给页面的 **20 秒**规划请求留约 2 秒。生成方式仍为
+`plan_source: "template"`，步骤只是骨架；
 `execution_authorized` 一律为 `false`，不会调用执行接口。
+
+展开现有页面预览结果旁的“Runtime 返回 JSON”，查看 `model_diagnostics.attempts`；
+其中每次尝试都记录脱敏且有长度上限的原答、是否采用和原因。主界面仍用
+`intent_source`、`fallback_reason`，不把规则兜底标成模型结果。诊断不会写进已保存的计划或事件。
+
+实际 4B 的五句对照（已启动的模型，保留原有中转、Runtime 和控制台；验证自行使用临时 HTTP 端口）：
+
+```powershell
+python -B tests/integration/verify_runtime_model_decisions_http.py
+```
+
+输出逐句包含耗时、规则基线、模型原答、未采用原因及最终选择，不调用执行接口。
+退出码 `0` 要求至少一条合法的、不同于规则的模型决策被采用；否则会完整输出记录并返回 `2`。
 
 默认 pytest 只使用本机临时测试服务覆盖成功、降级与规则拦截，不加载 4B。
 本机已有健康 4B 且 8765 空闲时，可显式让测试从真实 Runtime 在 HTTP 上调用 4B：

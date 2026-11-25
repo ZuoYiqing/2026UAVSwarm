@@ -92,7 +92,7 @@ def test_internal_serializer_distinguishes_algorithm_from_template(preview_plann
     assert algorithm["execution_authorized"] is template["execution_authorized"] is False
 
 
-@pytest.mark.parametrize("reason", ["model_unavailable", "model_low_confidence"])
+@pytest.mark.parametrize("reason", ["model_unavailable", "model_invalid_output", "model_abstained", "model_low_confidence"])
 def test_internal_fallback_requires_real_source_and_cause(preview_planner, reason) -> None:
     candidate = preview_planner.plan(MissionIntent("test", "status_only"))
     body = serialize_plan_preview(candidate, PlanPreviewProvenance.after_model_fallback(
