@@ -469,7 +469,7 @@ test("planner shows the adopted model answer and rejected retry evidence without
   const html = h.run("templatePlanPreview()");
   assert.match(html, /本地模型识别 <code>local_model<\/code>/);
   assert.match(html, /Runtime 模板大纲/);
-  assert.match(html, /<details class="template-model-answer"><summary>模型原答 · 已采用/);
+  assert.match(html, /<details class="template-model-answer" open><summary>模型原答 · 已采用/);
   assert.match(html, /第 1 次 · 未采用/);
   assert.match(html, /未采用原因.*MODEL_JSON_INVALID/);
   assert.match(html, /&lt;b&gt;模型返回了非 JSON 内容&lt;\/b&gt;/);
@@ -494,7 +494,7 @@ test("planner shows fallback diagnostics with the offline rules source and handl
   h.run('setPage("planning"); setTemplatePlanObjective("巡检东北视觉标记");');
   await h.run("generateRequest()");
   const html = h.run("templatePlanPreview()");
-  const answer = html.match(/<details class="template-model-answer">([\s\S]*?)<\/details>/)?.[1] || "";
+  const answer = html.match(/<details class="template-model-answer" open>([\s\S]*?)<\/details>/)?.[1] || "";
   assert.match(html, /离线规则识别 <code>rules<\/code>/);
   assert.match(html, /降级原因<\/dt><dd>model_invalid_output/);
   assert.match(answer, /模型原答 · 未采用/);
@@ -512,6 +512,28 @@ test("planner shows fallback diagnostics with the offline rules source and handl
   assert.match(h.run("templatePlanPreview()"), /本次未提供原答文本/);
   assert.match(h.run("templatePlanPreview()"), /模型响应超时 <code>MODEL_TIMEOUT<\/code>/);
   assert.doesNotMatch(h.run("templatePlanPreview()"), /template-plan-steps/);
+});
+
+test("planner renders the runtime order across preview and real targets only when reported", () => {
+  const h = harness();
+  const real = { entity_id: "target-001", evidence: "东北视觉标记" };
+  const preview = { entity_id: "demo-area-001", evidence: "西北区域" };
+  const render = bindings => h.run(`templatePlanBinding({bindings:${JSON.stringify(bindings)}}, "inspection_snapshot")`);
+
+  const mixed = { targets: [real], preview_only_targets: [preview] };
+  assert.doesNotMatch(render(mixed), /核对顺序/);
+  assert.match(render({ targets: [real], preview_only_targets: [], target_order_basis: null }),
+    /核对顺序<\/dt><dd>无顺序要求/);
+  assert.match(render({ ...mixed, target_order_basis: "explicit_sequence", target_order: [real.entity_id, preview.entity_id] }),
+    /核对顺序<\/dt><dd>东北视觉标记 → 西北区域（仅预览）.*原话明确先后/);
+  assert.match(render({ ...mixed, target_order_basis: "mention_order", target_order: [preview.entity_id, real.entity_id] }),
+    /核对顺序<\/dt><dd>西北区域（仅预览） → 东北视觉标记.*按提及顺序/);
+  assert.match(render({ ...mixed, target_order_basis: "mention_order" }), /核对顺序<\/dt><dd>顺序未上报/);
+  assert.match(render({ ...mixed, target_order_basis: "mention_order", target_order: [real.entity_id, real.entity_id] }),
+    /核对顺序<\/dt><dd>顺序未上报/);
+  const sameRole = [real, { entity_id: "target-002", evidence: "南侧标记" }];
+  assert.match(render({ targets: sameRole, preview_only_targets: [], target_order_basis: "mention_order" }),
+    /核对顺序<\/dt><dd>东北视觉标记 → 南侧标记.*按提及顺序/);
 });
 
 const inspectionObjective = "检查场景里的 target-001 设备标记并记录航点到达。";

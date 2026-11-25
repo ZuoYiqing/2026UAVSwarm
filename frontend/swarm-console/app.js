@@ -1600,6 +1600,32 @@ function templatePlanProvenance(reply) {
   ]);
 }
 
+const previewOrderBasisLabels = new Map([
+  ["explicit_sequence", "原话明确先后"],
+  ["mention_order", "按提及顺序"],
+]);
+
+function templatePlanOrder(bindings) {
+  if (!bindings || !Object.hasOwn(bindings, "target_order_basis")) return null;
+  const { target_order_basis: basis, target_order: orderedIds, targets, preview_only_targets: previewTargets } = bindings;
+  if (basis === null && orderedIds === undefined) return "无顺序要求";
+  if (!Array.isArray(targets) || !Array.isArray(previewTargets)) return "顺序未上报";
+
+  const entries = [...targets, ...previewTargets];
+  if (entries.some(entry => typeof entry?.entity_id !== "string" || !entry.entity_id)) return "顺序未上报";
+  const names = new Map(targets.map(entry => [entry.entity_id, entry.evidence || entry.entity_id]));
+  for (const entry of previewTargets) {
+    names.set(entry.entity_id, `${entry.evidence || entry.entity_id}（仅预览）`);
+  }
+  const mixed = targets.length > 0 && previewTargets.length > 0;
+  const ids = orderedIds === undefined && !mixed ? [...names.keys()] : orderedIds;
+  if (!Array.isArray(ids) || ids.length < 2 || ids.length !== entries.length || new Set(ids).size !== ids.length
+    || ids.some(id => !names.has(id))) return "顺序未上报";
+
+  const label = previewOrderBasisLabels.get(basis);
+  return ids.map(id => esc(names.get(id))).join(" → ") + (label ? ` <span class="small">（${esc(label)}）</span>` : "");
+}
+
 function templatePlanBinding({ catalog, bindings }, missionType) {
   const list = (items, note = "") => {
     if (!Array.isArray(items)) return "未上报";
@@ -1607,6 +1633,7 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
     if (items.some(item => typeof item?.entity_id !== "string" || !item.entity_id)) return "绑定信息异常";
     return `<ul>${items.map(({ entity_id, evidence }) => `<li>${esc(evidence || entity_id)} <code>${esc(entity_id)}</code>${note}</li>`).join("")}</ul>`;
   };
+  const order = templatePlanOrder(bindings);
   return previewFields([
     ["任务类型", `<code>${esc(missionType ?? "未上报")}</code>`],
     ["场景 / 地图 / 目录", [catalog?.scene_id, catalog?.map_version, catalog?.catalog_id].map(id => esc(id ?? "未上报")).join(" / ")],
@@ -1614,6 +1641,7 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
     ["演习目标", list(bindings?.preview_only_targets, ' <span class="amber">仅预览，不可执行</span>')],
     ["定位参照", list(bindings?.reference_only)],
     ["排除目标", list(bindings?.excluded_targets)],
+    ...(order === null ? [] : [["核对顺序", order]]),
     ["仅列明目标", bindings?.only_listed_targets === true ? "是" : bindings?.only_listed_targets === false ? "否" : "未上报"],
     ["状态范围", esc(bindings?.status_scope === null ? "无" : bindings?.status_scope ?? "未上报")],
   ]);
@@ -1658,13 +1686,13 @@ function templateModelAnswer(diagnostics) {
     const raw = attempt.redacted === true ? '<p class="small">原答已由 Runtime 脱敏</p>'
       : attempt.raw_text === null ? '<p class="small">本次未提供原答文本</p>'
       : attempt.raw_text === "" ? '<p class="small">模型返回了空文本</p>'
-      : `<pre class="json">${esc(attempt.raw_text)}</pre>`;
+      : `<pre class="json"><code>${esc(attempt.raw_text)}</code></pre>`;
     return `${attempts.length > 1 ? `<p class="small"><b>第 ${index + 1} 次 · ${status}</b></p>` : ""}
       ${attempt.adopted ? "" : `<p class="small">未采用原因 ${reasonText}</p>`}
       ${raw}
       ${attempt.truncated === true ? '<p class="small">原答已由 Runtime 截断</p>' : ""}`;
   }).join("");
-  return `<details class="template-model-answer"><summary>模型原答 · ${adoption}</summary>${answers}</details>`;
+  return `<details class="template-model-answer" open><summary>模型原答 · ${adoption}</summary>${answers}</details>`;
 }
 
 function templatePlanPreview() {
