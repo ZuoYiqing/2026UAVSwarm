@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 from http.client import HTTPConnection, HTTPException
 import json
@@ -169,7 +170,8 @@ class LocalPreviewModel:
             # Bound the caller wait even if a slow backend dribbles each socket
             # read just before its timeout. The worker retains the one-call slot.
             return ModelSelection(resolution=pending.result(timeout=self._config.timeout_s))
-        except (OSError, HTTPException):
+        except (OSError, HTTPException, FutureTimeoutError):
+            # Before Python 3.11, Future's wait timeout is not an OSError.
             return ModelSelection(fallback_reason="model_unavailable")
         except (ValueError, RecursionError):
             return ModelSelection(fallback_reason="model_low_confidence")
