@@ -446,6 +446,74 @@ test("clarification and unsupported replies replace the previous plan with Runti
   assert.deepEqual(requests, ["巡检东北视觉标记", "巡检中央建筑", "西南和东南都巡检"]);
 });
 
+test("planner shows the adopted model answer and rejected retry evidence without changing intent provenance", async () => {
+  const h = harness();
+  const reply = {
+    contract_version: "1.0", intent_source: "local_model", plan_source: "template",
+    execution_authorized: false, fallback_reason: null, result: "ready",
+    plan: { steps: [{ action_type: "camera_capture" }], preview_binding: { steps_are_outline: true } },
+  };
+  h.api.planMission = async () => reply;
+  h.run('setPage("planning"); setTemplatePlanObjective("巡检东北视觉标记");');
+  await h.run("generateRequest()");
+  assert.doesNotMatch(h.run("templatePlanPreview()"), /模型原答/);
+
+  reply.model_diagnostics = {
+    adopted: true, not_adopted_reason: null,
+    attempts: [
+      { adopted: false, raw_text: "<b>模型返回了非 JSON 内容</b>", not_adopted_reason: "MODEL_JSON_INVALID" },
+      { adopted: true, raw_text: '{"t":[2],"r":[],"x":[],"only":false}', not_adopted_reason: null },
+    ],
+  };
+  await h.run("generateRequest()");
+  const html = h.run("templatePlanPreview()");
+  assert.match(html, /本地模型识别 <code>local_model<\/code>/);
+  assert.match(html, /Runtime 模板大纲/);
+  assert.match(html, /<details class="template-model-answer"><summary>模型原答 · 已采用/);
+  assert.match(html, /第 1 次 · 未采用/);
+  assert.match(html, /未采用原因.*MODEL_JSON_INVALID/);
+  assert.match(html, /&lt;b&gt;模型返回了非 JSON 内容&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>模型返回了非 JSON 内容<\/b>/);
+  assert.match(html, /第 2 次 · 已采用/);
+  assert.match(html, /&quot;t&quot;:\[2\]/);
+});
+
+test("planner shows fallback diagnostics with the offline rules source and handles unavailable text", async () => {
+  const h = harness();
+  const reply = {
+    contract_version: "1.0", intent_source: "rules", plan_source: "template", execution_authorized: false,
+    fallback_reason: "model_invalid_output", result: "ready",
+    plan: { steps: [{ action_type: "camera_capture" }], preview_binding: { steps_are_outline: true } },
+    model_diagnostics: {
+      adopted: false, not_adopted_reason: "MODEL_INDEX_INVALID",
+      attempts: [{ adopted: false, raw_text: '{"t":[99],"r":[],"x":[],"only":false}',
+        not_adopted_reason: "MODEL_INDEX_INVALID", truncated: true }],
+    },
+  };
+  h.api.planMission = async () => reply;
+  h.run('setPage("planning"); setTemplatePlanObjective("巡检东北视觉标记");');
+  await h.run("generateRequest()");
+  const html = h.run("templatePlanPreview()");
+  const answer = html.match(/<details class="template-model-answer">([\s\S]*?)<\/details>/)?.[1] || "";
+  assert.match(html, /离线规则识别 <code>rules<\/code>/);
+  assert.match(html, /降级原因<\/dt><dd>model_invalid_output/);
+  assert.match(answer, /模型原答 · 未采用/);
+  assert.match(answer, /目录编号列表不符合要求.*MODEL_INDEX_INVALID/);
+  assert.match(answer, /&quot;t&quot;:\[99\]/);
+  assert.match(answer, /原答已由 Runtime 截断/);
+
+  reply.plan_source = "none";
+  reply.plan = null;
+  reply.result = "blocked";
+  reply.fallback_reason = "model_unavailable";
+  reply.model_diagnostics = { adopted: false, not_adopted_reason: "MODEL_TIMEOUT",
+    attempts: [{ adopted: false, raw_text: null, not_adopted_reason: "MODEL_TIMEOUT" }] };
+  await h.run("generateRequest()");
+  assert.match(h.run("templatePlanPreview()"), /本次未提供原答文本/);
+  assert.match(h.run("templatePlanPreview()"), /模型响应超时 <code>MODEL_TIMEOUT<\/code>/);
+  assert.doesNotMatch(h.run("templatePlanPreview()"), /template-plan-steps/);
+});
+
 const inspectionObjective = "检查场景里的 target-001 设备标记并记录航点到达。";
 
 function inspectionConsole() {

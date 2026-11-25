@@ -1619,6 +1619,54 @@ function templatePlanBinding({ catalog, bindings }, missionType) {
   ]);
 }
 
+const modelRejectionLabels = new Map([
+  ["MODEL_JSON_INVALID", "模型回答不是合法的 JSON"],
+  ["MODEL_FIELDS_INVALID", "模型回答的字段不符合要求"],
+  ["MODEL_INDEX_INVALID", "目录编号列表不符合要求"],
+  ["MODEL_DUPLICATE_SELECTION", "重复选择了同一目录对象"],
+  ["TARGET_REFERENCE_ONLY", "把仅供定位的参照对象选成了目标"],
+  ["CONFLICTING_TARGETS", "选中的目标互斥"],
+  ["MODEL_ROLE_CONFLICT", "所选目标与参照或排除约束冲突"],
+  ["MODEL_ABSTAINED", "模型没有选出巡检目标"],
+  ["MODEL_TIMEOUT", "模型响应超时"],
+  ["MODEL_UNAVAILABLE", "模型服务不可用"],
+  ["MODEL_BUSY", "模型正在处理其他请求"],
+  ["MODEL_THREAD_UNAVAILABLE", "模型请求无法启动"],
+  ["MODEL_INPUT_TOO_LARGE", "模型输入超过大小上限"],
+  ["MODEL_INPUT_INVALID", "模型输入格式无效"],
+  ["MODEL_RESPONSE_TOO_LARGE", "模型回包超过大小上限"],
+  ["MODEL_ENVELOPE_INVALID", "模型服务回包格式无效"],
+  ["MODEL_TEXT_MISSING", "模型回包缺少文本"],
+  ["MODEL_ID_MISMATCH", "回包中的模型标识与配置不符"],
+  ["MODEL_RESPONSE_INCOMPLETE", "模型回答未完整返回"],
+  ["MODEL_TOOL_CALL_REFUSED", "模型回包包含工具调用"],
+]);
+
+function templateModelAnswer(diagnostics) {
+  if (!Array.isArray(diagnostics?.attempts)) return "";
+  const attempts = diagnostics.attempts.filter(attempt => typeof attempt?.adopted === "boolean"
+    && (attempt.raw_text === null || typeof attempt.raw_text === "string"));
+  if (!attempts.length) return "";
+
+  const adoption = diagnostics.adopted === true ? "已采用" : diagnostics.adopted === false ? "未采用" : "采纳状态未知";
+  const answers = attempts.map((attempt, index) => {
+    const status = attempt.adopted ? "已采用" : "未采用";
+    const reason = attempt.not_adopted_reason;
+    const reasonText = typeof reason === "string" && reason
+      ? `${esc(modelRejectionLabels.get(reason) || "Runtime 上报原因")} <code>${esc(reason)}</code>`
+      : "未上报";
+    const raw = attempt.redacted === true ? '<p class="small">原答已由 Runtime 脱敏</p>'
+      : attempt.raw_text === null ? '<p class="small">本次未提供原答文本</p>'
+      : attempt.raw_text === "" ? '<p class="small">模型返回了空文本</p>'
+      : `<pre class="json">${esc(attempt.raw_text)}</pre>`;
+    return `${attempts.length > 1 ? `<p class="small"><b>第 ${index + 1} 次 · ${status}</b></p>` : ""}
+      ${attempt.adopted ? "" : `<p class="small">未采用原因 ${reasonText}</p>`}
+      ${raw}
+      ${attempt.truncated === true ? '<p class="small">原答已由 Runtime 截断</p>' : ""}`;
+  }).join("");
+  return `<details class="template-model-answer"><summary>模型原答 · ${adoption}</summary>${answers}</details>`;
+}
+
 function templatePlanPreview() {
   const { inFlight, slowHint, reply, error } = state.templatePlan;
   if (!reply) {
@@ -1628,6 +1676,7 @@ function templatePlanPreview() {
     return panel("Runtime 任务预览", content);
   }
   const provenance = templatePlanProvenance(reply);
+  const modelAnswer = templateModelAnswer(reply.model_diagnostics);
   const intent = reply.intent_resolution;
   if (intent && (intent.status !== "resolved" || intent.reason_code === "TARGET_REFERENCE_ONLY")) {
     const title = intent.status === "needs_clarification" ? "需要澄清"
@@ -1638,13 +1687,13 @@ function templatePlanPreview() {
     return panel(title, `${question ? `<p>${esc(question)}</p>` : ""}
       ${referenceNote}
       ${intent.reason_code ? `<p class="small"><code>${esc(intent.reason_code)}</code></p>` : ""}
-      ${provenance}`);
+      ${provenance}${modelAnswer}`);
   }
 
   const plan = reply.plan_source === "none" || reply.execution_authorized === true ? null : reply.plan;
   const outcome = `<p>${badge(templateResultNames.get(reply.result) || "结果未识别", plan ? "cyan" : "amber")}
     ${reply.failure_reason ? `<span class="small">${esc(reply.failure_reason)}</span>` : ""}</p>`;
-  if (!plan) return panel("Runtime 任务预览", `${provenance}${outcome}<p class="small">本次没有可显示的计划。</p>`);
+  if (!plan) return panel("Runtime 任务预览", `${provenance}${outcome}<p class="small">本次没有可显示的计划。</p>${modelAnswer}`);
 
   const binding = plan.preview_binding;
   const outline = binding?.steps_are_outline === true;
@@ -1668,6 +1717,7 @@ function templatePlanPreview() {
       ${binding ? templatePlanBinding(binding, intent?.mission_type ?? plan.mission_type) : ""}
       ${outline ? '<p class="small">以下为模板通用步骤。目标和约束见上方绑定。</p>' : ""}
       ${stepList ? `<ol class="template-plan-steps">${stepList}</ol>` : '<p class="small">Runtime 未返回计划步骤</p>'}
+      ${modelAnswer}
       <details><summary>Runtime 返回 JSON</summary><pre class="json">${esc(JSON.stringify(reply, null, 2))}</pre></details>`)}
     ${precheck ? panel("逐步策略预检与风险", `<div class="planning-table"><table class="table">
       <thead><tr><th>步骤</th><th>预检结论</th><th>依据</th><th>动作风险级别</th></tr><tbody>${precheck}</tbody></table></div>

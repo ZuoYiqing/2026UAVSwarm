@@ -1279,6 +1279,14 @@ a.button {
 }
 .template-plan-steps small { display: block; margin-top: 4px; color: var(--muted); }
 .semantic-planning-page .json { max-height: 320px; overflow: auto; }
+.template-model-answer {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.template-model-answer summary { cursor: pointer; }
+.template-model-answer .json { min-height: 0; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1440px) {
   .metrics { grid-template-columns: repeat(3, 1fr); }
