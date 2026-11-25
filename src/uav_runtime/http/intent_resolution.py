@@ -1,6 +1,7 @@
 """Bind objective-only previews to a catalog from the active Runtime scene."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -32,6 +33,9 @@ class _Catalog:
 
     def identity(self) -> dict[str, str]:
         return {"scene_id": self.scene_id, "map_version": self.map_version, "catalog_id": self.catalog_id}
+
+    def selects_permanent_reference(self, targets: Iterable[Binding]) -> bool:
+        return any(binding.entity_id in self.reference_only_ids for binding in targets)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +186,7 @@ def resolve_preview_intent(
 
     recognized = RuleIntentRecognizer(catalog.entries).recognize(objective)
     params = recognized.parameters
-    if any(binding.entity_id in catalog.reference_only_ids for binding in params.targets):
+    if catalog.selects_permanent_reference(params.targets):
         # Never drop the disallowed target and silently preview a valid subset.
         return PreviewIntentResolution(
             status="needs_clarification",

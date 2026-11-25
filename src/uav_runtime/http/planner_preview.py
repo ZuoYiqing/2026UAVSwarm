@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 if TYPE_CHECKING:
     from uav_runtime.agent.planner import PlanResult
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 IntentSource = Literal["explicit", "rules", "local_model", "none"]
 PlanSource = Literal["template", "algorithm", "none"]
-FallbackReason = Literal["model_unavailable", "model_low_confidence"]
+FallbackReason = Literal["model_unavailable", "model_invalid_output", "model_abstained", "model_low_confidence"]
 
 PLAN_PREVIEW_CONTRACT_VERSION = "1.0"
 
@@ -31,7 +31,7 @@ class PlanPreviewProvenance:
         if self.intent_source == "none" and self.plan_source != "none":
             raise ValueError("preview_plan_requires_resolved_intent")
         if self.fallback_reason is not None:
-            if self.fallback_reason not in ("model_unavailable", "model_low_confidence"):
+            if self.fallback_reason not in get_args(FallbackReason):
                 raise ValueError("invalid_preview_fallback_reason")
             if self.intent_source not in ("rules", "none"):
                 raise ValueError("invalid_preview_fallback_intent_source")

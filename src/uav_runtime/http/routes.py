@@ -819,8 +819,8 @@ def plan_mission(
     """Versioned plan preview; no execution or adapter is called.
 
     Explicit template keys keep the legacy path. An omitted/blank key or
-    "auto" uses the loaded scene catalog. Only the opt-in read-only server
-    provides a model; its validated candidate may replace a rule preview.
+    "auto" uses the loaded scene catalog. If enabled, a legal model decision
+    drives the read-only preview after the rule admission gate.
     """
     req = PlanMissionRequest.from_json(payload)
     resolution = None
@@ -876,6 +876,9 @@ def plan_mission(
         "plan_id": plan.get("plan_id"), "mission_type": mission_type,
         "status": plan.get("status"), "result": result.get("result"),
     })
+    # Response-only diagnostic; raw model text does not enter saved plans/events.
+    if selection is not None and selection.attempts:
+        result["model_diagnostics"] = selection.diagnostics()
     return result
 
 

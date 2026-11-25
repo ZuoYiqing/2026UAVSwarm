@@ -76,7 +76,9 @@ def test_actual_runtime_cli_adopts_valid_live_4b_preview(tmp_path):
                     "intent_source": "local_model", "plan_source": "template",
                     "fallback_reason": None, "execution_authorized": False,
                 }
-                assert resolution["reason_code"] == "LOCAL_MODEL_CONFIRMED_INTENT"
+                assert resolution["reason_code"] == "LOCAL_MODEL_SELECTED_INTENT"
+                assert body["model_diagnostics"]["adopted"] is True
+                assert body["model_diagnostics"]["attempts"][-1]["raw_text"]
                 assert [row["entity_id"] for row in resolution["bindings"][role]] == ids
                 assert body["plan"]["preview_binding"]["steps_are_outline"] is True
             clarification = request(8765, "/api/planner/plan-mission", {"objective": "把参考点列为目标。"})
