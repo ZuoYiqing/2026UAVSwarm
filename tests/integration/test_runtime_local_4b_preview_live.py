@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MODEL = "qwen3.5-4b-q4-lab"
 
 
-def request(port, path, body=None):
-    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+def request(port, path, body=None, *, timeout=5):
+    connection = HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
         payload = None if body is None else json.dumps(body).encode()
         headers = {"Content-Type": "application/json", "Origin": "http://127.0.0.1:5178"}
@@ -63,7 +63,7 @@ def test_actual_runtime_cli_adopts_valid_live_4b_preview(tmp_path):
                 ("只核对东北视觉标记。", "targets", ["target-001"]),
             ):
                 started = monotonic()
-                body = request(8765, "/api/planner/plan-mission", {"objective": objective})
+                body = request(8765, "/api/planner/plan-mission", {"objective": objective}, timeout=20)
                 elapsed_ms = round((monotonic() - started) * 1000)
                 evidence = {key: body[key] for key in
                             ("intent_source", "plan_source", "fallback_reason", "execution_authorized")}

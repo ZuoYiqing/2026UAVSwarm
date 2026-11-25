@@ -3,11 +3,13 @@ from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from threading import Event, Thread
+from types import SimpleNamespace
 
 import pytest
 
 from uav_runtime.http import local_model_preview as model
 from uav_runtime.http import routes, server
+from uav_runtime.http.model_preview_config import MODEL_ALIAS, ModelPreviewConfig
 
 
 OBJECTIVE = "巡检西北区域。"
@@ -40,8 +42,8 @@ def post(port, path, payload=None, **headers):
 
 
 @pytest.fixture
-def stub_model(monkeypatch):
-    state = {"calls": [], "status": 200, "finish": "stop", "alias": model.MODEL_ALIAS, "candidate": None}
+def stub_model():
+    state = {"calls": [], "status": 200, "finish": "stop", "alias": MODEL_ALIAS, "candidate": None}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -62,12 +64,12 @@ def stub_model(monkeypatch):
             pass
 
     with serving(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as port:
-        monkeypatch.setattr(model, "MODEL_PORT", port)
+        state["selector"] = model.LocalPreviewModel(ModelPreviewConfig(port=port))
         yield state
 
 
 def test_existing_http_route_adopts_a_valid_candidate(stub_model):
-    with serving(server.create_server(port=0, preview_model=model.LocalPreviewModel())) as port:
+    with serving(server.create_server(port=0, preview_model=stub_model["selector"])) as port:
         status, body = post(port, model.PREVIEW_PATH, {"objective": OBJECTIVE}, Origin=ORIGIN)
     assert status == 200
     assert body["intent_source"] == "local_model"
@@ -79,7 +81,7 @@ def test_existing_http_route_adopts_a_valid_candidate(stub_model):
     assert resolution["bindings"]["preview_only_targets"] == [{"entity_id": "demo-area-001", "evidence": "西北区域"}]
     assert body["plan"]["preview_binding"]["steps_are_outline"] is True
     [(path, wire, message)] = stub_model["calls"]
-    assert path == "/v1/chat/completions" and wire["model"] == model.MODEL_ALIAS and wire["stream"] is False
+    assert path == "/v1/chat/completions" and wire["model"] == MODEL_ALIAS and wire["stream"] is False
     assert set(message) == {"原话", "目录"} and message["原话"] == OBJECTIVE
     assert "demo-area-001" not in wire["messages"][1]["content"]
 
@@ -96,7 +98,7 @@ def test_existing_http_route_adopts_a_valid_candidate(stub_model):
 def test_model_failures_retain_authoritative_rule_result(stub_model, overrides, reason):
     stub_model.update(overrides)
     approved = routes.plan_mission({"objective": OBJECTIVE})
-    body = routes.plan_mission({"objective": OBJECTIVE}, preview_model=model.LocalPreviewModel())
+    body = routes.plan_mission({"objective": OBJECTIVE}, preview_model=stub_model["selector"])
     assert body["intent_source"] == "rules" and body["fallback_reason"] == reason
     assert body["execution_authorized"] is False
     assert body["intent_resolution"] == approved["intent_resolution"]
@@ -109,7 +111,7 @@ def test_model_failures_retain_authoritative_rule_result(stub_model, overrides, 
     ("巡检西北区域和中央建筑。", "TARGET_REFERENCE_ONLY"),
 ])
 def test_rule_safety_veto_never_calls_model(stub_model, objective, reason):
-    body = routes.plan_mission({"objective": objective}, preview_model=model.LocalPreviewModel())
+    body = routes.plan_mission({"objective": objective}, preview_model=stub_model["selector"])
     assert body["intent_resolution"]["reason_code"] == reason
     assert body["intent_source"] == "rules" and body["fallback_reason"] is None
     assert body["plan"] is None and body["execution_authorized"] is False
@@ -121,7 +123,7 @@ def test_default_and_explicit_template_do_not_call_model(stub_model):
         _, body = post(port, model.PREVIEW_PATH, {"objective": OBJECTIVE})
         assert body["intent_source"] == "rules" and body["fallback_reason"] is None
     body = routes.plan_mission({"objective": OBJECTIVE, "mission_type": "inspection_snapshot"},
-                               preview_model=model.LocalPreviewModel())
+                               preview_model=stub_model["selector"])
     assert body["intent_source"] == "explicit" and body["fallback_reason"] is None
     assert stub_model["calls"] == []
 
@@ -131,7 +133,7 @@ def test_profile_rejects_execution_and_external_origin_before_dispatch(monkeypat
         pytest.fail("read-only demo dispatched a disallowed request")
 
     monkeypatch.setattr(server, "dispatch", fail)
-    with serving(server.create_server(port=0, preview_model=model.LocalPreviewModel())) as port:
+    with serving(server.create_server(port=0, preview_model=stub_model["selector"], preview_only=True)) as port:
         for path in ("/api/plans/execute", "/api/actions/takeoff", "/api/simulation/evidence"):
             code, body = post(port, path)
             assert code == 403 and body["error"] == "local_model_preview_only"
@@ -141,20 +143,59 @@ def test_profile_rejects_execution_and_external_origin_before_dispatch(monkeypat
         assert code == 400 and body["execution_authorized"] is False
     assert stub_model["calls"] == []
     with pytest.raises(ValueError, match="loopback"):
-        server.create_server("0.0.0.0", 0, preview_model=model.LocalPreviewModel())
+        server.create_server("0.0.0.0", 0, preview_model=stub_model["selector"])
+
+
+def test_model_does_not_disable_normal_snapshot_routes(stub_model):
+    with serving(server.create_server(port=0, preview_model=stub_model["selector"])) as port:
+        connection = HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            connection.request("GET", "/api/vehicle-snapshot")
+            with connection.getresponse() as response:
+                assert response.status == 200
+                assert json.load(response)["vehicles"]
+        finally:
+            connection.close()
+        code, reply = post(port, model.PREVIEW_PATH, {"objective": OBJECTIVE}, Origin=ORIGIN)
+        assert code == 200 and reply["intent_source"] == "local_model"
+        assert reply["execution_authorized"] is False
+
+
+def test_normal_cli_can_start_telemetry_and_the_model_together(monkeypatch):
+    events = []
+    monkeypatch.setenv("UAV_RUNTIME_LOCAL_MODEL_ENABLED", "1")
+    monkeypatch.setenv("UAV_RUNTIME_TELEMETRY_ENABLED", "true")
+    monkeypatch.setenv("UAV_RUNTIME_LOCAL_MODEL_TIMEOUT_S", "18")
+    monkeypatch.delenv("UAV_RUNTIME_LOCAL_MODEL_URL", raising=False)
+    monkeypatch.delenv("UAV_RUNTIME_LOCAL_MODEL_TOKEN_FILE", raising=False)
+    monkeypatch.setattr(routes, "VEHICLE_REGISTRY", SimpleNamespace(
+        list_vehicles=lambda: (),
+        start_all=lambda: events.append("telemetry_start"),
+        stop_all=lambda: events.append("telemetry_stop"),
+    ))
+    monkeypatch.setattr(server, "configure_demo", lambda: None)
+
+    def create(**kwargs):
+        assert kwargs["preview_only"] is False and isinstance(kwargs["preview_model"], model.LocalPreviewModel)
+        return SimpleNamespace(serve_forever=lambda: events.append("serve"),
+                               server_close=lambda: events.append("close"))
+
+    monkeypatch.setattr(server, "create_server", create)
+    assert server.main([]) == 0
+    assert events == ["telemetry_start", "serve", "telemetry_stop", "close"]
 
 
 def test_timeout_does_not_queue_a_second_live_model_request(monkeypatch):
     started, unblock = Event(), Event()
 
-    def slow(_):
+    def slow(_, config):
+        assert config.timeout_s == 0.02
         started.set()
         unblock.wait(2)
         raise TimeoutError
 
     monkeypatch.setattr(model, "_request_candidate", slow)
-    monkeypatch.setattr(model, "MODEL_TIMEOUT_SECONDS", 0.02)
-    selector = model.LocalPreviewModel()
+    selector = model.LocalPreviewModel(ModelPreviewConfig(timeout_s=0.02))
     try:
         timed_out = routes.plan_mission({"objective": OBJECTIVE}, preview_model=selector)
         assert started.wait(timeout=1) and selector._slot.locked()

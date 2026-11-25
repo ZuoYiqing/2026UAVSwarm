@@ -11,14 +11,11 @@ from typing import Any
 
 from uav_runtime.agent._vendor_intent_recognizer_v0 import Binding
 from uav_runtime.http.intent_resolution import PreviewIntentResolution
+from uav_runtime.http.model_preview_config import ModelPreviewConfig
 from uav_runtime.http.planner_preview import FallbackReason
 
 
-MODEL_ALIAS = "qwen3.5-4b-q4-lab"
-MODEL_PORT = 18116
 PREVIEW_PATH = "/api/planner/plan-mission"
-# The existing console has a 5-second request deadline.
-MODEL_TIMEOUT_SECONDS = 4.0
 MAX_MODEL_PAYLOAD_BYTES = 8192
 MAX_MODEL_RESPONSE_BYTES = 65536
 _ROLES = {"t": "targets", "r": "reference_only", "x": "excluded_targets"}
@@ -57,10 +54,10 @@ def _json(data: bytes | str) -> Any:
     return json.loads(data, object_pairs_hook=_unique_keys)
 
 
-def _request_candidate(user_message: str) -> Any:
-    # Numeric loopback only; HTTPConnection neither follows redirects nor uses proxies.
+def _request_candidate(user_message: str, config: ModelPreviewConfig) -> Any:
+    # Config admits only loopback or the private WSL gateway; no redirects or proxy.
     request = {
-        "model": MODEL_ALIAS,
+        "model": config.alias,
         "messages": [{"role": "system", "content": _PROMPT}, {"role": "user", "content": user_message}],
         "temperature": 0, "seed": 11, "stream": False, "max_tokens": 112,
         "response_format": {
@@ -68,22 +65,25 @@ def _request_candidate(user_message: str) -> Any:
             "json_schema": {"name": "read_only_preview_intent", "strict": True, "schema": _SCHEMA},
         },
     }
-    connection = HTTPConnection("127.0.0.1", MODEL_PORT, timeout=MODEL_TIMEOUT_SECONDS)
+    headers = {"Content-Type": "application/json"}
+    if config.token:
+        headers["Authorization"] = f"Bearer {config.token}"
+    connection = HTTPConnection(config.host, config.port, timeout=config.timeout_s)
     started = monotonic()
     try:
-        connection.request("POST", "/v1/chat/completions", json.dumps(request), {"Content-Type": "application/json"})
+        connection.request("POST", "/v1/chat/completions", json.dumps(request), headers)
         with connection.getresponse() as response:
             if response.status != 200:
                 raise OSError("local inference refused the request")
             raw = response.read(MAX_MODEL_RESPONSE_BYTES + 1)
     finally:
         connection.close()
-    if monotonic() - started > MODEL_TIMEOUT_SECONDS:
+    if monotonic() - started > config.timeout_s:
         raise TimeoutError("local inference deadline exceeded")
     if len(raw) > MAX_MODEL_RESPONSE_BYTES:
         raise ValueError("local model response exceeds the limit")
     reply = _json(raw)
-    if not isinstance(reply, dict) or reply.get("model") != MODEL_ALIAS:
+    if not isinstance(reply, dict) or reply.get("model") != config.alias:
         raise ValueError("unexpected model identity")
     choices = reply.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
@@ -121,7 +121,8 @@ def _validated_candidate(
 
 
 class LocalPreviewModel:
-    def __init__(self) -> None:
+    def __init__(self, config: ModelPreviewConfig | None = None) -> None:
+        self._config = config or ModelPreviewConfig()
         self._slot = Lock()
 
     def select(self, objective: str, rule: PreviewIntentResolution) -> ModelSelection:
@@ -152,7 +153,8 @@ class LocalPreviewModel:
 
         def infer() -> None:
             try:
-                pending.set_result(_validated_candidate(_request_candidate(user_message), rule, catalog_ids))
+                candidate = _request_candidate(user_message, self._config)
+                pending.set_result(_validated_candidate(candidate, rule, catalog_ids))
             except Exception as exc:
                 pending.set_exception(exc)
             finally:
@@ -166,7 +168,7 @@ class LocalPreviewModel:
         try:
             # Bound the caller wait even if a slow backend dribbles each socket
             # read just before its timeout. The worker retains the one-call slot.
-            return ModelSelection(resolution=pending.result(timeout=MODEL_TIMEOUT_SECONDS))
+            return ModelSelection(resolution=pending.result(timeout=self._config.timeout_s))
         except (OSError, HTTPException):
             return ModelSelection(fallback_reason="model_unavailable")
         except (ValueError, RecursionError):
