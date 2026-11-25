@@ -60,13 +60,19 @@ class PreviewIntentResolution:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        bindings = self.bindings()
+        bindings["target_order_basis"] = self.parameters.target_order_basis
+        # Splitting physical and preview-only roles preserves relative order, but
+        # loses interleaving. Publish it only on the read-only wire projection.
+        if bindings["targets"] and bindings["preview_only_targets"]:
+            bindings["target_order"] = [binding.entity_id for binding in self.parameters.targets]
         return {
             "status": self.status,
             "mission_type": self.mission_type,
             "reason_code": self.reason_code,
             "question": self.question,
             "catalog": self.catalog.identity() if self.catalog is not None else None,
-            "bindings": self.bindings(),
+            "bindings": bindings,
         }
 
     def supports_template_outline(self) -> bool:
