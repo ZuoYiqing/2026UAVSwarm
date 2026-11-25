@@ -316,6 +316,46 @@ test("template preview submits the operator's text and renders only returned pol
   assert.doesNotMatch(h.run("planningPage()"), /模板接口故障/);
 });
 
+test("preview shows slow feedback with the configured limit, then unlocks retry after a timeout", async () => {
+  const h = harness();
+  const button = { textContent: "", disabled: false };
+  h.slots.set("template-plan-submit", button);
+  h.slots.set("template-plan-preview", { innerHTML: "" });
+  let slow;
+  let rejectRequest;
+  let calls = 0;
+  h.api.planMission = (_body, { onSlow }) => {
+    calls += 1;
+    slow = onSlow;
+    return new Promise((_resolve, reject) => { rejectRequest = reject; });
+  };
+
+  h.run('setPage("planning"); setTemplatePlanObjective("巡检东北视觉标记");');
+  const first = h.run("generateRequest()");
+  assert.equal(button.textContent, "识别中…");
+  assert.equal(button.disabled, true);
+  assert.doesNotMatch(h.html("template-plan-preview"), /继续等待/);
+
+  slow(30_000);
+  assert.equal(button.textContent, "继续等待…");
+  assert.match(h.html("template-plan-preview"), /Runtime 响应较慢，继续等待（最多 30 秒）/);
+  assert.equal(button.disabled, true);
+  await h.run("generateRequest()");
+  assert.equal(calls, 1);
+
+  rejectRequest(Object.assign(new Error("transport timeout"), { kind: "timeout" }));
+  await first;
+  assert.match(h.html("template-plan-preview"), /Runtime 响应超时/);
+  assert.doesNotMatch(h.html("template-plan-preview"), /继续等待/);
+  assert.equal(button.textContent, "预览任务");
+  assert.equal(button.disabled, false);
+
+  h.api.planMission = async () => ({ result: "ready", plan: { plan_id: "retry-preview", steps: [] } });
+  await h.run("generateRequest()");
+  assert.match(h.html("template-plan-preview"), /retry-preview/);
+  assert.doesNotMatch(h.html("template-plan-preview"), /响应超时|继续等待/);
+});
+
 // 前端消费端契约用例。真实场景输入另由 Runtime 路由和浏览器联验。
 test("scene intent previews show the reported sources and keep preview, reference and exclusion roles distinct", async () => {
   const h = harness();
