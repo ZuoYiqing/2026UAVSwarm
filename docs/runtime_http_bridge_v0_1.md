@@ -222,11 +222,24 @@ Runtime 中的规则副本固定在算法提交 `4520b2d4ae9f6ff111e8e1982a90e9e
 及 [26 条合成 HTTP 用例](../tests/fixtures/runtime_intent_recognition_v0.json)。不需要算法目录出现在部署机、网络、模型或额外服务。
 
 本次同步支持有限的口语前缀、词汇变体以及规则能判定的先后顺序；歧义和缺少上下文的指代仍需澄清。
-HTTP 契约不变：不接收 `referent_ids` 上下文，也不发布跨角色的目标顺序或 `target_order_basis`。
-顺序只影响同一绑定数组内的预览排列，不代表可执行航线。复验命令为
+HTTP 请求不接收 `referent_ids` 上下文。
+顺序字段是回包 v1.0 的兼容扩展，`intent_resolution.bindings` 和生成模板时的
+`plan.preview_binding.bindings` 使用同一份投影：
+
+| 字段 | 契约 |
+| --- | --- |
+| `target_order_basis` | `"explicit_sequence"`：原话指定先后；`"mention_order"`：多目标无先后指令，按提及顺序；`null`：单目标或无可报告的顺序语义，不代表“顺序未知”。旧 Runtime 可能省略字段，消费者应区分缺字段和明确的 `null`。 |
+| `target_order` | 仅当正向对象同时出现在 `targets` 和 `preview_only_targets` 时出现。它是拆分之前按算法顺序排列的 `entity_id` 列表，不含参照或排除对象。 |
+
+只有一种正向角色时，直接按该数组顺序展示；混合时两个数组分别保留组内相对顺序，
+跨组顺序以 `target_order` 为准，不能把两个数组拼接。仅预览对象不会升级为正式目标。
+这是原话意图的预览顺序，不是已授权的执行顺序或航线；`execution_authorized` 仍为 `false`。
+无法解析顺序时保持追问，不生成计划；显式请求模板的旧回包不增加绑定字段。
+
+复验命令为
 `python -B tests/integration/verify_runtime_offline_rules_http.py`，会在本机 8765 启动实际 Runtime，禁用遥测、不发执行请求。
-园区题集只通过临时测试配置加载，另用仓库现有 `simple_recon_v0_1` 配置复验。
-见[只读 HTTP 验证记录](verification/runtime_offline_rules_v0_2/verification.json)。
+园区正式目标与仅预览题集都只通过临时配置加载，混合角色另用仓库现有
+`simple_recon_v0_1` 配置复验。另见[规则接入时的 HTTP 验证记录](verification/runtime_offline_rules_v0_2/verification.json)。
 
 #### 与 `POST /api/plans/execute` 的分工
 

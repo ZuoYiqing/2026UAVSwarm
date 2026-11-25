@@ -136,6 +136,29 @@ def test_same_template_different_target_keeps_distinct_saved_bindings(preview) -
     assert saved["preview_binding"] == heat["plan"]["preview_binding"]
 
 
+@pytest.mark.parametrize(("objective", "expected_ids", "basis"), [
+    ("核对热泵机房之前，先核对西侧光伏区。", ["S-PV-W", "S-THERM"], "explicit_sequence"),
+    ("先核对西侧光伏区，再核对热泵机房。", ["S-PV-W", "S-THERM"], "explicit_sequence"),
+    ("巡检西侧光伏区和北仓。", ["S-PV-W", "S-STORE-N"], "mention_order"),
+    ("巡检西侧光伏区。", ["S-PV-W"], None),
+])
+def test_order_basis_describes_formal_target_array(preview, objective, expected_ids, basis) -> None:
+    body = request(objective, execution_authorized=True)
+    bindings = body["plan"]["preview_binding"]["bindings"]
+    assert [row["entity_id"] for row in bindings["targets"]] == expected_ids
+    assert bindings["target_order_basis"] == basis
+    assert "target_order" not in bindings and not bindings["preview_only_targets"]
+    assert body["intent_resolution"]["bindings"] == bindings
+
+
+def test_unresolved_sequence_does_not_publish_a_partial_order(preview) -> None:
+    body = request("先巡检北仓，然后巡检西侧光伏区。")
+    resolution = body["intent_resolution"]
+    assert resolution["reason_code"] == "ORDER_UNRESOLVED" and body["plan"] is None
+    assert resolution["bindings"]["target_order_basis"] is None
+    assert "target_order" not in resolution["bindings"] and not resolution["bindings"]["targets"]
+
+
 def test_catalog_survives_normal_registry_scene_loading(tmp_path: Path) -> None:
     scene = json.loads((ROOT / "scenarios/simple_recon_v0_1/scene.json").read_text(encoding="utf-8"))
     target_shape = scene["targets"][0]
@@ -247,10 +270,25 @@ def test_preview_only_selection_never_appears_in_physical_targets(role_preview, 
     bindings = resolution["bindings"]
     assert [item["entity_id"] for item in bindings["targets"]] == physical_ids
     assert [item["entity_id"] for item in bindings["preview_only_targets"]] == ["demo-area-001"]
+    assert bindings["target_order_basis"] == ("mention_order" if physical_ids else None)
+    if physical_ids:
+        assert bindings["target_order"] == ["demo-area-001", *physical_ids]
+    else:
+        assert "target_order" not in bindings
     assert body["intent_source"] == "rules" and body["plan_source"] == "template"
     assert body["plan"]["preview_binding"]["steps_are_outline"] is True
     assert body["plan"]["preview_binding"]["bindings"] == bindings
     assert routes.RUNTIME_STATE_STORE.agent_status()["latest_plan"]["preview_binding"]["bindings"] == bindings
+
+
+def test_explicit_sequence_keeps_interleaved_roles(role_preview) -> None:
+    # Mention the physical target first, but ask to preview the other one first.
+    body = request("核对热泵机房之前，先核对西北区域。")
+    bindings = body["plan"]["preview_binding"]["bindings"]
+    assert bindings["target_order_basis"] == "explicit_sequence"
+    assert [row["entity_id"] for row in bindings["targets"]] == ["S-THERM"]
+    assert [row["entity_id"] for row in bindings["preview_only_targets"]] == ["demo-area-001"]
+    assert bindings["target_order"] == ["demo-area-001", "S-THERM"]
 
 
 @pytest.mark.parametrize(
