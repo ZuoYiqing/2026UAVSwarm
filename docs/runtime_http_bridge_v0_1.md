@@ -216,10 +216,17 @@ HTTP 200 预览回包（包括 `result: "blocked"`）保留 `result`、`failure_
 | `clarify` | `needs_clarification` | `plan: null`、`plan_source: "none"`；带追问、原因和已确定的参照/排除项，不展示正向目标。 |
 | `unknown` | `unsupported` | 同样不产计划、不猜测目标；返回理由，识别器给出追问时一并保留。 |
 
-Runtime 中的规则副本固定在算法提交 `70a35af6eff2009f30e838ca0517ab2c65550754`。
-算法提供上游原件，Runtime 负责接线和验收；发布新规则时同步复制源码和黄金语料，校验
+Runtime 中的规则副本固定在算法提交 `4520b2d4ae9f6ff111e8e1982a90e9eb6849b50b`。
+算法提供上游原件，Runtime 负责接线和验收；原件和副本按 LF 规范化后须与同一 SHA-256 一致。规则版本也校验
 [来源锁定文件](../tests/fixtures/runtime_intent_recognition_vendor_v0.json)
 及 [26 条合成 HTTP 用例](../tests/fixtures/runtime_intent_recognition_v0.json)。不需要算法目录出现在部署机、网络、模型或额外服务。
+
+本次同步支持有限的口语前缀、词汇变体以及规则能判定的先后顺序；歧义和缺少上下文的指代仍需澄清。
+HTTP 契约不变：不接收 `referent_ids` 上下文，也不发布跨角色的目标顺序或 `target_order_basis`。
+顺序只影响同一绑定数组内的预览排列，不代表可执行航线。复验命令为
+`python -B tests/integration/verify_runtime_offline_rules_http.py`，会在本机 8765 启动实际 Runtime，禁用遥测、不发执行请求。
+园区题集只通过临时测试配置加载，另用仓库现有 `simple_recon_v0_1` 配置复验。
+见[只读 HTTP 验证记录](verification/runtime_offline_rules_v0_2/verification.json)。
 
 #### 与 `POST /api/plans/execute` 的分工
 
