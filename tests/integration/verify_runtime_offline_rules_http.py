@@ -44,6 +44,8 @@ class Case:
     excluded: tuple[str, ...] = ()
     only_listed: bool = False
     choices: tuple[str, ...] = ()
+    order_basis: str | None = None
+    target_order: tuple[str, ...] = ()
 
 
 CAMPUS = (
@@ -53,8 +55,19 @@ CAMPUS = (
          choices=("访客入口水表点", "展厅门外水表点")),
     Case("S04", "北仓只用来定位，不用核对；本轮只核对热泵机房。",
          preview=("S-THERM",), reference=("S-STORE-N",), excluded=("S-STORE-N",), only_listed=True),
-    Case("S05", "核对热泵机房之前，先核对西侧光伏区。", preview=("S-PV-W", "S-THERM")),
+    Case("S05", "核对热泵机房之前，先核对西侧光伏区。",
+         preview=("S-PV-W", "S-THERM"), order_basis="explicit_sequence"),
     Case("S06", "录入北仓和东侧充电棚，两处都必须核对。", "unsupported", "UNSUPPORTED_OBJECTIVE"),
+)
+FORMAL_ORDER = (
+    Case("order-before", "核对热泵机房之前，先核对西侧光伏区。",
+         targets=("S-PV-W", "S-THERM"), order_basis="explicit_sequence"),
+    Case("order-first-then", "先核对西侧光伏区，再核对热泵机房。",
+         targets=("S-PV-W", "S-THERM"), order_basis="explicit_sequence"),
+    Case("order-by-mention", "巡检西侧光伏区和北仓。",
+         targets=("S-PV-W", "S-STORE-N"), order_basis="mention_order"),
+    Case("order-single", "巡检西侧光伏区。", targets=("S-PV-W",)),
+    Case("order-unresolved", "先巡检北仓，然后巡检西侧光伏区。", "needs_clarification", "ORDER_UNRESOLVED"),
 )
 RECON = (
     Case("recon-prefix", "麻烦这一轮巡检西北区域。", preview=("demo-area-001",)),
@@ -63,7 +76,11 @@ RECON = (
          targets=("target-001",), excluded=("building-001",), only_listed=True),
     Case("recon-ambiguity", "麻烦把参考点列为本轮核对目标。", "needs_clarification", "TARGET_AMBIGUOUS",
          choices=("西侧参考点", "东侧参考点")),
-    Case("recon-order", "核对西北区域之前，先核对西侧参考点。", preview=("demo-anchor-001", "demo-area-001")),
+    Case("recon-order", "核对西北区域之前，先核对西侧参考点。",
+         preview=("demo-anchor-001", "demo-area-001"), order_basis="explicit_sequence"),
+    Case("recon-order-cross-role", "先核对西北区域，再核对东北视觉标记。",
+         targets=("target-001",), preview=("demo-area-001",), order_basis="explicit_sequence",
+         target_order=("demo-area-001", "target-001")),
     Case("recon-conflict", "巡检西南和东南。", "needs_clarification", "CONFLICTING_TARGETS"),
     Case("recon-reference-guard", "巡检西北区域和中央建筑。", "needs_clarification", "TARGET_REFERENCE_ONLY"),
     Case("recon-pronoun", "检查那栋。", "needs_clarification", "REFERENCE_CONTEXT_REQUIRED"),
@@ -74,9 +91,15 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def campus_config(directory: Path) -> Path:
+def campus_config(directory: Path, *, formal_order: bool = False) -> Path:
     scene = read_json(SCENE)
     identity = {"scene_id": "demo-campus-v1", "map_version": "a-v04-draft-semantic-v1"}
+    profile = "test-campus"
+    formal_ids = set()
+    if formal_order:
+        profile = "test-campus-formal-order"
+        identity = {"scene_id": "demo-campus-order-test", "map_version": "a-v04-draft-order-test-v1"}
+        formal_ids = {"S-PV-W", "S-THERM", "S-STORE-N"}
     rows = [
         ("S-PV-W", "西侧光伏区", ["园区西面一排用于发电的太阳能板"]),
         ("S-THERM", "热泵机房", []),
@@ -84,16 +107,19 @@ def campus_config(directory: Path) -> Path:
         ("S-METER-A", "访客入口水表点", ["水表点"]),
         ("S-METER-B", "展厅门外水表点", ["水表点"]),
     ]
-    scene.update(identity, targets=[], obstacles=[], intent_catalog={
-        **identity, "contract_version": "1.0", "catalog_id": "demo-campus-v1",
+    target_shape = scene["targets"][0]
+    scene.update(identity, targets=[{**target_shape, "target_id": entity_id}
+                                    for entity_id, _, _ in rows if entity_id in formal_ids],
+                 obstacles=[], intent_catalog={
+        **identity, "contract_version": "1.0", "catalog_id": identity["scene_id"],
         "entries": [{"entity_id": i, "label": label, "aliases": aliases} for i, label, aliases in rows],
-        "preview_only_entity_ids": [row[0] for row in rows],
+        "preview_only_entity_ids": [row[0] for row in rows if row[0] not in formal_ids],
     })
-    scene_path = directory / "test-campus-scene.json"
+    scene_path = directory / f"{profile}-scene.json"
     scene_path.write_text(json.dumps(scene), encoding="utf-8")
     config = read_json(CONFIG)
     config.update(identity, scene_path=str(scene_path))
-    config_path = directory / "test-campus-vehicles.json"
+    config_path = directory / f"{profile}-vehicles.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     return config_path
 
@@ -164,15 +190,23 @@ def verify_case(profile: str, scene_id: str, case: Case) -> dict:
                         reference_only=case.reference, excluded_targets=case.excluded)
     assert actual_ids == {role: list(ids) for role, ids in expected_ids.items()}, (case.id, body)
     assert bindings["only_listed_targets"] is case.only_listed, (case.id, body)
+    assert bindings["target_order_basis"] == case.order_basis, (case.id, body)
+    if case.target_order:
+        assert bindings["target_order"] == list(case.target_order), (case.id, body)
+    else:
+        assert "target_order" not in bindings, (case.id, body)
     assert all(choice in (resolution["question"] or "") for choice in case.choices), (case.id, body)
     if resolved:
-        assert body["plan"]["preview_binding"]["steps_are_outline"] is True, (case.id, body)
+        projection = body["plan"]["preview_binding"]
+        assert projection["steps_are_outline"] is True and projection["bindings"] == bindings, (case.id, body)
     return {"profile": profile, "case": case.id, "objective": case.objective, "http_status": http_status,
             "status": resolution["status"], "reason_code": resolution["reason_code"],
             "question": resolution["question"], "intent_source": body["intent_source"],
             "plan_source": body["plan_source"], "fallback_reason": body["fallback_reason"],
             "plan_present": body["plan"] is not None, **actual_ids,
             "only_listed_targets": bindings["only_listed_targets"],
+            "target_order_basis": bindings["target_order_basis"],
+            **({"target_order": bindings["target_order"]} if case.target_order else {}),
             "execution_authorized": body["execution_authorized"]}
 
 
@@ -194,6 +228,8 @@ def main() -> None:
         requests = []
         for profile, scene_id, config, cases in (
             ("campus_fixture", "demo-campus-v1", campus_config(directory), CAMPUS),
+            ("formal_campus_order_fixture", "demo-campus-order-test",
+             campus_config(directory, formal_order=True), FORMAL_ORDER),
             ("simple_recon_v0_1", "simple_recon_v0_1", CONFIG, RECON),
         ):
             with running_runtime(config, directory, profile):
@@ -213,7 +249,8 @@ def main() -> None:
         "execution_requests": 0,
         "dry_run": True,
         "summary": {"passed": len(requests), "failed": 0, "skipped": 0,
-                    "by_profile": {"campus_fixture": len(CAMPUS), "simple_recon_v0_1": len(RECON)}},
+                    "by_profile": {"campus_fixture": len(CAMPUS), "formal_campus_order_fixture": len(FORMAL_ORDER),
+                                   "simple_recon_v0_1": len(RECON)}},
         "requests": requests,
     }
     print(json.dumps(evidence, ensure_ascii=True, indent=2))
