@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from uav_runtime.http.local_model_preview import LocalPreviewModel, PREVIEW_PATH
 from uav_runtime.http.routes import configure_demo, dispatch
 
 ALLOWED_ORIGINS = {
@@ -33,6 +34,14 @@ ALLOWED_ORIGINS = {
     "http://127.0.0.1:5179",
 }
 
+_PREVIEW_READ_PATHS = frozenset({
+    "/api/health", "/api/replay", "/api/capabilities", "/api/events",
+    "/api/actions/recent", "/api/actions/lifecycle", "/api/policy/decisions",
+    "/api/skills", "/api/telemetry/latest", "/api/vehicles", "/api/snapshot",
+    "/api/vehicle-snapshot", "/api/agent/status", "/api/simulation/status",
+    "/api/simulation/runtime-telemetry", "/api/mission/progress",
+})
+
 
 class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
     """HTTP bridge handler for local frontend development.
@@ -43,6 +52,7 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
     """
 
     server_version = "UavRuntimeHttpBridge/0.1"
+    local_preview_model: LocalPreviewModel | None = None
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib handler API
         self._send_json(204, {})
@@ -56,7 +66,10 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
     def _handle_json_request(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+        preview_model = getattr(self, "local_preview_model", None)
         try:
+            if preview_model is not None and not self._allow_local_preview_request(path):
+                return
             demo_post = self.command == "POST" and path.startswith("/api/demo/")
             platform_post = self.command == "POST" and (path.startswith("/api/platform/") or path in {
                 "/api/simulation/evidence", "/api/coordinates/calibration",
@@ -85,12 +98,43 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
                     routes.PLATFORM_GATEWAY.stream_to(self, self.path)
                     return
             body = self._read_json_body() if self.command == "POST" else {}
-            status, payload = dispatch(self.command, parsed.path, body=body, query=parsed.query)
+            if preview_model is not None and self.command == "POST" and body.get("dry_run", True) is not True:
+                self._send_json(400, {"error": "preview_dry_run_required", "execution_authorized": False})
+                return
+            status, payload = dispatch(
+                self.command, parsed.path, body=body, query=parsed.query, preview_model=preview_model,
+            )
             self._send_json(status, payload)
         except json.JSONDecodeError:
             self._send_json(400, {"error": "invalid_json"})
         except Exception as exc:  # keep local bridge failures visible as JSON
             self._send_json(500, {"error": "internal_error", "detail": type(exc).__name__})
+
+    def _allow_local_preview_request(self, path: str) -> bool:
+        port = self.server.server_port
+        origin = self.headers.get_all("Origin", [])
+        host = self.headers.get_all("Host", [])
+        allowed_host = host in ([f"127.0.0.1:{port}"], [f"localhost:{port}"])
+        allowed_origin = not origin or (len(origin) == 1 and origin[0] in ALLOWED_ORIGINS)
+        if self.client_address[0] != "127.0.0.1" or not allowed_host or not allowed_origin:
+            self._send_json(403, {"error": "local_model_preview_loopback_required"})
+            return False
+        if self.command == "GET" and path in _PREVIEW_READ_PATHS:
+            return True
+        if self.command != "POST" or path != PREVIEW_PATH:
+            self._send_json(403, {"error": "local_model_preview_only", "execution_authorized": False})
+            return False
+        lengths = self.headers.get_all("Content-Length", [])
+        if self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/json":
+            self._send_json(415, {"error": "json_content_type_required"})
+            return False
+        if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdecimal() or len(lengths[0]) > 4:
+            self._send_json(400, {"error": "invalid_preview_body_length"})
+            return False
+        if not 1 <= int(lengths[0]) <= 4096:
+            self._send_json(400, {"error": "invalid_preview_body_length"})
+            return False
+        return True
 
     def _read_json_body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -132,8 +176,18 @@ class RuntimeHttpBridgeHandler(BaseHTTPRequestHandler):
         return
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), RuntimeHttpBridgeHandler)
+def create_server(
+    host: str = "127.0.0.1", port: int = 8765, *, preview_model: LocalPreviewModel | None = None,
+) -> ThreadingHTTPServer:
+    if preview_model is None:
+        return ThreadingHTTPServer((host, port), RuntimeHttpBridgeHandler)
+    if host != "127.0.0.1":
+        raise ValueError("local model preview must bind IPv4 loopback")
+
+    class ReadOnlyPreviewHandler(RuntimeHttpBridgeHandler):
+        local_preview_model = preview_model
+
+    return ThreadingHTTPServer((host, port), ReadOnlyPreviewHandler)
 
 
 def main(argv=None) -> int:
@@ -149,7 +203,11 @@ def main(argv=None) -> int:
     parser.add_argument("--platform-url")
     parser.add_argument("--platform-token-file", type=Path)
     parser.add_argument("--run-id", help="Active Simulation harness identity for read-only health evidence")
+    parser.add_argument("--read-only-model-preview", action="store_true",
+                        help="Use the local 4B only for previews; disable telemetry and all flight/other writes")
     args = parser.parse_args(argv)
+    if args.read_only_model_preview and (args.platform_url or args.platform_token_file):
+        parser.error("--read-only-model-preview cannot be combined with a platform gateway")
     routes.RUNTIME_RUN_ID = args.run_id
     source = VehicleRegistry.from_json(args.vehicle_config) if args.vehicle_config else routes.VEHICLE_REGISTRY
     for excluded in args.exclude_node:
@@ -174,9 +232,11 @@ def main(argv=None) -> int:
                     "runtime_snapshot": remote_store.runtime_snapshot(), "vehicle_snapshot": remote_store.vehicle_snapshot()}
         gateway = PlatformGateway(args.platform_url, token, default_projections=defaults)
         routes.PLATFORM_GATEWAY = gateway
-    telemetry_enabled = os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    telemetry_enabled = not args.read_only_model_preview and (
+        os.environ.get("UAV_RUNTIME_TELEMETRY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
     with ExitStack() as resources:
-        server = create_server()
+        server = create_server(preview_model=LocalPreviewModel()) if args.read_only_model_preview else create_server()
         resources.callback(server.server_close)
         if telemetry_enabled:
             for handle in registry.list_vehicles():
@@ -191,7 +251,7 @@ def main(argv=None) -> int:
         if gateway:
             resources.callback(gateway.close)
             gateway.start()
-        demo = configure_demo()
+        demo = None if args.read_only_model_preview else configure_demo()
         if demo is not None:
             resources.callback(demo.close)
         print("uav_runtime_http_bridge listening on http://127.0.0.1:8765/api")
