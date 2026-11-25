@@ -55,6 +55,7 @@ from uav_runtime.runtime.replay import replay_last, replay_recent_unique_actions
 from uav_runtime.http.state_store import ActionLifecycleError, RuntimeStateStore
 from uav_runtime.http.demo import DemoRehearsal, parse_injection
 from uav_runtime.http.intent_resolution import resolve_preview_intent
+from uav_runtime.http.local_model_preview import LocalPreviewModel, PREVIEW_PATH
 from uav_runtime.http.mission_progress import MissionProgress, configured_coverage, unavailable_progress
 from uav_runtime.http.planner_preview import PlanPreviewProvenance, serialize_plan_preview
 from uav_runtime.http.preflight import check_preflight, check_peer_isolation
@@ -812,11 +813,14 @@ def return_home(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
-    """Versioned plan preview; no model, execution, or adapter is called.
+def plan_mission(
+    payload: dict[str, Any], *, preview_model: LocalPreviewModel | None = None,
+) -> dict[str, Any]:
+    """Versioned plan preview; no execution or adapter is called.
 
     Explicit template keys keep the legacy path. An omitted/blank key or
-    "auto" uses offline rules and the loaded scene catalog, not caller data.
+    "auto" uses the loaded scene catalog. Only the opt-in read-only server
+    provides a model; its validated candidate may replace a rule preview.
     """
     req = PlanMissionRequest.from_json(payload)
     resolution = None
@@ -824,6 +828,10 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
         resolution = resolve_preview_intent(
             req.objective, scene_id=VEHICLE_REGISTRY.scene_id, scene=VEHICLE_REGISTRY.scene,
         )
+    selection = preview_model.select(req.objective, resolution) if preview_model and resolution else None
+    model_resolution = selection.resolution if selection else None
+    if model_resolution is not None:
+        resolution = model_resolution
     mission_type = resolution.mission_type if resolution is not None else req.mission_type
     if resolution is not None and not resolution.supports_template_outline():
         planned = PlanResult(
@@ -846,8 +854,10 @@ def plan_mission(payload: dict[str, Any]) -> dict[str, Any]:
         )
         planned = TemplateAgentPlanner().plan(intent)
     result = serialize_plan_preview(planned, PlanPreviewProvenance(
-        intent_source=resolution.intent_source if resolution is not None else "explicit",
+        intent_source=("local_model" if model_resolution is not None
+                       else resolution.intent_source if resolution is not None else "explicit"),
         plan_source="template" if planned.plan is not None else "none",
+        fallback_reason=selection.fallback_reason if selection is not None else None,
     ))
     if resolution is not None:
         semantic = resolution.to_dict()
@@ -1351,12 +1361,15 @@ def _is_action_result_event(event: dict[str, Any]) -> bool:
     return any(key in event for key in ("arm_ack", "takeoff_ack", "land_ack", "altitude_observation"))
 
 
-def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, query: str = "") -> tuple[int, Any]:
+def dispatch(
+    method: str, path: str, *, body: dict[str, Any] | None = None, query: str = "",
+    preview_model: LocalPreviewModel | None = None,
+) -> tuple[int, Any]:
     """Dispatch a fixed HTTP allowlist; no route maps to arbitrary commands."""
     normalized = path.rstrip("/") or "/"
     payload = body or {}
     try:
-        return _dispatch_known(method, normalized, path=path, payload=payload, query=query)
+        return _dispatch_known(method, normalized, path=path, payload=payload, query=query, preview_model=preview_model)
     except VehicleRegistryError as exc:
         return exc.status, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "vehicle_registry"}
     except ActionLifecycleError as exc:
@@ -1365,7 +1378,10 @@ def dispatch(method: str, path: str, *, body: dict[str, Any] | None = None, quer
         return 400, {"version": "1.0", "timestamp": _utc_now(), **exc.to_dict(), "source": "runtime_http_bridge"}
 
 
-def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str) -> tuple[int, Any]:
+def _dispatch_known(
+    method: str, normalized: str, *, path: str, payload: dict[str, Any], query: str,
+    preview_model: LocalPreviewModel | None = None,
+) -> tuple[int, Any]:
     if method == "GET" and normalized == "/api/mission/progress":
         return 200, mission_progress()
     if normalized.startswith("/api/demo/"):
@@ -1427,8 +1443,8 @@ def _dispatch_known(method: str, normalized: str, *, path: str, payload: dict[st
             except Exception:
                 return 503, {"error": "platform_link_unavailable"}
         return 200, publish_coordinate_calibration(payload)
-    if method == "POST" and normalized == "/api/planner/plan-mission":
-        return 200, plan_mission(payload)
+    if method == "POST" and normalized == PREVIEW_PATH:
+        return 200, plan_mission(payload, preview_model=preview_model)
     if method == "GET" and normalized == "/api/replay":
         return 200, replay(query)
     if method == "GET" and normalized == "/api/capabilities":
